@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Login - Semantic Croissant</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #f8f9fa;
+            --surface: #ffffff;
+            --surface2: #f1f3f4;
+            --border: #e0e0e0;
+            --accent: #1a73e8;
+            --accent-hover: #1557b0;
+            --green: #0f9d58;
+            --green-dim: #166534;
+            --text: #333333;
+            --text-dim: #5f6368;
+            --header-h: 96px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ─── Header ─── */
+        .header {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: var(--header-h);
+            background: #ffffff;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            padding: 0 20px 0 0;
+            justify-content: space-between;
+            z-index: 10;
+        }
+        .header-logo { height: 36px; }
+        .header-spacer { flex: 1; }
+        .header-nav { display: flex; gap: 20px; align-items: center; }
+        .header-nav a {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: color .15s;
+        }
+        .header-nav a:hover { color: var(--text); }
+        .btn-back {
+            background: var(--surface2);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 6px 16px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background .15s;
+        }
+        .btn-back:hover { background: #2e3454; }
+
+        /* ─── Main ─── */
+        .main {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 20px;
+            margin-top: var(--header-h);
+            background: var(--bg);
+        }
+        .wallet-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            width: 100%;
+            max-width: 840px;
+            overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.08);
+        }
+        .wallet-header {
+            padding: 24px 28px 18px;
+            border-bottom: 1px solid var(--border);
+        }
+        .wallet-header h2 {
+            font-size: 20px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .wallet-header p { color: var(--text-dim); font-size: 14px; margin-top: 4px; }
+
+        .wallet-body {
+            display: grid;
+            grid-template-columns: 220px 1fr;
+        }
+
+        /* ─── Credential list ─── */
+        .cred-list {
+            border-right: 1px solid var(--border);
+            padding: 16px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .cred-list h3 {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: .08em;
+            color: var(--text-dim);
+            margin: 4px 8px 8px;
+        }
+        .cred-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background .15s;
+        }
+        .cred-item:hover { background: var(--surface2); }
+        .cred-item.active { background: rgba(99,102,241,.15); }
+        .cred-item.active .cred-name { color: var(--accent-hover); }
+        .cred-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+        .cred-info .cred-name { font-size: 13px; font-weight: 600; }
+        .cred-info .cred-desc { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
+
+        /* ─── Issuing panel ─── */
+        .issuing-panel {
+            padding: 28px 32px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .panel-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: .1em;
+            color: var(--accent-hover);
+            font-weight: 700;
+        }
+        .panel-h3 { font-size: 18px; font-weight: 700; }
+
+        .field { display: flex; flex-direction: column; gap: 6px; }
+        .field label { font-size: 13px; font-weight: 500; color: var(--text-dim); }
+        .field input {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 14px;
+            color: var(--text);
+            font-size: 14px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color .15s;
+        }
+        .field input:focus { border-color: var(--accent); }
+        .field input::placeholder { color: #4a5070; }
+
+        .field-row { display: flex; align-items: center; gap: 10px; }
+        .field-row input { flex: 1; }
+
+        .btn-connect {
+            background: rgba(34,197,94,.1);
+            color: var(--green);
+            border: 1px solid rgba(34,197,94,.25);
+            border-radius: 8px;
+            padding: 10px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background .15s;
+            font-family: inherit;
+        }
+        .btn-connect:hover { background: rgba(34,197,94,.2); }
+        .btn-connect.connected {
+            background: rgba(34,197,94,.15);
+            color: var(--green);
+        }
+
+        .user-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(34,197,94,.08);
+            border: 1px solid rgba(34,197,94,.2);
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 13px;
+        }
+        .user-badge .name { font-weight: 600; color: var(--green); }
+        .user-badge .orcid-id { color: var(--text-dim); font-size: 12px; }
+        .btn-disconnect {
+            margin-left: auto;
+            background: none;
+            border: none;
+            color: #ef4444;
+            cursor: pointer;
+            font-size: 12px;
+            font-family: inherit;
+            padding: 2px 6px;
+        }
+
+        .btn-issue {
+            background: linear-gradient(135deg, var(--accent) 0%, #8b5cf6 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            padding: 14px 24px;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            font-family: inherit;
+            transition: opacity .15s, transform .1s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .btn-issue:hover { opacity: .9; transform: translateY(-1px); }
+        .btn-issue:active { transform: translateY(0); }
+        .btn-issue:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+
+        /* Status messages */
+        .status-box {
+            border-radius: 10px;
+            padding: 14px 16px;
+            font-size: 13px;
+            display: none;
+        }
+        .status-box.info { background: rgba(99,102,241,.1); border: 1px solid rgba(99,102,241,.3); color: #a5b4fc; }
+        .status-box.success { background: rgba(34,197,94,.1); border: 1px solid rgba(34,197,94,.3); color: var(--green); }
+        .status-box.error { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); color: #fca5a5; }
+        .status-box.show { display: block; }
+
+        /* Spinner */
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spinner {
+            width: 16px; height: 16px;
+            border: 2px solid rgba(255,255,255,.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin .7s linear infinite;
+            display: none;
+        }
+        .spinner.show { display: block; }
+
+        /* Success state */
+        .success-screen {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+            padding: 40px;
+            text-align: center;
+        }
+        .success-screen.show { display: flex; }
+        .success-icon {
+            width: 64px; height: 64px;
+            background: rgba(34,197,94,.15);
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 32px;
+        }
+        .success-screen h3 { font-size: 20px; font-weight: 700; }
+        .success-screen p { color: var(--text-dim); font-size: 14px; }
+        .btn-continue {
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            padding: 12px 32px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+            transition: opacity .15s;
+            margin-top: 8px;
+        }
+        .btn-continue:hover { opacity: .85; }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div style="width: 274px; padding: 0; height: 100%; border-right: 1px solid var(--border); display: flex; align-items: center; box-sizing: border-box;">
+            {{VAULT_LOGO_HTML}}
+        </div>
+        <div style="display:flex; gap:10px; align-items:center;">
+            <div style="display: flex; align-items: center; gap: 12px; margin-right: 15px; font-size: 0.95rem;">
+                <a href="/#collections" id="menu-collections" style="color: var(--accent); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Collections</a>
+                <span style="color: var(--border);">|</span>
+                <a href="/#groups" id="menu-groups" style="color: var(--accent); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg> Groups</a>
+                <span style="color: var(--border);">|</span>
+                <a href="/#vault" id="menu-vault" style="color: var(--accent); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg> Vault</a>
+                <span style="color: var(--border);">|</span>
+                <a href="/#history" id="menu-history" style="color: var(--accent); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> History</a>
+            </div>
+            <button onclick="window.location.href='/'" style="padding: 8px 16px; background-color: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: 500;">Back to App</button>
+            {{LOGIN_BUTTON_HTML}}
+        </div>
+    </div>
+
+    <!-- Main -->
+    <div class="main">
+        <div class="wallet-card">
+            <div class="wallet-header">
+                <h2>🔑 VC Wallet</h2>
+                <p>Issue a Verifiable Credential to prove your identity and access Semantic Croissant.</p>
+            </div>
+            <div class="wallet-body">
+                <!-- Credential selector -->
+                <div class="cred-list">
+                    <h3>Available Credentials</h3>
+                    <div class="cred-item" id="cred-upload" onclick="selectCred('upload')">
+                        <div class="cred-icon" style="background:rgba(168,85,247,.1)">📁</div>
+                        <div class="cred-info">
+                            <div class="cred-name">Upload Certificate</div>
+                            <div class="cred-desc">Upload a Verifiable Credential</div>
+                        </div>
+                    </div>
+                    <div class="cred-item" id="cred-google" onclick="selectCred('google')">
+                        <div class="cred-icon" style="background:rgba(66,133,244,.1)">🔵</div>
+                        <div class="cred-info">
+                            <div class="cred-name">Google Account</div>
+                            <div class="cred-desc">Prove a Google email</div>
+                        </div>
+                    </div>
+                    <div class="cred-item" onclick="selectCred('github')">
+                        <div class="cred-icon" style="background:rgba(255,255,255,.06)">🐙</div>
+                        <div class="cred-info">
+                            <div class="cred-name">GitHub Account</div>
+                            <div class="cred-desc">Prove a GitHub username</div>
+                        </div>
+                    </div>
+                    <div class="cred-item" onclick="selectCred('ssh')">
+                        <div class="cred-icon" style="background:rgba(234,179,8,.1)">🔐</div>
+                        <div class="cred-info">
+                            <div class="cred-name">SSH Key</div>
+                            <div class="cred-desc">Link an SSH public key</div>
+                        </div>
+                    </div>
+                    <div class="cred-item active" id="cred-orcid" onclick="selectCred('orcid')">
+                        <div class="cred-icon" style="background:rgba(34,197,94,.1)">🌿</div>
+                        <div class="cred-info">
+                            <div class="cred-name">ORCID iD</div>
+                            <div class="cred-desc">Link your ORCID identifier</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Upload issuing panel -->
+                <div class="issuing-panel" id="panel-upload" style="display:none">
+                    <div>
+                        <div class="panel-title">Authentication: Upload</div>
+                        <div class="panel-h3">Upload your Verifiable Credential</div>
+                    </div>
+                    <div class="field">
+                        <label>VC File (.json)</label>
+                        <input type="file" id="vc-upload-input" accept=".json" onchange="handleFileUpload(event)" style="padding: 6px;" />
+                    </div>
+                    <div class="status-box info" id="status-upload" style="display:none"></div>
+                    <button class="btn-issue" id="btn-login-upload" onclick="loginWithUpload()" disabled>
+                        <div class="spinner" id="spinner-upload" style="display:none;"></div>
+                        <span id="btn-label-upload">Login with Certificate</span>
+                    </button>
+                </div>
+
+                <!-- Google issuing panel -->
+                <div class="issuing-panel" id="panel-google" style="display:none">
+                    <div>
+                        <div class="panel-title">Issuing: Google Account</div>
+                        <div class="panel-h3">Link your Google email address</div>
+                    </div>
+
+                    <div class="field">
+                        <label>Subject DID <span style="color:#4a5070;font-weight:400;">(auto-generated if empty)</span></label>
+                        <input type="text" id="subject-did-google" placeholder="did:oyd:z..." />
+                    </div>
+
+                    <div class="field">
+                        <label>Google ID Token</label>
+                        <div class="field-row">
+                            <input type="password" id="google-token" placeholder="Paste your Google ID token, or use Connect" />
+                            <button class="btn-connect" id="btn-connect-google" onclick="connectGoogle()">Connect Google</button>
+                        </div>
+                        <!-- Logged-in badge shown after OAuth -->
+                        <div class="user-badge" id="google-badge" style="display:none">
+                            <span>🔵</span>
+                            <div>
+                                <div class="name" id="badge-name-google"></div>
+                                <div class="orcid-id" id="badge-email-google"></div>
+                            </div>
+                            <button class="btn-disconnect" onclick="disconnectGoogle()">Disconnect</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ORCID issuing panel -->
+                <div class="issuing-panel" id="panel-orcid">
+                    <div>
+                        <div class="panel-title">Issuing: ORCID iD</div>
+                        <div class="panel-h3">Link your ORCID researcher identity</div>
+                    </div>
+
+                    <div class="field">
+                        <label>Subject DID <span style="color:#4a5070;font-weight:400;">(auto-generated if empty)</span></label>
+                        <input type="text" id="subject-did" placeholder="did:oyd:z..." />
+                    </div>
+
+                    <div class="field">
+                        <label>ORCID iD</label>
+                        <div class="field-row">
+                            <input type="text" id="orcid-input" placeholder="0000-0000-0000-0000" pattern="\d{4}-\d{4}-\d{4}-\d{4}" />
+                            <button class="btn-connect" id="btn-connect-orcid" onclick="connectOrcid()">Connect ORCID</button>
+                        </div>
+                        <!-- Logged-in badge shown after OAuth -->
+                        <div class="user-badge" id="orcid-badge" style="display:none">
+                            <span>🌿</span>
+                            <div>
+                                <div class="name" id="badge-name"></div>
+                                <div class="orcid-id" id="badge-orcid"></div>
+                            </div>
+                            <button class="btn-disconnect" onclick="disconnectOrcid()">Disconnect</button>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <label>Access Token</label>
+                        <input type="password" id="access-token" placeholder="Paste your ORCID access token, or use Connect ORCID above" />
+                    </div>
+
+                    <div class="status-box info" id="status-box"></div>
+
+                    <button class="btn-issue" id="btn-issue" onclick="issueCredential()">
+                        <div class="spinner" id="spinner"></div>
+                        <span id="btn-label">🎓 Issue Credential</span>
+                    </button>
+
+                    <!-- Other credential panels (coming soon) -->
+                    <div id="panel-other" style="display:none; color:var(--text-dim); font-size:14px; padding:20px 0;">
+                        This credential type is not yet available in the native wallet. <a href="https://odrl.dev.codata.org/vcs" target="_blank" style="color:var(--accent-hover);">Open the full wallet ↗</a>
+                    </div>
+                </div>
+
+                <!-- Success panel -->
+                <div class="success-screen" id="success-screen">
+                    <div class="success-icon">✅</div>
+                    <h3 id="success-name">Welcome!</h3>
+                    <p id="success-msg">Your ORCID credential was issued and you're now signed in.</p>
+                    <button class="btn-continue" onclick="downloadVC()" style="background:var(--green); margin-bottom: 10px;">⬇️ Download Certificate</button><br>
+                    <button class="btn-continue" onclick="window.location.href='/'">Continue to Semantic Croissant →</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    const ODRL_API = 'https://odrl.dev.codata.org/api';
+    const ORCID_CLIENT_ID = 'APP-GYWELCXSUPLY5AKQ';
+    const ORCID_REDIRECT = 'https://ai.codata.org/login';
+    const GOOGLE_CLIENT_ID = '1053808023233-frteb30h3ccii1946fpkfvuoopjjjdsm.apps.googleusercontent.com';
+    const GOOGLE_REDIRECT = 'https://ai.codata.org/login';
+
+    let orcidProfile = null;  // {name, orcid, token}
+    let googleProfile = null; // {name, email, token}
+    let currentCred = 'orcid';
+
+    // ─── Select credential type ───
+    function selectCred(type) {
+        currentCred = type;
+        document.querySelectorAll('.cred-item').forEach(el => el.classList.remove('active'));
+        document.getElementById('cred-' + type)?.classList.add('active');
+
+        const panelOrcid = document.getElementById('panel-orcid');
+        const panelGoogle = document.getElementById('panel-google');
+        const panelUpload = document.getElementById('panel-upload');
+        const other = document.getElementById('panel-other');
+        
+        // Hide all first
+        panelOrcid.style.display = 'none';
+        if (panelGoogle) panelGoogle.style.display = 'none';
+        if (panelUpload) panelUpload.style.display = 'none';
+        other.style.display = 'none';
+
+        // Move the common elements into the active panel
+        const activePanel = type === 'orcid' ? panelOrcid : (type === 'google' ? panelGoogle : (type === 'upload' ? panelUpload : other));
+        
+        if (type === 'orcid') {
+            panelOrcid.style.display = 'flex';
+            panelOrcid.appendChild(document.getElementById('status-box'));
+            panelOrcid.appendChild(document.getElementById('btn-issue'));
+            panelOrcid.appendChild(other);
+        } else if (type === 'google') {
+            panelGoogle.style.display = 'flex';
+            panelGoogle.appendChild(document.getElementById('status-box'));
+            panelGoogle.appendChild(document.getElementById('btn-issue'));
+            panelGoogle.appendChild(other);
+        } else if (type === 'upload') {
+            panelUpload.style.display = 'flex';
+        } else {
+            other.style.display = 'block';
+            other.parentNode.appendChild(document.getElementById('status-box'));
+            other.parentNode.appendChild(document.getElementById('btn-issue'));
+            other.parentNode.appendChild(other);
+        }
+        clearStatus();
+    }
+
+    // ─── ORCID OAuth ───
+    function connectOrcid() {
+        const params = new URLSearchParams({
+            client_id: ORCID_CLIENT_ID,
+            redirect_uri: ORCID_REDIRECT,
+            response_type: 'id_token',
+            scope: 'openid /authenticate',
+            state: 'login_' + Math.random().toString(36).slice(2),
+            nonce: Math.random().toString(36).slice(2),
+        });
+        const popup = window.open(
+            `https://orcid.org/oauth/authorize?${params}`,
+            'orcid_auth',
+            'width=600,height=700,scrollbars=yes'
+        );
+
+        // Listen for the OAuth callback posted back via postMessage from the ODRL popup
+        window.addEventListener('message', function onMsg(ev) {
+            if (!ev.origin.includes('codata.org')) return;
+            try {
+                const d = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data;
+                if (d && d.type === 'OAUTH_CALLBACK') {
+                    if (d.provider === 'orcid') {
+                        window.removeEventListener('message', onMsg);
+                        handleOrcidCallback(d);
+                    } else if (d.provider === 'google') {
+                        window.removeEventListener('message', onMsg);
+                        handleGoogleCallback(d);
+                    }
+                }
+            } catch(e) {}
+        });
+    }
+
+    function connectGoogle() {
+        const params = new URLSearchParams({
+            client_id: GOOGLE_CLIENT_ID,
+            redirect_uri: GOOGLE_REDIRECT,
+            response_type: 'id_token',
+            scope: 'openid email profile',
+            state: 'google_' + Math.random().toString(36).slice(2),
+            nonce: Math.random().toString(36).slice(2),
+        });
+        window.open(
+            `https://accounts.google.com/o/oauth2/v2/auth?${params}`,
+            'google_auth',
+            'width=600,height=700,scrollbars=yes'
+        );
+
+        // Uses the same postMessage listener attached in connectOrcid if both are clicked, 
+        // but we'll add one here just in case Google is clicked first
+        window.addEventListener('message', function onMsg(ev) {
+            if (!ev.origin.includes('codata.org') && !ev.origin.includes(window.location.hostname)) return;
+            try {
+                const d = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data;
+                if (d && d.type === 'OAUTH_CALLBACK' && d.provider === 'google') {
+                    window.removeEventListener('message', onMsg);
+                    handleGoogleCallback(d);
+                }
+            } catch(e) {}
+        });
+    }
+
+    function handleOrcidCallback(d) {
+        // d = {provider:'orcid', token: id_token, accessToken, orcid, name}
+        try {
+            let orcidId = d.orcid || '';
+            let name = d.name || 'ORCID User';
+            
+            if (typeof d.token === 'string' && d.token.includes('.')) {
+                // Decode id_token JWT payload
+                let payload = d.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+                payload += '='.repeat((4 - payload.length % 4) % 4);
+                const claims = JSON.parse(atob(payload));
+                if (!orcidId) orcidId = claims.sub || '';
+                if (!name || name === 'ORCID User') {
+                    name = claims.given_name
+                        ? `${claims.given_name} ${claims.family_name || ''}`.trim()
+                        : (claims.name || 'ORCID User');
+                }
+            }
+
+            orcidProfile = { name, orcid: orcidId, token: d.accessToken || d.token };
+
+            document.getElementById('orcid-input').value = orcidId;
+            document.getElementById('access-token').value = orcidProfile.token;
+            document.getElementById('badge-name').textContent = name;
+            document.getElementById('badge-orcid').textContent = orcidId;
+            document.getElementById('orcid-badge').style.display = 'flex';
+            document.getElementById('btn-connect-orcid').style.display = 'none';
+            showStatus('info', `Connected as ${name} (${orcidId})`);
+        } catch(e) {
+            showStatus('error', 'Failed to parse ORCID response: ' + e.message);
+        }
+    }
+
+    function handleGoogleCallback(d) {
+        // d = {provider:'google', token: id_token, accessToken}
+        try {
+            // Decode id_token JWT payload
+            let payload = d.token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+            payload += '='.repeat((4 - payload.length % 4) % 4);
+            const claims = JSON.parse(atob(payload));
+            const email = claims.email || '';
+            const name = claims.name || claims.given_name || 'Google User';
+
+            googleProfile = { name, email, token: d.token };
+
+            document.getElementById('google-token').value = googleProfile.token;
+            document.getElementById('badge-name-google').textContent = name;
+            document.getElementById('badge-email-google').textContent = email;
+            document.getElementById('google-badge').style.display = 'flex';
+            document.getElementById('btn-connect-google').style.display = 'none';
+            showStatus('info', `Connected as ${name} (${email})`);
+        } catch(e) {
+            showStatus('error', 'Failed to parse Google response: ' + e.message);
+        }
+    }
+
+    function disconnectOrcid() {
+        orcidProfile = null;
+        document.getElementById('orcid-input').value = '';
+        document.getElementById('access-token').value = '';
+        document.getElementById('orcid-badge').style.display = 'none';
+        document.getElementById('btn-connect-orcid').style.display = 'inline-flex';
+        clearStatus();
+    }
+
+    function disconnectGoogle() {
+        googleProfile = null;
+        document.getElementById('google-token').value = '';
+        document.getElementById('google-badge').style.display = 'none';
+        document.getElementById('btn-connect-google').style.display = 'inline-flex';
+        clearStatus();
+    }
+
+    // ─── Issue Credential ───
+    window.lastIssuedVC = null;
+    
+    async function issueCredential() {
+        let subjectDid = '';
+        let payload = null;
+        let endpoint = '';
+        let body = {};
+        let orcidId = '';
+        
+        if (currentCred === 'orcid') {
+            orcidId = document.getElementById('orcid-input').value.trim();
+            const token = document.getElementById('access-token').value.trim();
+            subjectDid = document.getElementById('subject-did').value.trim();
+
+            if (!orcidId) { showStatus('error', 'Please enter your ORCID iD (or click Connect ORCID).'); return; }
+            if (!token) { showStatus('error', 'Please enter your access token (or click Connect ORCID).'); return; }
+            
+            payload = orcidProfile
+                ? { name: orcidProfile.name, email: orcidId + '@orcid.org', orcid: orcidId }
+                : { purpose: 'vc-subject' };
+            endpoint = '/vc/orcid';
+            body = { subject_did: subjectDid, orcid: orcidId, token: token };
+            
+        } else if (currentCred === 'google') {
+            const token = document.getElementById('google-token').value.trim();
+            subjectDid = document.getElementById('subject-did-google').value.trim();
+
+            if (!token) { showStatus('error', 'Please enter your Google ID token (or click Connect Google).'); return; }
+
+            payload = googleProfile
+                ? { name: googleProfile.name, email: googleProfile.email }
+                : { purpose: 'vc-subject' };
+            endpoint = '/vc/google';
+            body = { subject_did: subjectDid, token: token };
+        } else {
+            showStatus('error', 'Unsupported credential type'); return;
+        }
+
+        setBusy(true);
+        showStatus('info', 'Creating your decentralized identity…');
+
+        try {
+            // Step 1: Create or resolve DID
+            if (!subjectDid) {
+                const didResp = await fetch(ODRL_API + '/did/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ payload })
+                });
+                if (!didResp.ok) throw new Error('DID creation failed: ' + await didResp.text());
+                const didData = await didResp.json();
+                subjectDid = didData.did;
+                body.subject_did = subjectDid;
+                
+                if (currentCred === 'orcid') document.getElementById('subject-did').value = subjectDid;
+                if (currentCred === 'google') document.getElementById('subject-did-google').value = subjectDid;
+            }
+
+            showStatus('info', 'Issuing Verifiable Credential…');
+
+            // Step 2: Issue VC
+            const vcResp = await fetch(ODRL_API + endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (!vcResp.ok) {
+                const err = await vcResp.json().catch(() => ({ detail: vcResp.statusText }));
+                throw new Error(err.detail || 'VC issuance failed');
+            }
+            const vc = await vcResp.json();
+
+            showStatus('info', 'Authenticating with Semantic Croissant…');
+
+            // Step 3: Send VC to our auth backend
+            const saveResp = await fetch('/api/auth/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(vc)
+            });
+            if (!saveResp.ok) throw new Error('Auth save failed');
+            const saved = await saveResp.json();
+
+            // Step 4: Show success
+            setBusy(false);
+            window.lastIssuedVC = vc;
+            
+            let displayName = saved.user?.name || subjectDid;
+            if (currentCred === 'orcid' && (orcidProfile || orcidId)) displayName = saved.user?.name || orcidProfile?.name || orcidId;
+            if (currentCred === 'google' && (googleProfile || saved.user?.email)) displayName = saved.user?.name || googleProfile?.name || saved.user?.email;
+            
+            document.getElementById('success-name').textContent = `Welcome, ${displayName}!`;
+            document.getElementById('success-msg').textContent = `Your ${currentCred} credential was issued and you're now signed in.`;
+            document.getElementById('panel-' + currentCred).style.display = 'none';
+            document.getElementById('success-screen').classList.add('show');
+
+        } catch(err) {
+            setBusy(false);
+            showStatus('error', '❌ ' + err.message);
+        }
+    }
+
+    // ─── Helpers ───
+    function setBusy(busy) {
+        const btn = document.getElementById('btn-issue');
+        const spinner = document.getElementById('spinner');
+        const label = document.getElementById('btn-label');
+        btn.disabled = busy;
+        spinner.className = busy ? 'spinner show' : 'spinner';
+        label.textContent = busy ? 'Working…' : '🎓 Issue Credential';
+    }
+
+    function showStatus(type, msg) {
+        const box = document.getElementById('status-box');
+        box.className = `status-box ${type} show`;
+        box.textContent = msg;
+    }
+    function clearStatus() {
+        document.getElementById('status-box').className = 'status-box';
+    }
+
+    // ─── Handle OAuth redirect (if this page is opened as popup callback) ───
+    // If URL has #id_token=... or #access_token=... we came back from ORCID or Google — post to opener
+    (function handleRedirect() {
+        const hash = new URLSearchParams(window.location.hash.slice(1));
+        const idToken = hash.get('id_token');
+        const accessToken = hash.get('access_token');
+        
+        if ((idToken || accessToken) && window.opener) {
+            // Determine provider by looking at the state
+            const state = hash.get('state') || '';
+            const isGoogle = state.startsWith('google_');
+            
+            window.opener.postMessage({
+                type: 'OAUTH_CALLBACK',
+                provider: isGoogle ? 'google' : 'orcid',
+                token: idToken || accessToken,
+                accessToken: accessToken || idToken,
+                orcid: hash.get('orcid') || ''
+            }, '*');
+            window.close();
+        }
+    })();
+
+    // ─── If already authenticated, show user bar ───
+    (function checkAuth() {
+        if (document.getElementById('user-menu-container')) {
+            // Already logged in — show a brief note
+            showStatus('success', '✅ You are already signed in. You can go back to the app.');
+        }
+    })();
+    
+    // ─── File Upload & Download Logic ───
+    let uploadedVC = null;
+    
+    function downloadVC() {
+        if (!window.lastIssuedVC) {
+            console.error("No VC found to download");
+            return;
+        }
+        const blob = new Blob([JSON.stringify(window.lastIssuedVC, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = "semantic_croissant_vc.json";
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        URL.revokeObjectURL(url);
+    }
+    
+    function handleFileUpload(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                uploadedVC = JSON.parse(e.target.result);
+                document.getElementById('btn-login-upload').disabled = false;
+                document.getElementById('status-upload').textContent = 'File loaded successfully. Ready to login.';
+                document.getElementById('status-upload').className = 'status-box success show';
+                document.getElementById('status-upload').style.display = 'block';
+            } catch(err) {
+                document.getElementById('status-upload').textContent = 'Invalid JSON file.';
+                document.getElementById('status-upload').className = 'status-box error show';
+                document.getElementById('status-upload').style.display = 'block';
+                document.getElementById('btn-login-upload').disabled = true;
+            }
+        };
+        reader.readAsText(file);
+    }
+    
+    async function loginWithUpload() {
+        if (!uploadedVC) return;
+        document.getElementById('btn-login-upload').disabled = true;
+        document.getElementById('spinner-upload').style.display = 'block';
+        
+        try {
+            const saveResp = await fetch('/api/auth/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(uploadedVC)
+            });
+            if (!saveResp.ok) throw new Error('Auth save failed');
+            const saved = await saveResp.json();
+            
+            document.getElementById('success-name').textContent = `Welcome back, ${saved.user?.name || 'User'}!`;
+            document.getElementById('success-msg').textContent = "Your certificate was verified and you're now signed in.";
+            document.getElementById('panel-upload').style.display = 'none';
+            document.getElementById('success-screen').classList.add('show');
+        } catch(err) {
+            document.getElementById('btn-login-upload').disabled = false;
+            document.getElementById('spinner-upload').style.display = 'none';
+            document.getElementById('status-upload').textContent = '❌ ' + err.message;
+            document.getElementById('status-upload').className = 'status-box error show';
+            document.getElementById('status-upload').style.display = 'block';
+        }
+    }
+    </script>
+</body>
+</html>
