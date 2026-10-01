@@ -90,6 +90,12 @@ services:
       - ${VOLUME_DIR:-./qlever-tests/volumes}/${PROFILE_NAME:-croissant-live}/server:/volumes/server
       - ./convertors:/app/convertors:ro
       - ./agents:/app/agents:ro
+      - ~/.odrl:/app/.odrl
+      - ./api/main.py:/app/main.py
+      - ./api/mcp_server.py:/app/mcp_server.py
+      - ./api/static/login.html:/app/static/login.html
+      - ./api/static/index.html:/app/static/index.html
+      - ./api/static/collections_index.html:/app/static/collections_index.html
       - ./credentials.json:/app/credentials.json:ro
     depends_on:
       - server
@@ -114,7 +120,12 @@ services:
       - ./shapes:/app/shapes:ro
       - ./convertors:/app/convertors:ro
       - ./agents:/app/agents:ro
-      - ~/.odrl:/app/.odrl:ro
+      - ~/.odrl:/app/.odrl
+      - ./api/main.py:/app/main.py
+      - ./api/mcp_server.py:/app/mcp_server.py
+      - ./api/static/login.html:/app/static/login.html
+      - ./api/static/index.html:/app/static/index.html
+      - ./api/static/collections_index.html:/app/static/collections_index.html
       - ./credentials.json:/app/credentials.json:ro
     depends_on:
       - api

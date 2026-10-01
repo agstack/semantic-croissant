@@ -162,7 +162,7 @@
             <input type="text" id="global-search" placeholder="Search across all collections..." style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); width: 300px; font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') window.location.href = '/?q=' + encodeURIComponent('Search Croissant datasets for: ' + this.value)">
             <button class="theme-toggle" onclick="document.getElementById('share-url-input').value = window.location.origin + '/vault/print/' + getDocId(); document.getElementById('share-modal').style.display='flex'">Share</button>
             <button class="theme-toggle" id="theme-toggle">Toggle Theme</button>
-            <button class="theme-toggle" onclick="window.location.href='https://odrl.dev.codata.org/vcs'" style="background-color: #4285f4; color: white; border: none; font-weight: 500;">Login</button>
+            {{LOGIN_BUTTON_HTML}}
         </div>
     </div>
 

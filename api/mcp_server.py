@@ -30,23 +30,84 @@ def get_odrl_token():
             pass
     return None
 
-def get_user_info_from_odrl():
-    auth_file = "/app/.odrl/authorize"
-    if not os.path.exists(auth_file):
-        auth_file = os.path.expanduser("~/.odrl/authorize")
-    if os.path.exists(auth_file):
-        try:
-            with open(auth_file, "r") as f:
-                data = json.load(f)
-                did = data.get("did", "")
-                if did:
-                    short_did = did.split(":")[-1][:8]
-                    return {"name": f"did_{short_did}", "preferred_username": f"did_{short_did}", "email": did}
-        except:
-            pass
-    return None
+def _odrl_base_dir():
+    base = "/app/.odrl"
+    if not os.path.exists(base):
+        base = os.path.expanduser("~/.odrl")
+    return base
 
-SERVER_USER_INFO = get_user_info_from_odrl()
+
+def _resolve_did_name(did: str) -> dict:
+    """Resolve a DID to a name/email dict via universal resolver."""
+    import urllib.request, json
+    try:
+        url = f"https://dev.uniresolver.io/1.0/identifiers/{did}"
+        req = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            doc = json.loads(resp.read())
+        services = doc.get("service") or doc.get("didDocument", {}).get("service", [])
+        for svc in (services or []):
+            payload = svc.get("payload", {})
+            name = payload.get("name")
+            email = payload.get("email") or payload.get("orcid") or did
+            if name:
+                return {"name": name, "preferred_username": name, "email": email, "orcid": payload.get("orcid")}
+    except Exception as e:
+        print(f"DID resolve error: {e}")
+    short = did.split(":")[-1][:12]
+    return {"name": f"did_{short}", "preferred_username": f"did_{short}", "email": did}
+
+
+def get_user_info_from_odrl(request=None):
+    """Return user dict for the currently authenticated user (via auth_did cookie)."""
+    import json
+    if not request:
+        return {"name": "Guest", "did": "did:oyd:guest", "certificate": "guest_cert"}
+    did = request.cookies.get("auth_did")
+    if not did:
+        return {"name": "Guest", "did": "did:oyd:guest", "certificate": "guest_cert"}
+    safe_did = "".join(c for c in did if c.isalnum() or c in ":-")
+    user_file = os.path.join(_odrl_base_dir(), "users", f"{safe_did}.json")
+    if os.path.exists(user_file):
+        try:
+            with open(user_file) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"name": "Guest", "did": "did:oyd:guest", "certificate": "guest_cert"}
+
+
+def get_login_button_html(request=None):
+    user = get_user_info_from_odrl(request)
+    if user and user.get("name"):
+        name = user["name"]
+        if name.startswith("did:"):
+            name = "User"
+        orcid = user.get("orcid", "")
+        orcid_badge = f' <small style="font-size:11px;color:#a0a0b0;">ORCID {orcid}</small>' if orcid else ""
+        login_btn_html = ""
+        dropdown_btn = f'''<button onclick="if(confirm('Log out?')) {{ document.cookie='auth_did=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'; fetch('/api/auth/logout', {{method:'POST'}}).then(()=>window.location.href='/'); }}" style="width:100%; padding:10px; text-align:left; background:none; border:none; cursor:pointer; font-size:14px; color:#d93025;">Logout</button>'''
+        
+        if name == "Guest":
+            login_btn_html = '<button class="theme-toggle" onclick="window.location.href=\'/login\'" style="background-color: #4285f4; color: white; border: none; font-weight: 500; margin-left: 10px;">Login</button>'
+            dropdown_btn = f'''<button onclick="window.location.href='/login'" style="width:100%; padding:10px; text-align:left; background:none; border:none; cursor:pointer; font-size:14px; color:#4285f4;">Login</button>'''
+
+        return f'''<div style="position:relative; display:inline-block; display: flex;" id="user-menu-container">
+            <button class="theme-toggle" onclick="document.getElementById('user-dropdown').style.display = document.getElementById('user-dropdown').style.display === 'block' ? 'none' : 'block'" style="background-color: #f1f3f4; color: #333; border: 1px solid var(--border-color, #ccc); font-weight: 500;">👤 {name}{orcid_badge}</button>
+            {login_btn_html}
+            <div id="user-dropdown" style="display:none; position:absolute; top:100%; right:0; background:white; border:1px solid #ccc; border-radius:4px; box-shadow:0 2px 5px rgba(0,0,0,0.2); z-index:1000; margin-top:5px; min-width:150px;">
+                {dropdown_btn}
+            </div>
+            <script>
+                document.addEventListener('click', function(e) {{
+                    if (document.getElementById('user-menu-container') && !document.getElementById('user-menu-container').contains(e.target)) {{
+                        document.getElementById('user-dropdown').style.display = 'none';
+                    }}
+                }});
+            </script>
+        </div>'''
+    else:
+        return '<div style="position:relative; display:inline-block;"><button class="theme-toggle" onclick="window.location.href=\'/login\'" style="background-color: #4285f4; color: white; border: none; font-weight: 500;">Login</button></div>'
 
 def get_auth_headers(base_headers=None):
     headers = base_headers.copy() if base_headers else {}
@@ -2993,12 +3054,19 @@ def main(port: int, transport: str) -> int:
                 with open(index_path, "r", encoding="utf-8") as f:
                     html_content = f.read()
                 
-                auth_status = '<span style="color: #4CAF50;">Authenticated via /app/.odrl/authorize</span>' if get_odrl_token() else '<span style="color: #F44336;">Not Authenticated</span>'
+                user = get_user_info_from_odrl(request)
+                if user and user.get("name"):
+                    auth_status = f'<span style="color: #4CAF50;">Authenticated as {user["name"]}</span>'
+                elif get_odrl_token():
+                    auth_status = '<span style="color: #4CAF50;">Authenticated via /app/.odrl/authorize</span>'
+                else:
+                    auth_status = '<span style="color: #F44336;">Not Authenticated</span>'
                 html_content = html_content.replace('{{AUTH_STATUS}}', auth_status)
                 
                 logo_url = os.environ.get("VAULT_LOGO_URL", "/logo.png")
                 logo_html = f'<a href="/" style="display:flex; align-items:center; justify-content:center; text-decoration:none; padding: 10px;"><img src="{logo_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Logo" /></a>' if logo_url else ""
                 html_content = html_content.replace('{{VAULT_LOGO_HTML}}', logo_html)
+                html_content = html_content.replace('{{LOGIN_BUTTON_HTML}}', get_login_button_html(request))
                 
                 return HTMLResponse(html_content)
             else:
@@ -3363,6 +3431,39 @@ def main(port: int, transport: str) -> int:
             except Exception as e:
                 import sys
                 print(f"Error proxying minio: {e}", file=sys.stderr)
+                if filename.endswith(".jsonld"):
+                    try:
+                        es_id = filename[:-7]
+                        es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+                        import httpx
+                        import json
+                        from starlette.responses import Response
+                        async with httpx.AsyncClient(timeout=10.0) as es_client:
+                            es_resp = await es_client.get(f"{es_url}/croissant/_doc/{es_id}")
+                            if es_resp.status_code == 200:
+                                es_data = es_resp.json().get("_source", {})
+                                es_data.pop("_full_text", None)
+                                es_data.pop("_markdown_text", None)
+                                es_data.pop("_source_url", None)
+                                
+                                data = json.dumps(es_data, indent=2).encode("utf-8")
+                                media_type = "application/ld+json; charset=utf-8"
+                                
+                                base_url = f"https://{MCP_DOMAIN}"
+                                signposting_links = [
+                                    f'<{base_url}/vault/{es_id}>; rel="cite-as"',
+                                    f'<{base_url}/vault/{filename}>; rel="describedby" type="application/ld+json"',
+                                    f'<{base_url}/vault/{es_id}>; rel="item" type="text/markdown"',
+                                    '<https://schema.org/Dataset>; rel="type"',
+                                    '<https://creativecommons.org/licenses/by/4.0/>; rel="license"'
+                                ]
+                                headers = {
+                                    "Link": ", ".join(signposting_links),
+                                    "X-Fair-Signposting": "enabled"
+                                }
+                                return Response(content=data, media_type=media_type, headers=headers)
+                    except Exception as fallback_e:
+                        print(f"Error falling back to ES: {fallback_e}", file=sys.stderr)
             
             from starlette.responses import Response
             return Response("Not Found", status_code=404)
@@ -3394,6 +3495,7 @@ def main(port: int, transport: str) -> int:
             logo_url = os.environ.get("VAULT_LOGO_URL", "/logo.png")
             logo_html = f'<a href="/" style="display:flex; align-items:center; justify-content:center; text-decoration:none; padding: 10px;"><img src="{logo_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Logo" /></a>' if logo_url else ""
             html_content = html_content.replace('{{VAULT_LOGO_HTML}}', logo_html)
+            html_content = html_content.replace('{{LOGIN_BUTTON_HTML}}', get_login_button_html(request))
             return HTMLResponse(content=html_content)
             
         async def vault_es_doc_raw(request):
@@ -3694,6 +3796,10 @@ def main(port: int, transport: str) -> int:
                     
             if not is_authorized and get_odrl_token():
                 # Allow access to the gateway if the server is authenticated via ODRL
+                is_authorized = True
+                
+            if not is_authorized and get_user_info_from_odrl(request):
+                # Allow access if the request has a valid user session cookie
                 is_authorized = True
                     
             if not is_authorized:
@@ -4134,6 +4240,13 @@ def main(port: int, transport: str) -> int:
                     return JSONResponse({"error": "Name is required"}, status_code=400)
                 
                 cid = str(uuid.uuid4())
+                
+                owner = None
+                if data.get("is_private", False):
+                    user_info = get_user_info_from_odrl()
+                    if user_info and user_info.get("email"):
+                        owner = user_info["email"]
+                        
                 col_data = {
                     "id": cid,
                     "name": data.get("name"),
@@ -4141,6 +4254,8 @@ def main(port: int, transport: str) -> int:
                     "link": data.get("link", ""),
                     "parent_id": data.get("parent_id", None),
                     "is_supercollection": data.get("is_supercollection", False),
+                    "is_private": data.get("is_private", False),
+                    "owner": owner,
                     "created_at": datetime.datetime.utcnow().isoformat() + "Z",
                     "items": []
                 }
@@ -4260,6 +4375,7 @@ def main(port: int, transport: str) -> int:
             logo_url = os.environ.get("VAULT_LOGO_URL", "/logo.png")
             logo_html = f'<a href="/" style="display:flex; align-items:center; justify-content:center; text-decoration:none; padding: 10px;"><img src="{logo_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Logo" /></a>' if logo_url else ""
             html_content = html_content.replace('{{VAULT_LOGO_HTML}}', logo_html)
+            html_content = html_content.replace('{{LOGIN_BUTTON_HTML}}', get_login_button_html(request))
             return HTMLResponse(content=html_content)
 
         async def api_collections_get_single(request):
@@ -4503,6 +4619,7 @@ def main(port: int, transport: str) -> int:
             logo_url = os.environ.get("VAULT_LOGO_URL", "/logo.png")
             logo_html = f'<a href="/" style="display:flex; align-items:center; justify-content:center; text-decoration:none; padding: 10px;"><img src="{logo_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Logo" /></a>' if logo_url else ""
             html_content = html_content.replace('{{VAULT_LOGO_HTML}}', logo_html)
+            html_content = html_content.replace('{{LOGIN_BUTTON_HTML}}', get_login_button_html(request))
             return HTMLResponse(content=html_content)
 
         async def view_dataverse(request):
@@ -4680,12 +4797,19 @@ def main(port: int, transport: str) -> int:
                 with open(file_path, "r", encoding="utf-8") as f:
                     html_content = f.read()
                     
-                auth_status = '<span style="color: #4CAF50;">Authenticated via /app/.odrl/authorize</span>' if get_odrl_token() else '<span style="color: #F44336;">Not Authenticated</span>'
+                user = get_user_info_from_odrl(request)
+                if user and user.get("name"):
+                    auth_status = f'<span style="color: #4CAF50;">Authenticated as {user["name"]}</span>'
+                elif get_odrl_token():
+                    auth_status = '<span style="color: #4CAF50;">Authenticated via /app/.odrl/authorize</span>'
+                else:
+                    auth_status = '<span style="color: #F44336;">Not Authenticated</span>'
                 html_content = html_content.replace('{{AUTH_STATUS}}', auth_status)
                 
                 logo_url = os.environ.get("VAULT_LOGO_URL", "/logo.png")
                 logo_html = f'<a href="/" style="display:flex; align-items:center; justify-content:center; text-decoration:none; padding: 10px;"><img src="{logo_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Logo" /></a>' if logo_url else ""
                 html_content = html_content.replace('{{VAULT_LOGO_HTML}}', logo_html)
+                html_content = html_content.replace('{{LOGIN_BUTTON_HTML}}', get_login_button_html(request))
                 
                 return HTMLResponse(html_content)
             else:
@@ -4844,6 +4968,117 @@ def main(port: int, transport: str) -> int:
                 print(f"Error processing delpher url: {e}")
                 return JSONResponse({"detail": str(e)}, status_code=500)
 
+        async def view_login(request):
+            import os
+            from starlette.responses import HTMLResponse
+            file_path = os.path.join(os.path.dirname(__file__), "static/login.html")
+            if not os.path.exists(file_path):
+                file_path = "api/static/login.html"
+            with open(file_path, "r", encoding="utf-8") as f:
+                html_content = f.read()
+            logo_url = os.environ.get("VAULT_LOGO_URL", "/logo.png")
+            logo_html = f'<a href="/" style="display:flex; align-items:center; justify-content:center; text-decoration:none; padding: 10px;"><img src="{logo_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Logo" /></a>' if logo_url else ""
+            html_content = html_content.replace('{{VAULT_LOGO_HTML}}', logo_html)
+            html_content = html_content.replace('{{LOGIN_BUTTON_HTML}}', get_login_button_html(request))
+            return HTMLResponse(content=html_content)
+
+        async def api_auth_status(request):
+            from starlette.responses import JSONResponse
+            import json
+            session_id = request.query_params.get("session_id")
+            if session_id:
+                safe_session = "".join(c for c in session_id if c.isalnum())
+                session_file = os.path.join(_odrl_base_dir(), "sessions", f"{safe_session}.txt")
+                if os.path.exists(session_file):
+                    with open(session_file) as f:
+                        did = f.read().strip()
+                    user_file = os.path.join(_odrl_base_dir(), "users", "".join(c for c in did if c.isalnum() or c in ":-") + ".json")
+                    if os.path.exists(user_file):
+                        with open(user_file) as f:
+                            user = json.load(f)
+                        resp = JSONResponse({"authenticated": True, "user": user})
+                        resp.set_cookie("auth_did", did, max_age=86400 * 30, path="/", samesite="lax")
+                        return resp
+            user = get_user_info_from_odrl(request)
+            if user:
+                return JSONResponse({"authenticated": True, "user": user})
+            return JSONResponse({"authenticated": False})
+
+        async def api_auth_logout(request):
+            from starlette.responses import JSONResponse
+            resp = JSONResponse({"success": True})
+            resp.delete_cookie("auth_did", path="/")
+            return resp
+
+        async def api_auth_save(request):
+            """Accept a Verifiable Credential OR a raw DID document."""
+            from starlette.responses import JSONResponse
+            import json
+            try:
+                data = await request.json()
+                session_id = request.query_params.get("session_id", "")
+                safe_session = "".join(c for c in session_id if c.isalnum())
+
+                did = None
+                user_profile = None
+
+                # Case 1: Verifiable Credential
+                if "credentialSubject" in data and "proof" in data:
+                    subject = data["credentialSubject"]
+                    did = subject if isinstance(subject, str) else subject.get("id", "")
+                    if did:
+                        user_profile = _resolve_did_name(did)
+
+                # Case 2: Raw DID document
+                elif "did" in data and "did_document" in data:
+                    did = data["did"]
+                    services = data.get("did_document", {}).get("service", [])
+                    for svc in services:
+                        payload = svc.get("payload", {})
+                        name = payload.get("name")
+                        if name:
+                            user_profile = {
+                                "name": name,
+                                "preferred_username": name,
+                                "email": payload.get("email") or payload.get("orcid") or did,
+                                "orcid": payload.get("orcid"),
+                            }
+                            break
+                    if not user_profile and did:
+                        user_profile = _resolve_did_name(did)
+
+                if not did or not user_profile:
+                    return JSONResponse({"success": False, "error": "Could not extract DID or user profile"})
+
+                safe_did = "".join(c for c in did if c.isalnum() or c in ":-")
+                base = _odrl_base_dir()
+                os.makedirs(os.path.join(base, "users"), exist_ok=True)
+                os.makedirs(os.path.join(base, "sessions"), exist_ok=True)
+
+                with open(os.path.join(base, "users", f"{safe_did}.json"), "w") as f:
+                    json.dump(user_profile, f)
+
+                if safe_session:
+                    with open(os.path.join(base, "sessions", f"{safe_session}.txt"), "w") as f:
+                        f.write(did)
+
+                resp = JSONResponse({"success": True, "user": user_profile})
+                resp.set_cookie("auth_did", did, max_age=86400 * 30, path="/", samesite="lax")
+                return resp
+            except Exception as e:
+                return JSONResponse({"success": False, "error": str(e)})
+
+        async def api_auth_debug(request):
+            from starlette.responses import JSONResponse
+            import json
+            try:
+                data = await request.json()
+                with open("/tmp/auth_debug.log", "a") as f:
+                    f.write(json.dumps(data) + "\\n")
+                return JSONResponse({"success": True})
+            except Exception as e:
+                return JSONResponse({"success": False})
+
         async def view_add(request):
             import os
             from starlette.responses import FileResponse
@@ -4920,6 +5155,11 @@ def main(port: int, transport: str) -> int:
                 Route("/api/dataverse/process", endpoint=process_dataverse, methods=["POST"]),
                 Route("/delpher", endpoint=view_delpher),
                 Route("/api/delpher/process", endpoint=process_delpher, methods=["POST"]),
+                Route("/login", endpoint=view_login),
+                Route("/api/auth/logout", endpoint=api_auth_logout, methods=["POST"]),
+                Route("/api/auth/status", endpoint=api_auth_status, methods=["GET"]),
+                Route("/api/auth/save", endpoint=api_auth_save, methods=["POST"]),
+                Route("/api/auth/debug", endpoint=api_auth_debug, methods=["POST"]),
                 Route("/add", endpoint=view_add),
                 Route("/api/generic/process", endpoint=process_generic, methods=["POST"]),
                 Route("/collectionsindex", endpoint=view_collections_index),

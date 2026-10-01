@@ -103,7 +103,7 @@
             <button class="theme-toggle" onclick="document.getElementById('add-resource-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-resource-input').focus(), 50);" style="background-color: #006bb3; color: white; border: none; font-weight: 500;">Add resource</button>
             <input type="text" id="global-search" placeholder="Search across all collections..." style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); width: 300px; font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') window.location.href = '/?q=' + encodeURIComponent('Search Croissant datasets for: ' + this.value)">
             <button class="theme-toggle" onclick="window.location.href='/'" style="background-color: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); font-weight: 500;">Back to App</button>
-            <button class="theme-toggle" onclick="window.location.href='https://odrl.dev.codata.org/vcs'" style="background-color: #4285f4; color: white; border: none; font-weight: 500;">Login</button>
+            {{LOGIN_BUTTON_HTML}}
         </div>
     </div>
 
@@ -155,7 +155,10 @@
                         <input type="text" id="col-name" style="width:100%; padding:8px; border:1px solid var(--border-color); border-radius:4px; background:var(--bg-color); color:var(--text-color);">
                         <div style="margin-top: 6px; display: flex; align-items: center; gap: 6px;">
                             <input type="checkbox" id="col-is-super">
-                            <label for="col-is-super" style="font-size: 0.9rem;">Supercollection</label>
+                            <label for="col-is-super" style="font-size: 0.9rem; margin-right: 15px;">Supercollection</label>
+                            
+                            <input type="checkbox" id="col-is-private" checked>
+                            <label for="col-is-private" style="font-size: 0.9rem;">Private</label>
                         </div>
                     </div>
                     <div style="margin-bottom: 10px;">
@@ -290,6 +293,7 @@
                 const desc = document.getElementById('col-desc').value;
                 const link = document.getElementById('col-link').value;
                 const is_super = document.getElementById('col-is-super').checked;
+                const is_private = document.getElementById('col-is-private').checked;
 
                 if (!name.trim()) { alert("Name is required."); return; }
 
@@ -298,7 +302,8 @@
                     description: desc, 
                     link, 
                     parent_id: pid ? pid : null,
-                    is_supercollection: is_super
+                    is_supercollection: is_super,
+                    is_private: is_private
                 };
 
                 const method = id ? 'PUT' : 'POST';

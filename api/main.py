@@ -9,6 +9,15 @@ import json
 from rdflib import Graph
 app = FastAPI(title="Semantic Croissant API")
 
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 from fastapi.staticfiles import StaticFiles
 import os
 
@@ -586,8 +595,200 @@ async def serve_logo_main():
     if not os.path.exists(path): path = "api/static/logo.png"
     return FileResponse(path)
 
+def _odrl_base_dir():
+    base = "/app/.odrl"
+    if not os.path.exists(base):
+        base = os.path.expanduser("~/.odrl")
+    return base
+
+
+def _resolve_did_name(did: str) -> dict:
+    """Resolve a DID to a name/email dict via universal resolver."""
+    import urllib.request, json
+    try:
+        url = f"https://dev.uniresolver.io/1.0/identifiers/{did}"
+        req = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            doc = json.loads(resp.read())
+        # Resolver returns doc directly OR wrapped in didDocument
+        services = doc.get("service") or doc.get("didDocument", {}).get("service", [])
+        for svc in (services or []):
+            payload = svc.get("payload", {})
+            name = payload.get("name")
+            email = payload.get("email") or payload.get("orcid") or did
+            if name:
+                return {"name": name, "preferred_username": name, "email": email, "orcid": payload.get("orcid")}
+    except Exception as e:
+        print(f"DID resolve error: {e}")
+    # fallback: short DID
+    short = did.split(":")[-1][:12]
+    return {"name": f"did_{short}", "preferred_username": f"did_{short}", "email": did}
+
+
+def get_user_info_from_odrl(request=None):
+    """Return user dict for the currently authenticated user (via auth_did cookie)."""
+    import json
+    if not request:
+        return {"name": "Guest", "did": "did:oyd:guest", "certificate": "guest_cert"}
+    did = request.cookies.get("auth_did")
+    if not did:
+        return {"name": "Guest", "did": "did:oyd:guest", "certificate": "guest_cert"}
+    safe_did = "".join(c for c in did if c.isalnum() or c in ":-")
+    user_file = os.path.join(_odrl_base_dir(), "users", f"{safe_did}.json")
+    if os.path.exists(user_file):
+        try:
+            with open(user_file) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"name": "Guest", "did": "did:oyd:guest", "certificate": "guest_cert"}
+
+
+def get_login_button_html(request=None):
+    user = get_user_info_from_odrl(request)
+    if user and user.get("name"):
+        name = user["name"]
+        if name.startswith("did:"):
+            name = "User"
+        orcid = user.get("orcid", "")
+        orcid_badge = f' <small style="font-size:11px;color:#a0a0b0;">ORCID {orcid}</small>' if orcid else ""
+        login_btn_html = ""
+        dropdown_btn = f'''<button onclick="if(confirm('Log out?')) {{ document.cookie='auth_did=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'; fetch('/api/auth/logout', {{method:'POST'}}).then(()=>window.location.href='/'); }}" style="width:100%; padding:10px; text-align:left; background:none; border:none; cursor:pointer; font-size:14px; color:#d93025;">Logout</button>'''
+        
+        if name == "Guest":
+            login_btn_html = '<button class="theme-toggle" onclick="window.location.href=\'/login\'" style="background-color: #4285f4; color: white; border: none; font-weight: 500; margin-left: 10px;">Login</button>'
+            dropdown_btn = f'''<button onclick="window.location.href='/login'" style="width:100%; padding:10px; text-align:left; background:none; border:none; cursor:pointer; font-size:14px; color:#4285f4;">Login</button>'''
+
+        return f'''<div style="position:relative; display:inline-block;" id="user-menu-container">
+            <button class="theme-toggle" onclick="document.getElementById('user-dropdown').style.display = document.getElementById('user-dropdown').style.display === 'block' ? 'none' : 'block'" style="background-color: #f1f3f4; color: #333; border: 1px solid var(--border-color, #ccc); font-weight: 500;">👤 {name}{orcid_badge}</button>
+            <div id="user-dropdown" style="display:none; position:absolute; top:100%; right:0; background:white; border:1px solid #ccc; border-radius:4px; box-shadow:0 2px 5px rgba(0,0,0,0.2); z-index:1000; margin-top:5px; min-width:150px;">
+                {dropdown_btn}
+            </div>
+            <script>
+                document.addEventListener('click', function(e) {{
+                    if (document.getElementById('user-menu-container') && !document.getElementById('user-menu-container').contains(e.target)) {{
+                        document.getElementById('user-dropdown').style.display = 'none';
+                    }}
+                }});
+            </script>
+        </div>{login_btn_html}'''
+    else:
+        return '<button class="theme-toggle" onclick="window.location.href=\'/login\'" style="background-color: #4285f4; color: white; border: none; font-weight: 500;">Login</button>'
+
+
+@app.post("/api/auth/logout")
+async def api_auth_logout(request: Request):
+    from fastapi.responses import JSONResponse
+    resp = JSONResponse({"success": True})
+    resp.delete_cookie("auth_did", path="/")
+    return resp
+
+
+@app.get("/api/auth/status")
+async def api_auth_status(request: Request):
+    from fastapi.responses import JSONResponse
+    import json
+    # 1. Check session_id (post-login handshake: sets cookie)
+    session_id = request.query_params.get("session_id")
+    if session_id:
+        safe_session = "".join(c for c in session_id if c.isalnum())
+        session_file = os.path.join(_odrl_base_dir(), "sessions", f"{safe_session}.txt")
+        if os.path.exists(session_file):
+            with open(session_file) as f:
+                did = f.read().strip()
+            user_file = os.path.join(_odrl_base_dir(), "users", "".join(c for c in did if c.isalnum() or c in ":-") + ".json")
+            if os.path.exists(user_file):
+                with open(user_file) as f:
+                    user = json.load(f)
+                resp = JSONResponse({"authenticated": True, "user": user})
+                resp.set_cookie("auth_did", did, max_age=86400 * 30, path="/", samesite="lax")
+                return resp
+    # 2. Check cookie
+    user = get_user_info_from_odrl(request)
+    if user:
+        return JSONResponse({"authenticated": True, "user": user})
+    return JSONResponse({"authenticated": False})
+
+
+@app.post("/api/auth/save")
+async def api_auth_save(request: Request):
+    """Accept a Verifiable Credential OR a raw DID document, resolve the user name, and create a session."""
+    from fastapi.responses import JSONResponse
+    import json
+    try:
+        data = await request.json()
+        session_id = request.query_params.get("session_id", "")
+        safe_session = "".join(c for c in session_id if c.isalnum())
+
+        did = None
+        user_profile = None
+
+        # Case 1: Verifiable Credential (wallet callback format)
+        if "credentialSubject" in data and "proof" in data:
+            subject = data["credentialSubject"]
+            # credentialSubject may be a DID string or an object with .id
+            did = subject if isinstance(subject, str) else subject.get("id", "")
+            if did:
+                user_profile = _resolve_did_name(did)
+
+        # Case 2: Raw DID document
+        elif "did" in data and "did_document" in data:
+            did = data["did"]
+            services = data.get("did_document", {}).get("service", [])
+            for svc in services:
+                payload = svc.get("payload", {})
+                name = payload.get("name")
+                if name:
+                    user_profile = {
+                        "name": name,
+                        "preferred_username": name,
+                        "email": payload.get("email") or payload.get("orcid") or did,
+                        "orcid": payload.get("orcid"),
+                    }
+                    break
+            if not user_profile and did:
+                user_profile = _resolve_did_name(did)
+
+        if not did or not user_profile:
+            return JSONResponse({"success": False, "error": "Could not extract DID or user profile from payload"})
+
+        safe_did = "".join(c for c in did if c.isalnum() or c in ":-")
+        base = _odrl_base_dir()
+        os.makedirs(os.path.join(base, "users"), exist_ok=True)
+        os.makedirs(os.path.join(base, "sessions"), exist_ok=True)
+
+        # Save user profile
+        with open(os.path.join(base, "users", f"{safe_did}.json"), "w") as f:
+            json.dump(user_profile, f)
+
+        # Save session → DID mapping
+        if safe_session:
+            with open(os.path.join(base, "sessions", f"{safe_session}.txt"), "w") as f:
+                f.write(did)
+
+        # Also set cookie immediately in the response (for same-origin callbacks)
+        resp = JSONResponse({"success": True, "user": user_profile})
+        resp.set_cookie("auth_did", did, max_age=86400 * 30, path="/", samesite="lax")
+        return resp
+
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)})
+
+
+@app.post("/api/auth/debug")
+async def api_auth_debug(request: Request):
+    from fastapi.responses import JSONResponse
+    import json
+    try:
+        data = await request.json()
+        with open("/tmp/auth_debug.log", "a") as f:
+            f.write(json.dumps(data) + "\n")
+        return JSONResponse({"success": True})
+    except Exception as e:
+        return JSONResponse({"success": False})
+
 @app.get("/")
-async def view_index():
+async def view_index(request: Request):
     import os
     from fastapi.responses import HTMLResponse
     file_path = os.path.join(os.path.dirname(__file__), "static/index.html")
@@ -600,6 +801,7 @@ async def view_index():
     logo_url = os.environ.get("VAULT_LOGO_URL", "/logo.png")
     logo_html = f'<a href="/" style="display:flex; align-items:center; justify-content:center; text-decoration:none; padding: 10px;"><img src="{logo_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Logo" /></a>' if logo_url else ""
     html_content = html_content.replace('{{VAULT_LOGO_HTML}}', logo_html)
+    html_content = html_content.replace('{{LOGIN_BUTTON_HTML}}', get_login_button_html(request))
     
     return HTMLResponse(content=html_content)
 
@@ -659,6 +861,37 @@ async def get_vault_file(filename: str):
     
     if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".gz") and not filename.endswith(".csv"):
         filename += ".md"
+        
+    from minio import Minio
+    from datetime import timedelta
+    endpoint = minio_base.replace("http://", "").replace("https://", "")
+    try:
+        m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
+        base_minio_url_check = m_client.presigned_get_object("vault", filename, expires=timedelta(hours=1))
+    except Exception:
+        base_minio_url_check = f"{minio_base}/vault/{filename}"
+
+    if filename.endswith(".jsonld"):
+        async with httpx.AsyncClient(timeout=10.0) as check_client:
+            try:
+                head_resp = await check_client.head(base_minio_url_check)
+                if head_resp.status_code == 404:
+                    es_id = filename[:-7]
+                    es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+                    es_resp = await check_client.get(f"{es_url}/croissant/_doc/{es_id}")
+                    if es_resp.status_code == 200:
+                        es_data = es_resp.json().get("_source", {})
+                        es_data.pop("_full_text", None)
+                        es_data.pop("_markdown_text", None)
+                        es_data.pop("_source_url", None)
+                        
+                        from fastapi.responses import Response
+                        import json
+                        data = json.dumps(es_data, indent=2).encode("utf-8")
+                        return Response(content=data, media_type="application/ld+json; charset=utf-8")
+            except Exception:
+                pass
+
         
     async def stream_file():
         from minio import Minio

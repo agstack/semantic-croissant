@@ -323,8 +323,13 @@
         <div style="width: 274px; padding: 0; height: 100%; border-right: 1px solid var(--border-color); display: flex; align-items: center; box-sizing: border-box;">
             {{VAULT_LOGO_HTML}}
         </div>
-        <div style="display:flex; gap:10px; align-items:center;">
-            <div style="display: flex; align-items: center; gap: 12px; margin-right: 15px; font-size: 0.95rem;">
+        <div style="display:flex; gap:10px; align-items:center; position:absolute; top:10px; right:20px; z-index:100;">
+            <button class="theme-toggle" onclick="document.getElementById('share-url-input').value = window.location.href; document.getElementById('share-modal').style.display='flex'">Share</button>
+            <button class="theme-toggle" id="theme-toggle">Toggle Theme</button>
+            {{LOGIN_BUTTON_HTML}}
+        </div>
+        <div style="display:flex; gap:10px; align-items:center; margin-top: 30px;">
+            <div style="display: flex; align-items: center; gap: 12px; margin-right: 15px; font-size: 0.95rem; padding-top: 10px;">
                 <a href="/#collections" id="menu-collections" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Collections</a>
                 <span style="color: #e0e0e0;">|</span>
                 <a href="/#groups" id="menu-groups" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg> Groups</a>
@@ -336,9 +341,6 @@
             <button class="theme-toggle" onclick="document.getElementById('add-text-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-text-input').focus(), 50);" style="background-color: #008855; color: white; border: none; font-weight: 500;">Add text</button>
             <button class="theme-toggle" onclick="document.getElementById('add-resource-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-resource-input').focus(), 50);" style="background-color: #006bb3; color: white; border: none; font-weight: 500;">Add resource</button>
             <input type="text" id="global-search" placeholder="Search across all collections..." style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); width: 300px; font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') window.location.href = '/?q=' + encodeURIComponent('Search Croissant datasets for: ' + this.value)">
-            <button class="theme-toggle" onclick="document.getElementById('share-url-input').value = window.location.href; document.getElementById('share-modal').style.display='flex'">Share</button>
-            <button class="theme-toggle" id="theme-toggle">Toggle Theme</button>
-            <button class="theme-toggle" onclick="window.location.href='https://odrl.dev.codata.org/vcs'" style="background-color: #4285f4; color: white; border: none; font-weight: 500;">Login</button>
         </div>
     </div>
 
@@ -360,7 +362,7 @@
         <div class="auth-card">
             <strong>ODRL Authentication</strong><br>
             <span id="auth-status" style="color: #5f6368;">Checking...</span><br>
-            <a href="https://odrl.dev.codata.org/vcs">Login with Identity</a>
+            <a href="/login">Login with Identity</a>
         </div>
         
         <div class="auth-card" style="margin-top: auto; font-size: 0.8rem; color: #888;">
