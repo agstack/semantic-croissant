@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Collection Viewer - Semantic Croissant AI Studio</title>
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --text-color: #333333;
+            --border-color: #e0e0e0;
+            --accent-color: #1a73e8;
+            --header-bg: #f8f9fa;
+            --button-bg: #f1f3f4;
+            --sidebar-bg: #f8f9fa;
+            --panel-bg: #ffffff;
+            --user-msg-bg: #e8f0fe;
+            --bot-msg-bg: #f8f9fa;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+
+        /* Sidebar/Header styles from index */
+        .header {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 96px;
+            background: white;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 20px 0 0;
+            justify-content: space-between;
+            z-index: 10;
+        }
+        
+        .theme-toggle {
+            cursor: pointer;
+            background: none;
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            padding: 5px 10px;
+            border-radius: 6px;
+        }
+
+        /* Collections Container */
+        #collections-container {
+            margin-top: 116px;
+            padding: 20px;
+            margin-bottom: 60px;
+        }
+
+        /* Collections Header */
+        .collections-header {
+            margin-bottom: 20px;
+        }
+
+        .collections-header h2 {
+            margin-top: 0;
+            color: #202124;
+        }
+        
+        .header-bar {
+            height: 96px;
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 20px;
+        }
+        
+        .header-bar h1 {
+            margin: 0;
+            font-size: 1.5rem;
+            color: #202124;
+        }
+        
+        .doc-card {
+            padding: 15px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--header-bg);
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        .doc-card-title {
+            margin: 0 0 5px 0;
+            font-size: 1.1rem;
+            color: var(--accent-color);
+        }
+        .doc-card-desc {
+            font-size: 0.9rem;
+            color: #555;
+            margin: 0 0 10px 0;
+        }
+        .btn-remove {
+            padding: 4px 8px;
+            background: #fce8e6;
+            color: #d93025;
+            border: 1px solid #f8dedc;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: bold;
+            align-self: flex-end;
+        }
+        .btn-remove:hover {
+            background: #fad2cf;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <div class="header">
+        <div style="width: 274px; padding: 0; height: 100%; border-right: 1px solid var(--border-color); display: flex; align-items: center; box-sizing: border-box;">
+            {{VAULT_LOGO_HTML}}
+        </div>
+        <div style="display:flex; gap:10px; align-items:center;">
+            <div style="display: flex; align-items: center; gap: 12px; margin-right: 15px; font-size: 0.95rem;">
+                <a href="/#collections" id="menu-collections" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Collections</a>
+                <span style="color: #e0e0e0;">|</span>
+                <a href="/#groups" id="menu-groups" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg> Groups</a>
+                <span style="color: #e0e0e0;">|</span>
+                <a href="/#vault" id="menu-vault" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg> Vault</a>
+                <span style="color: #e0e0e0;">|</span>
+                <a href="/#history" id="menu-history" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> History</a>
+            </div>
+            <button class="theme-toggle" onclick="document.getElementById('add-text-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-text-input').focus(), 50);" style="background-color: #008855; color: white; border: none; font-weight: 500;">Add text</button>
+            <button class="theme-toggle" onclick="document.getElementById('add-resource-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-resource-input').focus(), 50);" style="background-color: #006bb3; color: white; border: none; font-weight: 500;">Add resource</button>
+            <input type="text" id="global-search" placeholder="Search across all collections..." style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); width: 300px; font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') window.location.href = '/?q=' + encodeURIComponent('Search Croissant datasets for: ' + this.value)">
+            <button class="theme-toggle" onclick="window.location.href='/'" style="background-color: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); font-weight: 500;">Back to App</button>
+            <button class="theme-toggle" onclick="window.location.href='https://odrl.dev.codata.org/vcs'" style="background-color: #4285f4; color: white; border: none; font-weight: 500;">Login</button>
+        </div>
+    </div>
+
+    <div id="collections-container">
+        <p>Loading collection details...</p>
+    </div>
+
+    <script>
+        const pathParts = window.location.pathname.split('/');
+        const colId = pathParts[pathParts.length - 1];
+
+        async function loadCollection() {
+            try {
+                const res = await fetch(`/api/collections/${colId}/resolved`);
+                if (!res.ok) {
+                    throw new Error(`Collection not found (Status: ${res.status})`);
+                }
+                const data = await res.json();
+                
+                // Fetch all collections to find subcollections
+                let subCollections = [];
+                try {
+                    const colsRes = await fetch('/api/collections');
+                    if (colsRes.ok) {
+                        let allCols = await colsRes.json();
+                        if (allCols.collections) allCols = allCols.collections;
+                        if (Array.isArray(allCols)) {
+                            subCollections = allCols.filter(c => c.parent_id === colId);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Failed to load subcollections", e);
+                }
+
+                renderCollection(data, subCollections);
+            } catch (err) {
+                document.getElementById('collections-container').innerHTML = `
+                    <div style="color: #cf222e; padding: 20px;">
+                        <h3>Failed to load collection</h3>
+                        <p>${err.message}</p>
+                        <p><a href="/">Return to Studio</a></p>
+                    </div>
+                `;
+            }
+        }
+        
+        function renderCollection(data, subCollections = []) {
+            const container = document.getElementById('collections-container');
+            const items = data.resolved_items || [];
+            
+            let dateStr = "Unknown date";
+            if (data.created_at) {
+                dateStr = new Date(data.created_at).toLocaleString();
+            }
+
+            document.title = `${data.name || 'Collection'} - Semantic Croissant AI Studio`;
+
+            let html = `
+                <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 15px;">
+                    <div>
+                        <h3 style="margin-top: 0; font-size: 1.8rem;">${data.name || 'Unnamed Collection'}</h3>
+                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 15px;">
+                            ID: ${data.id}<br>
+                            Created: ${dateStr}
+                        </div>
+                        ${data.description ? `<p style="font-size: 1.1rem; white-space: pre-wrap; margin-bottom: 20px;">${data.description}</p>` : ''}
+                        
+                        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                            <button onclick="window.location.href='/collectionsindex'" style="padding: 6px 12px; background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">&larr; Back to Collections</button>
+                            <div style="display: flex; align-items: center; gap: 5px; margin-left: 20px;">
+                                <span style="font-size: 0.9rem; font-weight: bold;">Join Collection (Parent):</span>
+                                <select id="join-parent-select" style="padding: 6px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);">
+                                    <option value="">Loading...</option>
+                                </select>
+                                <button onclick="updateParent()" style="padding: 6px 12px; background: var(--accent-color); color: white; border: none; border-radius: 4px; cursor: pointer;">Set Parent</button>
+                            </div>
+                        </div>
+                    </div>
+                    <form id="ask-form" onsubmit="event.preventDefault(); const btn = this.querySelector('button'); btn.disabled=true; btn.innerText='Thinking...'; document.getElementById('qa-result').innerHTML=''; document.getElementById('qa-result').style.display='block'; fetch('/api/collections/' + '${data.id}' + '/ask', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({query: this.querySelector('input').value})}).then(res => res.json()).then(res => { if(typeof marked !== 'undefined') { document.getElementById('qa-result').innerHTML = marked.parse(res.answer); } else { document.getElementById('qa-result').innerText = res.answer; } btn.disabled=false; btn.innerText='Ask'; }).catch(e => { document.getElementById('qa-result').innerText = 'Error: ' + e; btn.disabled=false; btn.innerText='Ask'; });" style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
+                        <input type="text" placeholder="Ask question about datasets in the collection..." style="padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); width: 350px; font-size: 14px;">
+                        <button type="submit" style="padding: 8px 15px; background: #008855; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">Ask</button>
+                    </form>
+                </div>
+                <div id="qa-result" style="display: none; margin-bottom: 20px; padding: 15px; background: var(--user-msg-bg); border: 1px solid var(--border-color); border-radius: 6px; font-size: 1rem; color: var(--text-color); white-space: pre-wrap;"></div>
+            `;
+
+            if (subCollections && subCollections.length > 0) {
+                html += '<h3 style="border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-top: 30px;">Subcollections</h3>';
+                html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; font-family: Arial, sans-serif; margin-bottom: 30px;">';
+                subCollections.forEach(sub => {
+                    let shortDesc = sub.description || '';
+                    if (shortDesc.length > 150) shortDesc = shortDesc.substring(0, 147) + '...';
+                    html += `
+                        <div class="doc-card" style="background: #eef2f5;">
+                            <div>
+                                <h4 class="doc-card-title"><a href="/collections/${sub.id}" style="color: #0000cc; font-family: serif; text-decoration: none; font-size: 1.2rem;">📁 ${sub.name}</a></h4>
+                                ${shortDesc ? `<p class="doc-card-desc">${shortDesc}</p>` : ''}
+                            </div>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+            }
+
+            html += `
+                <h3 style="border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-top: 30px;">Materials in Collection</h3>
+
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; background: var(--header-bg); padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); flex-wrap: wrap; gap: 10px;">
+                    <div id="alpha-filter-container" style="display: flex; gap: 4px; flex-wrap: wrap; font-size: 0.9rem;">
+                        <a href="#" class="alpha-link" data-letter="ALL" style="font-weight: bold; text-decoration: none; color: var(--accent-color); padding: 2px 5px; border-radius: 3px; background: var(--bg-color);">All</a>
+                        ${"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map(c => `<a href="#" class="alpha-link" data-letter="${c}" style="text-decoration: none; color: var(--accent-color); padding: 2px 5px; border-radius: 3px;">${c}</a>`).join('')}
+                    </div>
+                    <div>
+                        <input type="text" id="doc-text-filter" placeholder="Quick filter..." style="padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); font-size: 0.9rem;">
+                    </div>
+                </div>
+
+                <div id="docs-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; font-family: Arial, sans-serif;">
+            `;
+
+            if (items.length === 0) {
+                html += '<p style="color: #666; font-style: italic; grid-column: 1 / -1;">This collection is currently empty.</p>';
+            } else {
+                items.forEach(doc => {
+                    let shortDesc = doc.description || '';
+                    if (shortDesc.length > 150) shortDesc = shortDesc.substring(0, 147) + '...';
+                    
+                    html += `
+                        <div class="doc-card collection-card" id="doc-${doc.id}">
+                            <div>
+                                <h4 class="doc-card-title title-link"><a href="/vault/doc/${doc.id}" style="color: #0000cc; font-family: serif; text-decoration: underline;">${doc.name}</a></h4>
+                                <p class="doc-card-desc">${shortDesc}</p>
+                                <p class="doc-card-desc" style="font-size: 0.75rem; margin-top: 5px; opacity: 0.5;">ID: ${doc.id}</p>
+                            </div>
+                            <button class="btn-remove" onclick="removeDoc('${doc.id}')">Remove</button>
+                        </div>
+                    `;
+                });
+            }
+            
+            html += '</div>';
+            container.innerHTML = html;
+
+            loadParentsForJoin(data.id, data.parent_id);
+
+            // Alpha filter
+            container.querySelectorAll('.alpha-link').forEach(link => {
+                link.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    container.querySelectorAll('.alpha-link').forEach(l => {
+                        l.style.fontWeight = 'normal';
+                        l.style.background = 'transparent';
+                    });
+                    link.style.fontWeight = 'bold';
+                    link.style.background = 'var(--bg-color)';
+                    
+                    const letter = link.getAttribute('data-letter');
+                    filterDocs(container, letter, container.querySelector('#doc-text-filter').value);
+                });
+            });
+            
+            // Text filter
+            container.querySelector('#doc-text-filter').addEventListener('input', (e) => {
+                const text = e.target.value;
+                const activeAlpha = container.querySelector('.alpha-link[style*="font-weight: bold"]');
+                const letter = activeAlpha ? activeAlpha.getAttribute('data-letter') : 'ALL';
+                filterDocs(container, letter, text);
+            });
+        }
+
+        function filterDocs(container, letter, text) {
+            const cards = container.querySelectorAll('.collection-card');
+            const textLower = text.toLowerCase();
+            
+            cards.forEach(card => {
+                const titleEl = card.querySelector('.title-link');
+                const title = titleEl ? titleEl.textContent : '';
+                
+                let showAlpha = true;
+                if (letter !== 'ALL') {
+                    showAlpha = title.toUpperCase().startsWith(letter);
+                }
+                
+                let showText = true;
+                if (text) {
+                    showText = title.toLowerCase().includes(textLower) || 
+                               (card.querySelector('.doc-card-desc') && card.querySelector('.doc-card-desc').textContent.toLowerCase().includes(textLower));
+                }
+                
+                if (showAlpha && showText) {
+                    card.style.display = 'flex';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+
+        async function removeDoc(docId) {
+            if (!confirm('Remove this document from the collection?')) return;
+            try {
+                const res = await fetch(`/api/collections/${colId}/remove`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({docId: docId})
+                });
+                if (res.ok) {
+                    const card = document.getElementById(`doc-${docId}`);
+                    if (card) {
+                        card.style.display = 'none';
+                    }
+                } else {
+                    alert('Failed to remove document.');
+                }
+            } catch (err) {
+                alert('Error removing document.');
+            }
+        }
+
+        async function loadParentsForJoin(currentId, currentParentId) {
+            try {
+                const res = await fetch('/api/collections');
+                const colData = await res.json();
+                const allCollections = Array.isArray(colData) ? colData : (colData.collections || []);
+                const select = document.getElementById('join-parent-select');
+                if (!select) return;
+                select.innerHTML = '<option value="">None (Root)</option>';
+                allCollections.forEach(c => {
+                    if (c.id !== currentId) {
+                        const option = document.createElement('option');
+                        option.value = c.id;
+                        option.textContent = c.name;
+                        if (c.id === currentParentId) option.selected = true;
+                        select.appendChild(option);
+                    }
+                });
+            } catch (e) {
+                console.error("Failed to load collections for join menu", e);
+            }
+        }
+
+        async function updateParent() {
+            const select = document.getElementById('join-parent-select');
+            if (!select) return;
+            const parentId = select.value;
+            const btn = select.nextElementSibling;
+            btn.innerText = 'Updating...';
+            btn.disabled = true;
+            try {
+                const res = await fetch(`/api/collections/${colId}`);
+                const currentData = await res.json();
+                
+                const updateRes = await fetch(`/api/collections/${colId}`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        name: currentData.name,
+                        description: currentData.description,
+                        link: currentData.link,
+                        is_supercollection: currentData.is_supercollection,
+                        parent_id: parentId || null
+                    })
+                });
+                
+                if (updateRes.ok) {
+                    btn.innerText = 'Success!';
+                    setTimeout(() => { btn.innerText = 'Set Parent'; btn.disabled = false; }, 2000);
+                } else {
+                    alert('Failed to update parent collection.');
+                    btn.innerText = 'Set Parent'; btn.disabled = false;
+                }
+            } catch (e) {
+                alert('Error updating parent collection: ' + e.message);
+                btn.innerText = 'Set Parent'; btn.disabled = false;
+            }
+        }
+
+        loadCollection();
+    </script>
+
+    <footer style="position: fixed; bottom: 0; left: 0; right: 0; margin: 0; padding: 10px 20px; font-size: 0.85rem; color: #888; background-color: var(--bg-color); border-top: 1px solid var(--border-color); z-index: 10000; width: 100%; box-sizing: border-box; font-family: 'Inter', -apple-system, sans-serif; box-shadow: 0 -2px 5px rgba(0,0,0,0.05); display: flex; justify-content: space-between; align-items: center;">
+        <div style="width: 120px;"></div> <!-- Spacer for center alignment -->
+        <div style="text-align: center; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; flex: 1;">
+            <span>Ghostwriter 2.0 UI | Semantic Croissant with CDIF 1.1 (v2.3)</span>
+            <span style="color: #ccc;">|</span>
+            <span>Created by <a href="https://codata.org" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CODATA</a> in <a href="https://cdif4eosc.eu" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CDIF4EOSC</a> under Grant Agreement 101292473</span>
+            <img src="https://www.cdif4eosc.eu/assets/images/eu_flag.svg" alt="EU Flag" style="height: 20px;">
+        </div>
+        <div style="width: 120px; text-align: right;">
+            <button class="theme-toggle" id="theme-toggle" style="font-size: 0.8rem; padding: 4px 8px;">Toggle Theme</button>
+        </div>
+    </footer>
+
+    <div id="add-resource-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">
+        <div style="background: var(--bg-color); padding: 20px; border-radius: 8px; width: 400px; max-width: 90%; border: 1px solid var(--border-color);">
+            <h3 style="margin-top: 0; color: var(--text-color);">Add Resource</h3>
+            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-color);">Enter the URL of the resource you want to ingest:</p>
+            <input type="text" id="add-resource-input" placeholder="https://..." style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; background: var(--panel-bg); color: var(--text-color); font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') document.getElementById('add-resource-submit').click()">
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button onclick="document.getElementById('add-resource-modal').style.display='none'" class="theme-toggle">Cancel</button>
+                <button id="add-resource-submit" onclick="var url = document.getElementById('add-resource-input').value; if(url) window.location.href='/dataverse?url=' + encodeURIComponent(url);" style="background-color: #006bb3; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="add-text-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">
+        <div style="background: var(--bg-color); padding: 20px; border-radius: 8px; width: 600px; max-width: 90%; border: 1px solid var(--border-color);">
+            <h3 style="margin-top: 0; color: var(--text-color);">Add Text</h3>
+            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-color);">Paste the text you want to ingest into the vault:</p>
+            <textarea id="add-text-input" placeholder="Enter text here..." style="width: 100%; height: 300px; padding: 8px; margin-bottom: 15px; border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; background: var(--panel-bg); color: var(--text-color); font-family: inherit; font-size: 14px;"></textarea>
+            <div id="add-text-error" style="color: red; display: none; margin-bottom: 10px; font-size: 14px;"></div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button onclick="document.getElementById('add-text-modal').style.display='none'" class="theme-toggle">Cancel</button>
+                <button id="add-text-submit" onclick="
+                    var btn = this;
+                    var text = document.getElementById('add-text-input').value;
+                    if(!text) return;
+                    btn.disabled = true;
+                    btn.innerText = 'Processing... (takes ~2 mins)';
+                    document.getElementById('add-text-error').style.display = 'none';
+                    fetch('/api/text/process', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: text })
+                    })
+                    .then(r => r.json().then(data => ({ok: r.ok, data})))
+                    .then(res => {
+                        if(res.ok && res.data.redirect_url) {
+                            window.location.href = res.data.redirect_url;
+                        } else {
+                            throw new Error(res.data.detail || 'Failed to process text');
+                        }
+                    })
+                    .catch(e => {
+                        btn.disabled = false;
+                        btn.innerText = 'Ingest';
+                        document.getElementById('add-text-error').innerText = e.message;
+                        document.getElementById('add-text-error').style.display = 'block';
+                    });
+                " style="background-color: #008855; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="ai-transmit-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
+        <div style="background:var(--bg-color); padding:30px; border-radius:8px; border:1px solid var(--border-color); max-width:400px; width:90%; color:var(--text-color); text-align: center;">
+            <h2 style="margin-top:0;">Open in AI Assistant</h2>
+            <p style="margin-bottom: 10px;">Select your installed AI assistant to analyze this Croissant JSON-LD data:</p>
+            <div style="margin-bottom: 20px; font-size: 0.9rem; background: var(--panel-bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border-color); text-align: left;">
+                <div style="margin-bottom: 5px; font-weight: bold;">Open your AI Assistant and copy-paste:</div>
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="ai-prompt-input" readonly style="flex: 1; padding: 8px; background: var(--bg-color); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; font-family: monospace;" />
+                    <button class="theme-toggle" onclick="navigator.clipboard.writeText(document.getElementById('ai-prompt-input').value); alert('Prompt copied!');">Copy</button>
+                </div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:10px;">
+                <button class="popup-btn btn-blue" style="padding: 10px; font-size: 1rem;" onclick="window.location.href='claude://' + window.location.href; document.getElementById('ai-transmit-modal').style.display='none'">🤖 Claude</button>
+                <button class="popup-btn btn-blue" style="padding: 10px; font-size: 1rem;" onclick="window.location.href='cursor://' + window.location.href; document.getElementById('ai-transmit-modal').style.display='none'">💻 Codex (Cursor)</button>
+                <button class="popup-btn btn-blue" style="padding: 10px; font-size: 1rem;" onclick="window.location.href='manus://' + window.location.href; document.getElementById('ai-transmit-modal').style.display='none'">🦉 Manus</button>
+                <button class="popup-btn btn-blue" style="padding: 10px; font-size: 1rem;" onclick="window.location.href='lmstudio://' + window.location.href; document.getElementById('ai-transmit-modal').style.display='none'">🦙 LM Studio</button>
+            </div>
+            <div style="margin-top: 20px;">
+                <button class="theme-toggle" onclick="document.getElementById('ai-transmit-modal').style.display='none'">Cancel</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="share-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
+        <div style="background:var(--bg-color); padding:30px; border-radius:8px; border:1px solid var(--border-color); max-width:500px; width:90%; color:var(--text-color);">
+            <h2 style="margin-top:0;">Open with External AI</h2>
+            <p>To analyze this document with <strong>Claude</strong>, <strong>Codex</strong>, or <strong>Manus</strong>, copy the exact URL below and paste it into their chat window:</p>
+            <input type="text" id="share-url-input" readonly style="width:100%; padding:10px; margin-bottom:20px; box-sizing:border-box; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-color); border-radius:4px; font-family:monospace; font-size:1rem;" />
+            <div style="display:flex; justify-content:flex-end; gap:10px;">
+                <button class="theme-toggle" onclick="document.getElementById('share-modal').style.display='none'">Close</button>
+                <button class="theme-toggle" onclick="navigator.clipboard.writeText(document.getElementById('share-url-input').value); alert('URL Copied to clipboard!'); document.getElementById('share-modal').style.display='none';">Copy URL</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const toggleBtn = document.getElementById('theme-toggle');
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', () => {
+                const isDark = document.documentElement.getAttribute('data-theme') === 'dark' || 
+                             (!document.documentElement.hasAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+                document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
+            });
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Semantic Croissant - Loading URL Resource</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f8f9fa;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            color: #333;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            text-align: center;
+            max-width: 500px;
+        }
+        h1 { margin-top: 0; font-size: 24px; color: #1a73e8; }
+        p { color: #555; line-height: 1.5; }
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #1a73e8;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .error { color: #d32f2f; display: none; margin-top: 20px; font-weight: 500; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Processing Resource</h1>
+        <div class="spinner" id="spinner"></div>
+        <p id="status">Extracting metadata and generating Croissant JSON-LD...<br><small>This may take up to a minute if AI translation is required.</small></p>
+        <p id="error" class="error"></p>
+    </div>
+    
+    <script>
+        async function processDataset() {
+            const params = new URLSearchParams(window.location.search);
+            const callback = params.get('callback');
+            const direct_url = params.get('url');
+            let siteUrl = params.get('siteUrl');
+            const datasetPid = params.get('datasetPid');
+            
+            if (datasetPid) {
+                if (!siteUrl) {
+                    siteUrl = 'https://dataverse.harvard.edu';
+                }
+            } else if (!callback && !direct_url) {
+                document.getElementById('spinner').style.display = 'none';
+                document.getElementById('status').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').innerText = "Missing callback, url, or datasetPid parameters.";
+                return;
+            }
+            
+            try {
+                let fetchUrl = '/api/generic/process?';
+                if (datasetPid) {
+                    fetchUrl += `siteUrl=${encodeURIComponent(siteUrl)}&datasetPid=${encodeURIComponent(datasetPid)}`;
+                } else if (callback) {
+                    fetchUrl += `callback=${encodeURIComponent(callback)}`;
+                } else if (direct_url) {
+                    fetchUrl += `url=${encodeURIComponent(direct_url)}`;
+                }
+                const response = await fetch(fetchUrl, {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.redirect_url) {
+                    document.getElementById('status').innerText = "Success! Redirecting...";
+                    window.location.href = data.redirect_url;
+                } else {
+                    throw new Error(data.detail || "Failed to process the dataset.");
+                }
+            } catch (err) {
+                document.getElementById('spinner').style.display = 'none';
+                document.getElementById('status').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').innerText = "Error: " + err.message;
+            }
+        }
+        
+        window.onload = processDataset;
+    </script>
+    <footer style="position: fixed; bottom: 0; left: 0; right: 0; margin: 0; padding: 10px 20px; font-size: 0.85rem; color: #888; background-color: var(--bg-color); border-top: 1px solid var(--border-color); z-index: 10000; width: 100%; box-sizing: border-box; font-family: 'Inter', -apple-system, sans-serif; box-shadow: 0 -2px 5px rgba(0,0,0,0.05); display: flex; justify-content: center; align-items: center;">
+        <div style="text-align: center; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap;">
+            <span>Ghostwriter 2.0 UI | Semantic Croissant with CDIF 1.1 (v2.3)</span>
+            <span style="color: #ccc;">|</span>
+            <span>Created by <a href="https://codata.org" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CODATA</a> in <a href="https://cdif4eosc.eu" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CDIF4EOSC</a> under Grant Agreement 101292473</span>
+            <img src="https://www.cdif4eosc.eu/assets/images/eu_flag.svg" alt="EU Flag" style="height: 20px;">
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,2147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Markdown Viewer</title>
+    <link rel="stylesheet" id="markdown-style" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-light.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/github.min.css" id="highlight-theme-light">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/github-dark.min.css" id="highlight-theme-dark" disabled>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
+    <script>
+        function getDocId() {
+            const parts = window.location.pathname.split('/');
+            let id = parts[parts.length - 1];
+            if (id === 'annotations') {
+                id = parts[parts.length - 2];
+            }
+            return id;
+        }
+    </script>
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --text-color: #24292e;
+            --header-bg: #f6f8fa;
+            --border-color: #e1e4e8;
+            --sidebar-bg: #f6f8fa;
+        }
+        
+        @media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --bg-color: #0d1117;
+                --text-color: #c9d1d9;
+                --header-bg: #161b22;
+                --border-color: #30363d;
+                --sidebar-bg: #161b22;
+            }
+        }
+        
+        :root[data-theme="dark"] {
+            --bg-color: #0d1117;
+            --text-color: #c9d1d9;
+            --header-bg: #161b22;
+            --border-color: #30363d;
+            --sidebar-bg: #161b22;
+        }
+        
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        .header {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 96px;
+            background: white;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 20px 0 0;
+            justify-content: space-between;
+            z-index: 10;
+        }
+        
+        .main-container {
+            display: flex;
+            width: 100%;
+            height: calc(100vh - 96px);
+            margin-top: 96px;
+        }
+        
+        .sidebar {
+            width: 250px;
+            background: var(--sidebar-bg);
+            border-right: 1px solid var(--border-color);
+            overflow-y: auto;
+            padding: 20px 10px;
+            flex-shrink: 0;
+        }
+        
+        .sidebar-item {
+            padding: 5px 10px;
+            cursor: pointer;
+            border-radius: 6px;
+            color: var(--text-color);
+            text-decoration: none;
+            display: block;
+            margin-bottom: 2px;
+            font-size: 14px;
+        }
+        
+        .sidebar-item:hover {
+            background: var(--border-color);
+        }
+        
+        .content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 40px;
+            padding-bottom: 80px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+        }
+        
+        .markdown-body {
+            box-sizing: border-box;
+            min-width: 200px;
+            max-width: 100%;
+            width: 100%;
+            padding: 45px;
+            background-color: var(--bg-color);
+        }
+        
+        .theme-toggle {
+            cursor: pointer;
+            background: none;
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            padding: 5px 10px;
+            border-radius: 6px;
+        }
+        
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            font-size: 1.2rem;
+            color: #888;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div style="width: 270px; padding: 0; height: 100%; border-right: 1px solid var(--border-color); display: flex; align-items: center; box-sizing: border-box;">
+            {{VAULT_LOGO_HTML}}
+        </div>
+        <div style="display:flex; gap:10px; align-items:center;">
+            <div style="display: flex; align-items: center; gap: 12px; margin-right: 15px; font-size: 0.95rem;">
+                <a href="/#collections" id="menu-collections" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Collections</a>
+                <span style="color: #e0e0e0;">|</span>
+                <a href="/#groups" id="menu-groups" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg> Groups</a>
+                <span style="color: #e0e0e0;">|</span>
+                <a href="/#vault" id="menu-vault" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg> Vault</a>
+                <span style="color: #e0e0e0;">|</span>
+                <a href="/#history" id="menu-history" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> History</a>
+            </div>
+            <button class="theme-toggle" onclick="document.getElementById('add-text-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-text-input').focus(), 50);" style="background-color: #008855; color: white; border: none; font-weight: 500;">Add text</button>
+            <button class="theme-toggle" onclick="document.getElementById('add-resource-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-resource-input').focus(), 50);" style="background-color: #006bb3; color: white; border: none; font-weight: 500;">Add resource</button>
+            <input type="text" id="global-search" placeholder="Search across all collections..." style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); width: 300px; font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') window.location.href = '/?q=' + encodeURIComponent('Search Croissant datasets for: ' + this.value)">
+            <button class="theme-toggle" onclick="document.getElementById('share-url-input').value = window.location.origin + '/vault/print/' + getDocId(); document.getElementById('share-modal').style.display='flex'">Share</button>
+            <button class="theme-toggle" id="theme-toggle">Toggle Theme</button>
+            <button class="theme-toggle" onclick="window.location.href='https://odrl.dev.codata.org/vcs'" style="background-color: #4285f4; color: white; border: none; font-weight: 500;">Login</button>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="sidebar" id="toc">
+            <!-- Table of contents will be generated here -->
+        </div>
+        <div class="content">
+            <div id="loading" class="loading">Fetching document...</div>
+            <article class="markdown-body" id="md-content" style="display: none;"></article>
+        </div>
+    </div>
+
+
+    <div id="share-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
+        <div style="background:var(--bg-color); padding:30px; border-radius:8px; border:1px solid var(--border-color); max-width:500px; width:90%; color:var(--text-color);">
+            <h2 style="margin-top:0;">Open with External AI</h2>
+            <p>To analyze this document with <strong>Claude</strong>, <strong>Codex</strong>, or <strong>Manus</strong>, copy the exact URL below and paste it into their chat window:</p>
+            <input type="text" id="share-url-input" readonly style="width:100%; padding:10px; margin-bottom:20px; box-sizing:border-box; background:var(--header-bg); border:1px solid var(--border-color); color:var(--text-color); border-radius:4px; font-family:monospace; font-size:1rem;" />
+            <div style="display:flex; justify-content:flex-end; gap:10px;">
+                <button class="theme-toggle" onclick="document.getElementById('share-modal').style.display='none'">Close</button>
+                <button class="theme-toggle" onclick="navigator.clipboard.writeText(document.getElementById('share-url-input').value); alert('URL Copied to clipboard!'); document.getElementById('share-modal').style.display='none';">Copy URL</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="ai-transmit-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
+        <div style="background:var(--bg-color); padding:30px; border-radius:8px; border:1px solid var(--border-color); max-width:400px; width:90%; color:var(--text-color); text-align: center;">
+            <h2 style="margin-top:0;">Open in AI Assistant</h2>
+            <p style="margin-bottom: 10px;">Select your installed AI assistant to analyze this Croissant JSON-LD data:</p>
+            <div style="margin-bottom: 20px; font-size: 0.9rem; background: var(--header-bg); padding: 10px; border-radius: 4px; border: 1px solid var(--border-color); text-align: left;">
+                <div style="margin-bottom: 5px; font-weight: bold;">Open your AI Assistant and copy-paste:</div>
+                <div style="display: flex; gap: 10px;">
+                    <input type="text" id="ai-prompt-input" readonly style="flex: 1; padding: 8px; background: var(--bg-color); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; font-family: monospace;" />
+                    <button class="theme-toggle" onclick="navigator.clipboard.writeText(document.getElementById('ai-prompt-input').value); alert('Prompt copied!');">Copy</button>
+                </div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:10px;">
+                <button class="popup-btn btn-blue" style="padding: 10px; font-size: 1rem;" onclick="window.location.href='claude://' + window.location.href; document.getElementById('ai-transmit-modal').style.display='none'">🤖 Claude</button>
+                <button class="popup-btn btn-blue" style="padding: 10px; font-size: 1rem;" onclick="window.location.href='cursor://' + window.location.href; document.getElementById('ai-transmit-modal').style.display='none'">💻 Codex (Cursor)</button>
+                <button class="popup-btn btn-blue" style="padding: 10px; font-size: 1rem;" onclick="window.location.href='manus://' + window.location.href; document.getElementById('ai-transmit-modal').style.display='none'">🦉 Manus</button>
+                <button class="popup-btn btn-blue" style="padding: 10px; font-size: 1rem;" onclick="window.location.href='lmstudio://' + window.location.href; document.getElementById('ai-transmit-modal').style.display='none'">🦙 LM Studio</button>
+            </div>
+            <div style="margin-top: 20px;">
+                <button class="theme-toggle" onclick="document.getElementById('ai-transmit-modal').style.display='none'">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    
+    <style>
+        .popup-btn {
+            padding: 6px 12px;
+            font-size: 0.9rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            color: #fff;
+        }
+        .btn-green { background: #10b981; }
+        .btn-green:hover { background: #059669; }
+        .btn-red { background: #ef4444; }
+        .btn-red:hover { background: #dc2626; }
+        .btn-blue { background: #3b82f6; }
+        .btn-blue:hover { background: #2563eb; }
+        .btn-close { color: var(--text-color); background: transparent; padding: 6px; border: none; cursor: pointer; transition: color 0.2s; }
+        .btn-close:hover { color: #ef4444; }
+        
+        #ask-dialog {
+            display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            z-index: 3000; background: var(--main-bg); border: 1px solid var(--border-color);
+            border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); padding: 20px;
+            width: 400px; max-width: 90vw; color: var(--text-color);
+        }
+        #ask-dialog textarea {
+            width: 100%; height: 80px; margin: 10px 0; background: var(--sidebar-bg);
+            color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; padding: 8px;
+        }
+        #ask-dialog .btn-row { display: flex; justify-content: flex-end; gap: 10px; }
+        #ask-answer { margin-top: 15px; padding: 10px; background: var(--sidebar-bg); border-radius: 4px; border: 1px solid var(--border-color); display: none; font-size: 0.9rem; white-space: pre-wrap; }
+    </style>
+
+    <div id="highlight-popup" style="display:none; position:absolute; z-index:2000; background:var(--header-bg); border:1px solid var(--border-color); border-radius:8px; box-shadow:0 8px 16px rgba(0,0,0,0.2); padding:10px; gap:10px; flex-direction:column; align-items:center;">
+        <div style="font-weight: bold; font-size: 1.1rem; color: var(--accent-color); border-bottom: 1px solid var(--border-color); padding-bottom: 5px; width: 100%; text-align: center;">Annotations: Human in the loop</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center;">
+            <button class="popup-btn btn-green" id="btn-approve">Approve</button>
+            <button class="popup-btn btn-red" id="btn-reject">Reject</button>
+            <button class="popup-btn" style="background:#444; color:#fff;" id="btn-hide">Hide</button>
+            <button class="popup-btn" style="background:#e3a800; color:#fff;" id="btn-note">Note</button>
+            <button class="popup-btn btn-blue" id="btn-ask">Ask AI</button>
+            <button class="popup-btn btn-blue" style="background: #8b5cf6;" id="btn-task">Task</button>
+            <button class="popup-btn" style="background:var(--border-color); color:var(--text-color);" id="btn-close-popup">X</button>
+        </div>
+    </div>
+    
+    <div id="note-dialog" style="display:none; position:absolute; z-index:2000; background:var(--header-bg); border:1px solid var(--border-color); border-radius:8px; box-shadow:0 8px 16px rgba(0,0,0,0.2); padding:15px; width:300px;">
+        <h3 style="margin-top:0;">Add Note</h3>
+        <textarea id="note-input" style="width:100%; height:80px; margin-bottom:10px; background:var(--bg-color); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:8px;" placeholder="Type your note here..."></textarea>
+        <div style="display:flex; justify-content:flex-end; gap:10px;">
+            <button class="popup-btn" style="background:var(--border-color); color:var(--text-color);" onclick="document.getElementById('note-dialog').style.display='none'">Cancel</button>
+            <button class="popup-btn" style="background:#e3a800; color:#fff;" id="btn-submit-note">Save Note</button>
+        </div>
+    </div>
+    
+    <div id="ask-dialog" style="display:none; position:absolute; z-index:2000; background:var(--header-bg); border:1px solid var(--border-color); border-radius:8px; box-shadow:0 8px 16px rgba(0,0,0,0.2); padding:15px; width:450px; max-height:80vh; overflow-y:auto; flex-direction:column;">
+        <button class="popup-btn" style="position:absolute; top:10px; right:10px; background:var(--border-color); color:var(--text-color); width:24px; height:24px; padding:0; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:bold; border:none; cursor:pointer;" onclick="document.getElementById('ask-dialog').style.display='none'">X</button>
+        <h3 style="margin-top:0; color: var(--accent-color); padding-right: 20px;">Ask AI about Selection</h3>
+        <div style="font-size:0.85rem; opacity:0.8; margin-bottom:10px; background: var(--bg-color); padding: 8px; border-radius: 4px; border: 1px solid var(--border-color); max-height:60px; overflow:hidden; text-overflow:ellipsis;"><strong>Context:</strong> <i id="ask-context-preview"></i></div>
+        <textarea id="ask-input" style="width:100%; height:80px; margin-bottom:10px; background:var(--bg-color); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:8px; font-family:inherit; box-sizing: border-box;" placeholder="Type your question about the selected text..."></textarea>
+        <div class="btn-row" style="display:flex; justify-content:space-between; align-items:center; width:100%;">
+            <select id="popup-model-select" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; font-family: inherit; max-width: 200px;"></select>
+            <div style="display:flex; gap:10px;">
+                <button class="popup-btn" style="background:var(--border-color); color:var(--text-color);" onclick="document.getElementById('ask-dialog').style.display='none'">Cancel</button>
+                <button class="popup-btn btn-blue" id="btn-submit-ask">Submit</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="task-dialog" style="display:none; position:absolute; z-index:2000; background:var(--header-bg); border:1px solid var(--border-color); border-radius:8px; box-shadow:0 8px 16px rgba(0,0,0,0.2); padding:15px; width:450px; max-height:80vh; overflow-y:auto; flex-direction:column;">
+        <button class="popup-btn" style="position:absolute; top:10px; right:10px; background:var(--border-color); color:var(--text-color); width:24px; height:24px; padding:0; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:bold; border:none; cursor:pointer;" onclick="document.getElementById('task-dialog').style.display='none'">X</button>
+        <h3 style="margin-top:0; color: #8b5cf6; padding-right: 20px;">Execute Task on Selection</h3>
+        <div style="font-size:0.85rem; opacity:0.8; margin-bottom:10px; background: var(--bg-color); padding: 8px; border-radius: 4px; border: 1px solid var(--border-color); max-height:60px; overflow:hidden; text-overflow:ellipsis;"><strong>Context:</strong> <i id="task-context-preview"></i></div>
+        <textarea id="task-input" style="width:100%; height:80px; margin-bottom:10px; background:var(--bg-color); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:8px; font-family:inherit; box-sizing: border-box;" placeholder="Describe what you want to do (e.g. 'collect information about this')"></textarea>
+        <div class="btn-row" style="display:flex; justify-content:space-between; align-items:center; width:100%;">
+            <select id="task-popup-model-select" style="padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; font-family: inherit; max-width: 200px;"></select>
+            <div style="display:flex; gap:10px;">
+                <button class="popup-btn" style="background:var(--border-color); color:var(--text-color);" onclick="document.getElementById('task-dialog').style.display='none'">Cancel</button>
+                <button class="popup-btn btn-blue" style="background: #8b5cf6;" id="btn-submit-task">Generate Prompt</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="task-result-dialog" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:2500; justify-content:center; align-items:center;">
+        <div style="background:var(--bg-color); padding:30px; border-radius:8px; border:1px solid var(--border-color); max-width:600px; width:90%; color:var(--text-color); display:flex; flex-direction:column; max-height: 90vh;">
+            <h2 style="margin-top:0; color: #8b5cf6;">Task Plan Generated!</h2>
+            <p style="margin-bottom: 10px;">Here is the detailed instruction generated by Ollama. Save it to the Vault as a resource, and then execute it with Claude.</p>
+            <textarea id="task-result-output" style="width:100%; flex: 1; min-height: 250px; margin-bottom:15px; background:var(--header-bg); color:var(--text-color); border:1px solid var(--border-color); border-radius:4px; padding:10px; font-family:monospace; box-sizing: border-box; resize: vertical;" readonly></textarea>
+            
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap: wrap; gap: 10px;">
+                <div style="display:flex; gap:10px;">
+                    <button class="popup-btn" style="background:#28a745; color:#fff; font-weight: bold;" id="btn-save-task-resource">💾 Save to Vault as Resource</button>
+                    <button class="popup-btn" style="background:var(--border-color); color:var(--text-color);" onclick="navigator.clipboard.writeText(document.getElementById('task-result-output').value); alert('Prompt copied to clipboard!');">📋 Copy</button>
+                </div>
+                <div style="display:flex; gap:10px;">
+                    <button class="popup-btn" style="background:var(--border-color); color:var(--text-color);" onclick="document.getElementById('task-result-dialog').style.display='none'">Close</button>
+                    <button class="popup-btn" style="background:#6366f1; color:#fff; font-weight: bold;" id="btn-open-claude-task">🤖 Open Claude</button>
+                </div>
+            </div>
+            <div id="task-save-status" style="margin-top: 10px; font-size: 0.85rem; color: #28a745; display: none; font-weight: bold;">Saved to Vault successfully!</div>
+        </div>
+    </div>    <script>
+        let markdown = '';
+        // Theme toggle logic
+        const toggleBtn = document.getElementById('theme-toggle');
+        const lightTheme = document.getElementById('highlight-theme-light');
+        const darkTheme = document.getElementById('highlight-theme-dark');
+        
+        function setTheme(isDark) {
+            if (isDark) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+                document.querySelector('.markdown-body').classList.add('dark');
+                lightTheme.disabled = true;
+                darkTheme.disabled = false;
+                document.getElementById('markdown-style').href = "https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-dark.min.css";
+            } else {
+                document.documentElement.setAttribute('data-theme', 'light');
+                document.querySelector('.markdown-body').classList.remove('dark');
+                lightTheme.disabled = false;
+                darkTheme.disabled = true;
+                document.getElementById('markdown-style').href = "https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.2.0/github-markdown-light.min.css";
+            }
+        }
+        
+        let isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        setTheme(isDarkMode);
+        
+        toggleBtn.addEventListener('click', () => {
+            isDarkMode = !isDarkMode;
+            setTheme(isDarkMode);
+        });
+
+        // Setup Marked.js with highlight.js
+        marked.setOptions({
+            highlight: function(code, lang) {
+                const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+                return hljs.highlight(code, { language }).value;
+            },
+            langPrefix: 'hljs language-',
+            headerIds: true
+        });
+
+        // Highlight approval logic
+        const highlightPopup = document.getElementById('highlight-popup');
+        const btnApprove = document.getElementById('btn-approve');
+        const btnReject = document.getElementById('btn-reject');
+        const btnHide = document.getElementById('btn-hide');
+        const btnNote = document.getElementById('btn-note');
+        const btnClosePopup = document.getElementById('btn-close-popup');
+        let currentSelection = "";
+        let savedRange = null;
+
+        function applyHighlight(color) {
+            if (!savedRange) return;
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(savedRange);
+            try {
+                const span = document.createElement('span');
+                span.style.backgroundColor = color;
+                span.style.color = color === '#000000' ? '#000000' : '#000';
+                if (color === '#000000') {
+                    span.title = "Hidden text";
+                }
+                savedRange.surroundContents(span);
+            } catch(e) {
+                document.designMode = 'on';
+                document.execCommand('hiliteColor', false, color);
+                document.execCommand('backColor', false, color);
+                document.execCommand('foreColor', false, color === '#000000' ? '#ffffff' : '#000000');
+                document.designMode = 'off';
+            }
+            sel.removeAllRanges();
+        }
+
+        document.querySelector('.content').addEventListener('mouseup', function(e) {
+            const selection = window.getSelection();
+            const text = selection.toString().trim();
+            if (text.length > 0 && e.target.id !== 'btn-close-popup') {
+                currentSelection = text;
+                savedRange = selection.getRangeAt(0).cloneRange();
+                const rect = savedRange.getBoundingClientRect();
+                highlightPopup.style.display = 'flex';
+                highlightPopup.style.top = (rect.bottom + window.scrollY + 10) + 'px';
+                highlightPopup.style.left = (rect.left + window.scrollX) + 'px';
+            } else if (e.target.id !== 'btn-close-popup' && !highlightPopup.contains(e.target)) {
+                highlightPopup.style.display = 'none';
+            }
+        });
+
+        document.addEventListener('mousedown', function(e) {
+            if (!highlightPopup.contains(e.target) && !['btn-approve','btn-reject','btn-hide','btn-note','btn-close-popup'].includes(e.target.id)) {
+                highlightPopup.style.display = 'none';
+            }
+        });
+
+        btnClosePopup.addEventListener('click', function() {
+            highlightPopup.style.display = 'none';
+            window.getSelection().removeAllRanges();
+        });
+
+        btnApprove.addEventListener('click', () => submitAction('approve'));
+        btnReject.addEventListener('click', () => submitAction('reject'));
+        btnHide.addEventListener('click', () => submitAction('hide'));
+        
+        btnNote.addEventListener('click', () => {
+            highlightPopup.style.display = 'none';
+            document.getElementById('note-dialog').style.display = 'block';
+            document.getElementById('note-input').value = '';
+            document.getElementById('note-input').focus();
+        });
+        
+        document.getElementById('btn-submit-note').addEventListener('click', () => {
+            document.getElementById('note-dialog').style.display = 'none';
+            submitAction('note', document.getElementById('note-input').value);
+        });
+
+        
+        const btnAsk = document.getElementById('btn-ask');
+        const askDialog = document.getElementById('ask-dialog');
+        const askInput = document.getElementById('ask-input');
+        const askContextPreview = document.getElementById('ask-context-preview');
+        const btnSubmitAsk = document.getElementById('btn-submit-ask');
+        const askAnswer = document.getElementById('ask-answer');
+        
+        const btnTask = document.getElementById('btn-task');
+        const taskDialog = document.getElementById('task-dialog');
+        const taskInput = document.getElementById('task-input');
+        const taskContextPreview = document.getElementById('task-context-preview');
+        const btnSubmitTask = document.getElementById('btn-submit-task');
+
+        function createInlineAIBlock(type, title, content, modelName, isCollapsed = false) {
+            const block = document.createElement('span');
+            block.className = 'ai-block';
+            block.style.cssText = "display: block; margin: 15px 0; padding: 15px; background: var(--header-bg); border-left: 4px solid #8b5cf6; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); font-family: inherit; cursor: pointer;";
+            
+            const header = document.createElement('span');
+            header.style.cssText = "display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; color: var(--text-color); opacity: 0.8; font-weight: bold;";
+            header.innerHTML = `<span><span class="toggle-icon" style="display:inline-block; margin-right:5px; transition: transform 0.2s;">${isCollapsed ? '▶' : '▼'}</span> 🤖 AI ${type}: ${title}</span><span style="background: var(--bg-color); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border-color);">${modelName}</span>`;
+            
+            const body = document.createElement('span');
+            body.className = "markdown-body";
+            body.style.cssText = "font-size: 0.95rem; background: transparent; padding: 0; margin-top: 10px; display: " + (isCollapsed ? "none" : "block") + "; cursor: text;";
+            body.innerHTML = marked.parse(content);
+            
+            block.appendChild(header);
+            block.appendChild(body);
+            
+            block.addEventListener('click', (e) => {
+                if (window.getSelection().toString().length > 0) return; // Allow text selection
+                const isHidden = body.style.display === 'none';
+                body.style.display = isHidden ? 'block' : 'none';
+                header.querySelector('.toggle-icon').textContent = isHidden ? '▼' : '▶';
+            });
+            
+            // Prevent clicks inside the body from toggling the block
+            body.addEventListener('click', (e) => {
+                e.stopPropagation();
+            });
+            
+            return block;
+        }
+
+        function insertInlineAIBlock(type, title, content, modelName, targetRange = null) {
+            const rangeToUse = targetRange || savedRange;
+            if (!rangeToUse) return;
+            const block = createInlineAIBlock(type, title, content, modelName);
+            const cloneRange = rangeToUse.cloneRange();
+            cloneRange.collapse(false);
+            cloneRange.insertNode(block);
+        }
+
+        btnAsk.addEventListener('click', () => {
+            highlightPopup.style.display = 'none';
+            askDialog.style.display = 'block';
+            let ctx = currentSelection;
+            askContextPreview.textContent = ctx.length > 50 ? ctx.substring(0, 50) + "..." : ctx;
+            askInput.value = '';
+            askAnswer.style.display = 'none';
+            askInput.focus();
+        });
+
+        btnTask.addEventListener('click', () => {
+            highlightPopup.style.display = 'none';
+            taskDialog.style.display = 'block';
+            let ctx = currentSelection;
+            taskContextPreview.textContent = ctx.length > 50 ? ctx.substring(0, 50) + "..." : ctx;
+            taskInput.value = '';
+            taskInput.focus();
+        });
+
+        // Reusable Q&A Modal
+        function showQAModal(question, answer, errorMsg, originalContext, historyQA = [], modelUsed = 'llama3.1', isGlobalDocAsk = false) {
+            const modal = document.createElement('div');
+            modal.style.cssText = "position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 9999;";
+            
+            const modalContent = document.createElement('div');
+            modalContent.style.cssText = "background: var(--bg-color); width: 80%; max-width: 800px; max-height: 80vh; overflow-y: auto; border-radius: 8px; padding: 25px; position: relative; box-shadow: 0 4px 15px rgba(0,0,0,0.2);";
+            
+            const closeBtn = document.createElement('button');
+            closeBtn.innerText = 'X';
+            closeBtn.style.cssText = "position: absolute; top: 15px; right: 15px; background: #dc3545; color: white; border: none; border-radius: 4px; width: 30px; height: 30px; cursor: pointer; font-weight: bold;";
+            closeBtn.onclick = () => document.body.removeChild(modal);
+            
+            const modalTitle = document.createElement('h2');
+            modalTitle.style.cssText = "margin-top: 0; margin-bottom: 20px; color: var(--accent-color); padding-right: 40px;";
+            modalTitle.innerText = "Q&A Response";
+            
+            const modalBody = document.createElement('div');
+            modalBody.style.cssText = "line-height: 1.6;";
+            
+            if (answer && !errorMsg) {
+                // Render answer using marked
+                modalBody.innerHTML = `<strong>Question:</strong> ${question}<hr><br>` + marked.parse(answer);
+                
+                modalContent.appendChild(closeBtn);
+                modalContent.appendChild(modalTitle);
+                modalContent.appendChild(modalBody);
+                
+                const currentQA = `**Question:** ${question}\n\n**Answer by ${modelUsed}:**\n${answer}`;
+                const fullQA_for_save = `**Context:**\n> ${originalContext.replace(/\n/g, '\n> ')}\n\n` + 
+                    (historyQA.length > 0 ? `=== PREVIOUS Q&A ===\n${historyQA.join('\n\n---\n\n')}\n\n=== CURRENT Q&A ===\n` : '') + 
+                    currentQA;
+                
+                const actionsRow = document.createElement('div');
+                actionsRow.style.cssText = "display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap;";
+                
+                const saveBtn = document.createElement('button');
+                saveBtn.innerText = 'Save Q&A';
+                saveBtn.style.cssText = "padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;";
+                saveBtn.onclick = async () => {
+                    saveBtn.disabled = true;
+                    saveBtn.innerText = 'Saving...';
+                    const docId = getDocId();
+                    
+                    if (isGlobalDocAsk) {
+                        try {
+                            const appendedContent = `\n\n---\n\n### Q&A\n\n**Question:** ${question}\n\n**Answer (by ${modelUsed}):**\n${answer}`;
+                            const newMarkdown = markdown + appendedContent;
+                            
+                            const res = await fetch(`/vault/doc/update/${docId}`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ markdown: newMarkdown })
+                            });
+                            
+                            if (res.ok) {
+                                markdown = newMarkdown;
+                                const contentDiv = document.getElementById('md-content');
+                                const appendedDiv = document.createElement('div');
+                                appendedDiv.innerHTML = marked.parse(appendedContent);
+                                contentDiv.appendChild(appendedDiv);
+                                
+                                // Create separate Croissant file and link it to master
+                                try {
+                                    await fetch(`/vault/approve/${docId}`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ text: fullQA_for_save, action: 'note', model: modelUsed })
+                                    });
+                                } catch (e) {
+                                    console.error('Failed to create Croissant annotation file:', e);
+                                }
+                                
+                                saveBtn.innerText = 'Appended to Document!';
+                                window.location.reload();
+                            } else {
+                                const errData = await res.json();
+                                saveBtn.innerText = 'Error';
+                                alert('Error updating document: ' + (errData.error || errData.message || 'Unknown error'));
+                            }
+                        } catch (e) {
+                            saveBtn.innerText = 'Error';
+                            alert('Error: ' + e.message);
+                        }
+                    } else {
+                        try {
+                            const res = await fetch(`/vault/approve/${docId}`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ text: fullQA_for_save, action: 'note' })
+                            });
+                            const data = await res.json();
+                            if (data.success) {
+                                saveBtn.innerText = 'Saved!';
+                            } else {
+                                saveBtn.innerText = 'Error';
+                                alert('Error saving: ' + data.error);
+                            }
+                        } catch (e) {
+                            saveBtn.innerText = 'Error';
+                            alert('Error: ' + e.message);
+                        }
+                    }
+                };
+                
+                const showNextInput = (remember) => {
+                    actionsRow.innerHTML = '';
+                    const inputArea = document.createElement('textarea');
+                    inputArea.style.cssText = "width:100%; height:80px; margin-bottom:10px; padding:8px; border-radius:4px; border:1px solid #ccc; font-family:inherit;";
+                    inputArea.placeholder = remember ? "Ask a follow-up question..." : "Ask another question about the same text...";
+                    
+                    const btnContainer = document.createElement('div');
+                    btnContainer.style.cssText = "display:flex; gap:10px; width:100%;";
+                    
+                    const cancelBtn = document.createElement('button');
+                    cancelBtn.innerText = "Cancel";
+                    cancelBtn.style.cssText = "padding: 8px 16px; background: #ccc; color: #333; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;";
+                    cancelBtn.onclick = () => {
+                        actionsRow.innerHTML = '';
+                        actionsRow.appendChild(saveBtn);
+                        actionsRow.appendChild(askAgainBtn);
+                        actionsRow.appendChild(rememberBtn);
+                    };
+                    
+                    const submitBtn = document.createElement('button');
+                    submitBtn.innerText = "Ask AI";
+                    submitBtn.style.cssText = "padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;";
+                    submitBtn.onclick = async () => {
+                        const nextQ = inputArea.value.trim();
+                        if (!nextQ) return;
+                        submitBtn.disabled = true;
+                        submitBtn.innerText = "Thinking...";
+                        
+                        let fetchContext = originalContext;
+                        let newHistory = [...historyQA];
+                        
+                        if (remember) {
+                            fetchContext = originalContext + `\n\n=== PREVIOUS Q&A ===\n${historyQA.join('\n\n')}\n\n${currentQA}`;
+                            newHistory.push(currentQA);
+                        }
+                        
+                        try {
+                            const res = await fetch('/vault/ask', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ context: fetchContext, question: nextQ, model: modelUsed })
+                            });
+                            const result = await res.json();
+                            document.body.removeChild(modal);
+                            if (result.success) {
+                                showQAModal(nextQ, result.answer, null, originalContext, newHistory, modelUsed, isGlobalDocAsk);
+                            } else {
+                                showQAModal(nextQ, null, result.error, originalContext, newHistory, modelUsed, isGlobalDocAsk);
+                            }
+                        } catch (err) {
+                            document.body.removeChild(modal);
+                            showQAModal(nextQ, null, err.message, originalContext, newHistory, modelUsed, isGlobalDocAsk);
+                        }
+                    };
+                    
+                    btnContainer.appendChild(cancelBtn);
+                    btnContainer.appendChild(submitBtn);
+                    actionsRow.appendChild(inputArea);
+                    actionsRow.appendChild(btnContainer);
+                    inputArea.focus();
+                };
+
+                const askAgainBtn = document.createElement('button');
+                askAgainBtn.innerText = 'Ask again';
+                askAgainBtn.className = "popup-btn btn-blue";
+                askAgainBtn.style.cssText = "padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;";
+                askAgainBtn.onclick = () => showNextInput(false);
+
+                const rememberBtn = document.createElement('button');
+                rememberBtn.innerText = 'Remember this and ask again';
+                rememberBtn.className = "popup-btn btn-blue";
+                rememberBtn.style.cssText = "padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;";
+                rememberBtn.onclick = () => showNextInput(true);
+
+                const closeActionBtn = document.createElement('button');
+                closeActionBtn.innerText = 'Close';
+                closeActionBtn.style.cssText = "padding: 8px 16px; border: 1px solid var(--border-color); background: var(--header-bg); color: var(--text-color); border-radius: 4px; cursor: pointer; font-weight: bold;";
+                closeActionBtn.onclick = () => modal.remove();
+
+                actionsRow.appendChild(saveBtn);
+                actionsRow.appendChild(askAgainBtn);
+                actionsRow.appendChild(rememberBtn);
+                actionsRow.appendChild(closeActionBtn);
+                modalContent.appendChild(actionsRow);
+            } else {
+                modalBody.innerText = "Error: " + errorMsg;
+                modalContent.appendChild(closeBtn);
+                modalContent.appendChild(modalTitle);
+                modalContent.appendChild(modalBody);
+            }
+            
+            modal.appendChild(modalContent);
+            document.body.appendChild(modal);
+        }
+
+        btnSubmitAsk.addEventListener('click', async () => {
+            const question = askInput.value.trim();
+            const selectedModel = document.getElementById('popup-model-select').value;
+            if (!question) return;
+            
+            btnSubmitAsk.disabled = true;
+            btnSubmitAsk.textContent = 'Thinking...';
+            
+            try {
+                const response = await fetch('/vault/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ context: currentSelection, question: question, model: selectedModel })
+                });
+                const result = await response.json();
+                
+                // Hide popup dialog
+                document.getElementById('ask-dialog').style.display = 'none';
+                
+                if (result.success) {
+                    insertInlineAIBlock('Answer', question, result.answer, selectedModel);
+                    showQAModal(question, result.answer, null, currentSelection, [], selectedModel);
+                } else {
+                    showQAModal(question, null, result.error, currentSelection, [], selectedModel);
+                }
+            } catch (err) {
+                document.getElementById('ask-dialog').style.display = 'none';
+                showQAModal(question, null, err.message, currentSelection, [], selectedModel);
+            }
+            
+            btnSubmitAsk.disabled = false;
+            btnSubmitAsk.textContent = 'Submit';
+        });
+
+        btnSubmitTask.addEventListener('click', async () => {
+            const taskRequest = taskInput.value.trim();
+            const selectedModel = document.getElementById('task-popup-model-select').value;
+            if (!taskRequest) return;
+            
+            btnSubmitTask.disabled = true;
+            btnSubmitTask.textContent = 'Saving Context & Generating...';
+            
+            const docId = getDocId();
+            const baseUrl = window.location.origin;
+            const originalResourceUrl = baseUrl + window.location.pathname;
+
+            let snippetUrl = '';
+            
+            // 1. Save the highlighted text to Vault first to get its own identifier
+            try {
+                const saveRes = await fetch(`/vault/approve/${docId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: currentSelection, action: 'note', note: 'Task Context: ' + taskRequest })
+                });
+                const saveData = await saveRes.json();
+                if (saveData.success && saveData.new_id) {
+                    snippetUrl = baseUrl + '/vault/doc/' + saveData.new_id;
+                }
+            } catch (err) {
+                console.warn("Failed to save snippet before task generation:", err);
+            }
+            
+            const metaPrompt = `You are an expert AI orchestrator. The user wants to perform a task: "${taskRequest}". Based on the provided context, write a very detailed, step-by-step prompt that the user can copy and paste into Claude (or another AI assistant). The prompt must instruct Claude to: 1. Read the provided context, 2. Execute the task thoroughly, 3. Use available tools (like the MCP server) to update the Croissant/Vault document by APPENDING the new information (do NOT overwrite the existing document), and explicitly include an indication of which AI model generated the new information.\n\nCRITICAL: You MUST explicitly include the following links in the generated prompt so Claude knows exactly what resources to access:\n- Original Resource: ${originalResourceUrl}\n- Highlighted Text Snippet: ${snippetUrl || 'Not available'}\n\nDo not forget to put these URLs directly into the prompt you generate!`;
+            
+            try {
+                const response = await fetch('/vault/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ context: currentSelection, question: metaPrompt, model: selectedModel })
+                });
+                const result = await response.json();
+                
+                document.getElementById('task-dialog').style.display = 'none';
+                
+                if (result.success) {
+                    insertInlineAIBlock('Task Plan', taskRequest, result.answer, selectedModel);
+                    const taskResultOutput = document.getElementById('task-result-output');
+                    taskResultOutput.value = result.answer;
+                    document.getElementById('task-result-dialog').style.display = 'flex';
+                    document.getElementById('task-save-status').style.display = 'none';
+                    
+                    const btnSaveTask = document.getElementById('btn-save-task-resource');
+                    btnSaveTask.disabled = false;
+                    btnSaveTask.innerText = '💾 Save to Vault as Resource';
+                    btnSaveTask.onclick = async () => {
+                        btnSaveTask.disabled = true;
+                        btnSaveTask.innerText = 'Saving...';
+                        const fullQA_for_save = `**Task Generated by ${selectedModel}**\n*Objective: ${taskRequest}*\n*Context:* \n> ${currentSelection}\n\n**Claude Prompt:**\n\`\`\`\n${result.answer}\n\`\`\``;
+                        try {
+                            const res = await fetch(`/vault/approve/${docId}`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ text: fullQA_for_save, action: 'note' })
+                            });
+                            const data = await res.json();
+                            if (data.success) {
+                                document.getElementById('task-save-status').style.display = 'block';
+                                btnSaveTask.innerText = 'Saved!';
+                            } else {
+                                alert("Failed to save: " + data.error);
+                                btnSaveTask.disabled = false;
+                                btnSaveTask.innerText = '💾 Save to Vault as Resource';
+                            }
+                        } catch (e) {
+                            alert("Failed to save.");
+                            btnSaveTask.disabled = false;
+                            btnSaveTask.innerText = '💾 Save to Vault as Resource';
+                        }
+                    };
+                    
+                    const btnOpenClaudeTask = document.getElementById('btn-open-claude-task');
+                    btnOpenClaudeTask.onclick = () => {
+                        window.location.href = 'claude://' + window.location.href;
+                    };
+                    
+                } else {
+                    alert('Error generating task: ' + result.error);
+                }
+            } catch (err) {
+                document.getElementById('task-dialog').style.display = 'none';
+                alert('Failed to connect to backend: ' + err.message);
+            }
+            
+            btnSubmitTask.disabled = false;
+            btnSubmitTask.textContent = 'Generate Prompt';
+        });
+
+        const submitAction = async (action, noteText = null) => {
+            let color = '#d4edda';
+            if (action === 'reject') color = '#ffcccc';
+            if (action === 'hide') color = '#000000';
+            if (action === 'note') color = '#ffeb3b';
+            
+            const text = currentSelection;
+            highlightPopup.style.display = 'none';
+            applyHighlight(color);
+            
+            const vaultId = getDocId();
+            const loadingAlert = document.createElement('div');
+            let actionText = "Approving snippet";
+            if (action === 'reject') actionText = "Rejecting snippet";
+            if (action === 'hide') actionText = "Hiding snippet";
+            if (action === 'note') actionText = "Saving note";
+            loadingAlert.textContent = `${actionText} and generating Croissant metadata... please wait.`;
+            loadingAlert.style.position = 'fixed';
+            loadingAlert.style.bottom = '20px';
+            loadingAlert.style.right = '20px';
+            loadingAlert.style.background = 'var(--sidebar-bg)';
+            loadingAlert.style.color = 'var(--text-color)';
+            loadingAlert.style.padding = '15px';
+            loadingAlert.style.border = '1px solid var(--border-color)';
+            loadingAlert.style.borderRadius = '5px';
+            loadingAlert.style.zIndex = '9999';
+            document.body.appendChild(loadingAlert);
+
+            try {
+                const response = await fetch('/vault/approve/' + vaultId, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text, action: action, note: noteText })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    loadingAlert.innerHTML = `<strong>Success!</strong> Original document updated.<br>New snippet saved to Vault ID: <code>${result.new_id}</code><br><br><a href="/vault/doc/${result.new_id}" style="color:var(--text-color); text-decoration:underline;" target="_blank">View Snippet</a>`;
+                    
+                    // Update URL state since a new version was created
+                    if (result.updated_orig_id) {
+                        history.replaceState(null, null, '/vault/doc/' + result.updated_orig_id);
+                    }
+                } else {
+                    loadingAlert.textContent = "Error: " + result.error;
+                }
+            } catch (err) {
+                loadingAlert.textContent = "Error: " + err.message;
+            }
+            setTimeout(() => { if(loadingAlert.parentNode) loadingAlert.parentNode.removeChild(loadingAlert); }, 15000);
+        };
+
+
+        // Generate TOC
+        function generateTOC(container) {
+            const headings = container.querySelectorAll('h1, h2, h3');
+            const toc = document.getElementById('toc');
+            
+            if (headings.length === 0) {
+                toc.style.display = 'none';
+                return;
+            }
+            
+            let firstH1 = null;
+            
+            headings.forEach(heading => {
+                if (!heading.id) {
+                    heading.id = heading.textContent.trim().toLowerCase().replace(/[^\w\- ]+/g, '').replace(/\s+/g, '-');
+                }
+                
+                if (!firstH1 && heading.tagName === 'H1') {
+                    firstH1 = heading.textContent;
+                }
+                
+                const level = parseInt(heading.tagName.substring(1));
+                const item = document.createElement('a');
+                item.className = 'sidebar-item';
+                item.href = '#' + heading.id;
+                item.textContent = heading.textContent;
+                item.style.paddingLeft = `${(level - 1) * 15 + 10}px`;
+                
+                item.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    document.getElementById(heading.id).scrollIntoView({ behavior: 'smooth' });
+                });
+                
+                toc.appendChild(item);
+            });
+            
+            if (firstH1) {
+                document.title = firstH1 + " - Markdown Viewer";
+            }
+        }
+
+        // Fetch document
+        async function loadDocument() {
+            const docId = getDocId();
+            
+            if (!docId) {
+                document.getElementById('loading').textContent = "No document ID specified.";
+                return;
+            }
+            
+            
+            try {
+                // Fetch the raw markdown from the vault API
+                const response = await fetch(`/vault/doc/raw/${docId}`);
+                
+                if (!response.ok) {
+                    throw new Error(`Document not found (${response.status})`);
+                }
+                
+                markdown = await response.text();
+                
+                // Strip existing [View Croissant JSON-LD Data] text from markdown
+                markdown = markdown.replace(/\[View Croissant JSON-LD Data\]\([^)]+\)/gi, '');
+                
+                // Strip existing baked-in Make public button from markdown
+                markdown = markdown.replace(/<button[\s\S]*?>Make public<\/button>/gi, '');
+                
+                // Decrease size of large headings
+                markdown = markdown.replace(/^#\s+Citation:/gm, '### Citation:');
+                markdown = markdown.replace(/^#\s+🥐/gm, '## 🥐');
+                
+
+                function renderJsonLd(data) {
+                    let html = `<div style="font-family: var(--font-family, sans-serif); color: var(--text-color);">`;
+                    
+                    // Header
+                    html += `<h1 style="color: var(--accent-color); margin-top:0; margin-bottom: 10px;">🥐 ${data.name || 'Dataset'}</h1>`;
+                    if (data.url) {
+                        html += `<p><a href="${data.url}" target="_blank" style="color: var(--accent-color); text-decoration: none;"><strong>Original URL &rarr;</strong></a></p>`;
+                    }
+                    if (data.description) {
+                        html += `<div style="font-size: 1.1rem; line-height: 1.6; margin: 20px 0; padding: 15px; background: var(--button-bg, #f1f3f4); border-left: 4px solid var(--accent-color); border-radius: 4px;">${data.description}</div>`;
+                    }
+                    
+                    // Metadata Table
+                    html += `<h3 style="border-bottom: 1px solid var(--border-color); padding-bottom: 5px; margin-top: 30px;">Core Metadata</h3>`;
+                    html += `<table style="width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 0.95rem;">`;
+                    html += `<tbody>`;
+                    
+                    const skipKeys = ['@context', '@type', 'name', 'url', 'description', 'distribution', 'recordSet', 'fileObject', 'fileSet'];
+                    for (const [key, value] of Object.entries(data)) {
+                        if (skipKeys.includes(key)) continue;
+                        
+                        let valHtml = '';
+                        if (typeof value === 'object' && value !== null) {
+                            if (Array.isArray(value)) {
+                                valHtml = value.map(v => typeof v === 'object' ? JSON.stringify(v) : v).join(', ');
+                            } else {
+                                valHtml = value.name || value.url || JSON.stringify(value);
+                            }
+                        } else {
+                            let sVal = String(value);
+                            if (sVal.startsWith('http://') || sVal.startsWith('https://')) {
+                                valHtml = `<a href="${sVal}" target="_blank" style="color: var(--accent-color); text-decoration: underline;">${sVal}</a>`;
+                            } else {
+                                valHtml = sVal;
+                            }
+                        }
+                        
+                        html += `
+                        <tr style="border-bottom: 1px solid var(--border-color, #eee);">
+                            <td style="padding: 10px; font-weight: bold; width: 30%; color: #555;">${key}</td>
+                            <td style="padding: 10px;">${valHtml}</td>
+                        </tr>`;
+                    }
+                    html += `</tbody></table>`;
+                    
+                    // Distributions / Files
+                    const dists = data.distribution || data.fileObject || data.fileSet;
+                    if (dists && Array.isArray(dists) && dists.length > 0) {
+                        html += `<h3 style="border-bottom: 1px solid var(--border-color); padding-bottom: 5px; margin-top: 30px;">Files & Distributions</h3>`;
+                        html += `<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; margin-top: 15px;">`;
+                        
+                        dists.forEach(d => {
+                            html += `<div style="padding: 15px; border: 1px solid var(--border-color, #ccc); border-radius: 6px; background: #fafafa;">`;
+                            html += `<strong style="display: block; margin-bottom: 8px; color: var(--accent-color);">${d.name || 'File'}</strong>`;
+                            if (d.encodingFormat) html += `<div style="font-size: 0.85rem; color: #666; margin-bottom: 5px;"><strong>Format:</strong> ${d.encodingFormat}</div>`;
+                            if (d.contentSize) html += `<div style="font-size: 0.85rem; color: #666; margin-bottom: 5px;"><strong>Size:</strong> ${d.contentSize}</div>`;
+                            if (d.contentUrl) {
+                                html += `<div style="margin-top: 10px;"><a href="${d.contentUrl}" target="_blank" style="font-size: 0.85rem; color: white; background: var(--accent-color); padding: 5px 10px; border-radius: 4px; text-decoration: none;">Download</a></div>`;
+                            }
+                            html += `</div>`;
+                        });
+                        html += `</div>`;
+                    }
+                    
+                    // Record Sets
+                    if (data.recordSet && Array.isArray(data.recordSet)) {
+                        html += `<h3 style="border-bottom: 1px solid var(--border-color); padding-bottom: 5px; margin-top: 30px;">Record Sets (Schema)</h3>`;
+                        data.recordSet.forEach(rs => {
+                            html += `<div style="margin-top: 15px; padding: 15px; border-left: 3px solid #6c757d; background: #f8f9fa;">`;
+                            html += `<h4 style="margin: 0 0 10px 0;">${rs.name || 'Record Set'}</h4>`;
+                            if (rs.description) html += `<p style="font-size: 0.9rem; margin-top: 0;">${rs.description}</p>`;
+                            
+                            if (rs.field && Array.isArray(rs.field)) {
+                                html += `<table style="width: 100%; font-size: 0.85rem; border-collapse: collapse; margin-top: 10px;">`;
+                                html += `<thead><tr style="background: #e9ecef;"><th style="padding: 8px; text-align: left;">Field</th><th style="padding: 8px; text-align: left;">Type</th><th style="padding: 8px; text-align: left;">Description</th></tr></thead><tbody>`;
+                                rs.field.forEach(f => {
+                                    const dataType = f.dataType || f['cr:dataType'] || '';
+                                    html += `<tr style="border-bottom: 1px solid #ddd;">
+                                        <td style="padding: 8px; font-weight: bold;">${f.name || ''}</td>
+                                        <td style="padding: 8px; color: #d63384;">${dataType.replace('sc:', '')}</td>
+                                        <td style="padding: 8px;">${f.description || ''}</td>
+                                    </tr>`;
+                                });
+                                html += `</tbody></table>`;
+                            }
+                            html += `</div>`;
+                        });
+                    }
+                    
+                    html += `</div>`;
+                    return html;
+                }
+
+                // Try to pretty-print if it's raw JSON
+                try {
+                    const parsedJson = JSON.parse(markdown);
+                    markdown = renderJsonLd(parsedJson);
+                } catch (e) {
+                    // Not JSON, leave as is
+                }
+                
+                const htmlContent = marked.parse(markdown);
+                
+                const contentDiv = document.getElementById('md-content');
+                contentDiv.innerHTML = htmlContent;
+                
+                // Inject unified action toolbar
+                const actionToolbar = document.createElement('div');
+                actionToolbar.id = 'action-toolbar';
+                actionToolbar.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; width: 100%;';
+                
+                const toolbarLeft = document.createElement('div');
+                toolbarLeft.id = 'action-toolbar-left';
+                toolbarLeft.style.cssText = 'display: flex; gap: 10px; align-items: center;';
+                actionToolbar.appendChild(toolbarLeft);
+                
+                const toolbarRight = document.createElement('div');
+                toolbarRight.id = 'action-toolbar-right';
+                toolbarRight.style.cssText = 'display: flex; gap: 10px; align-items: center;';
+                actionToolbar.appendChild(toolbarRight);
+                
+                const btnStyle = 'padding: 4px 12px; border-radius: 4px; border: 1px solid var(--border-color); cursor: pointer; background: var(--header-bg); color: var(--text-color); font-size: 0.85rem; text-decoration: none; display: flex; align-items: center; gap: 5px;';
+                
+                // Markdown button (Right)
+                const btnMd = document.createElement('a');
+                btnMd.href = `/vault/doc/raw/${docId}`;
+                btnMd.target = '_blank';
+                btnMd.innerHTML = '📝 Markdown';
+                btnMd.style.cssText = btnStyle;
+                toolbarRight.appendChild(btnMd);
+                
+                // JSON-LD button (Right)
+                const btnJson = document.createElement('a');
+                btnJson.href = `/vault/${docId}.jsonld`;
+                btnJson.target = '_blank';
+                btnJson.innerHTML = '🥐 Croissant (JSON-LD)';
+                btnJson.style.cssText = btnStyle;
+                toolbarRight.appendChild(btnJson);
+                
+                // Open in AI button (Right)
+                const btnOpenAi = document.createElement('button');
+                btnOpenAi.innerHTML = '🤖 Open in AI';
+                btnOpenAi.style.cssText = btnStyle + " background: #6366f1; color: white; border: none; font-weight: bold;";
+                btnOpenAi.onclick = () => {
+                    document.getElementById('ai-prompt-input').value = 'Read ' + window.location.href;
+                    document.getElementById('ai-transmit-modal').style.display = 'flex';
+                };
+                toolbarRight.appendChild(btnOpenAi);
+                
+                // --- ASK DOCUMENT FEATURE ---
+                const askDocContainer = document.createElement('div');
+                askDocContainer.style.cssText = "margin-bottom: 20px; padding: 15px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--header-bg);";
+                
+                const askDocHeader = document.createElement('h3');
+                askDocHeader.style.cssText = "margin-top: 0; color: var(--accent-color); font-size: 1.1rem;";
+                askDocHeader.innerText = "Ask the Document";
+                askDocContainer.appendChild(askDocHeader);
+                
+                const askDocFlex = document.createElement('div');
+                askDocFlex.style.cssText = "display: flex; gap: 10px; align-items: center;";
+                
+                const askDocInput = document.createElement('input');
+                askDocInput.type = 'text';
+                askDocInput.placeholder = 'Ask a question about this dataset...';
+                askDocInput.style.cssText = "flex-grow: 1; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; font-family: inherit;";
+                askDocInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        askDocBtn.click();
+                    }
+                });
+                
+                const askDocModelSelect = document.createElement('select');
+                askDocModelSelect.style.cssText = "padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; font-family: inherit; max-width: 200px;";
+                
+                const askDocBtn = document.createElement('button');
+                askDocBtn.innerText = 'Ask';
+                askDocBtn.style.cssText = "padding: 8px 16px; background: black; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;";
+                
+                askDocFlex.appendChild(askDocInput);
+                askDocFlex.appendChild(askDocBtn);
+                askDocFlex.appendChild(askDocModelSelect);
+                askDocContainer.appendChild(askDocFlex);
+                
+                
+                // Fetch models
+                fetch('/vault/models')
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.data && data.data.length > 0) {
+                            // Sort models: those with '-cloud' first, then others
+                            let models = data.data;
+                            models.sort((a, b) => {
+                                const aCloud = a.id.includes('-cloud');
+                                const bCloud = b.id.includes('-cloud');
+                                if (aCloud && !bCloud) return -1;
+                                if (!aCloud && bCloud) return 1;
+                                return a.id.localeCompare(b.id);
+                            });
+                            
+                            models.forEach(m => {
+                                const opt = document.createElement('option');
+                                opt.value = m.id;
+                                opt.innerText = m.id;
+                                if (m.id === 'gemma4:31b-cloud') {
+                                    opt.selected = true;
+                                }
+                                askDocModelSelect.appendChild(opt);
+                                
+                                const opt2 = opt.cloneNode(true);
+                                document.getElementById('popup-model-select').appendChild(opt2);
+                                const opt3 = opt.cloneNode(true);
+                                document.getElementById('task-popup-model-select').appendChild(opt3);
+                            });
+                        } else {
+                            const opt = document.createElement('option');
+                            opt.value = 'llama3.1';
+                            opt.innerText = 'llama3.1';
+                            askDocModelSelect.appendChild(opt);
+                            document.getElementById('popup-model-select').appendChild(opt.cloneNode(true));
+                            document.getElementById('task-popup-model-select').appendChild(opt.cloneNode(true));
+                        }
+                    })
+                    .catch(() => {
+                        const opt = document.createElement('option');
+                        opt.value = 'llama3.1';
+                        opt.innerText = 'llama3.1';
+                        askDocModelSelect.appendChild(opt);
+                        document.getElementById('popup-model-select').appendChild(opt.cloneNode(true));
+                        document.getElementById('task-popup-model-select').appendChild(opt.cloneNode(true));
+                    });
+                    
+                askDocBtn.onclick = async () => {
+                    const question = askDocInput.value.trim();
+                    if (!question) return;
+                    
+                    const model = askDocModelSelect.value;
+                    askDocBtn.disabled = true;
+                    askDocBtn.innerText = 'Thinking...';
+                    
+                    // Build context: Current document + linked markdown files
+                    let fullContext = "=== MAIN DOCUMENT ===\n" + markdown + "\n";
+                    
+                    // Find all linked markdown files (basic regex for vault docs)
+                    const linkRegex = /\[.*?\]\(\/vault\/doc\/([a-zA-Z0-9_-]+)\)/g;
+                    let match;
+                    const linkedIds = new Set();
+                    while ((match = linkRegex.exec(markdown)) !== null) {
+                        linkedIds.add(match[2]);
+                    }
+                    
+                    // Also check for raw URLs in the text just in case
+                    const rawUrlRegex = /\/vault\/doc\/([a-zA-Z0-9_-]+)/g;
+                    while ((match = rawUrlRegex.exec(markdown)) !== null) {
+                        linkedIds.add(match[1]);
+                    }
+                    
+                    // Remove current docId from linked
+                    linkedIds.delete(docId);
+                    
+                    // Fetch linked docs
+                    for (const id of linkedIds) {
+                        try {
+                            const res = await fetch(`/vault/doc/raw/${id}`);
+                            if (res.ok) {
+                                const txt = await res.text();
+                                fullContext += `\n=== LINKED DOCUMENT (ID: ${id}) ===\n${txt}\n`;
+                            }
+                        } catch(e) {}
+                    }
+                    
+                    try {
+                        const response = await fetch('/vault/ask', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ context: fullContext, question: question, model: model })
+                        });
+                        const result = await response.json();
+                        
+                        if (result.success) {
+                            showQAModal(question, result.answer, null, fullContext, [], model, true);
+                        } else {
+                            showQAModal(question, null, result.error, fullContext, [], model, true);
+                        }
+                    } catch(err) {
+                        showQAModal(question, null, err.message, fullContext, [], model, true);
+                    }
+                    
+                    askDocBtn.disabled = false;
+                    askDocBtn.innerText = 'Ask';
+                    askDocInput.value = '';
+                };
+                
+                // --- END ASK DOCUMENT FEATURE ---
+
+                // Make public button (Left)
+                const btnPublic = document.createElement('button');
+                btnPublic.innerHTML = '<span title="Make public">🔗</span>';
+                btnPublic.style.cssText = btnStyle;
+                btnPublic.onclick = () => {
+                    fetch(`/vault/public/${docId}`, {method:'POST'}).then(() => {
+                        alert('Document shared publicly!');
+                        btnPublic.disabled = true;
+                        btnPublic.innerHTML = '<span title="Shared">✅</span>';
+                    });
+                };
+                toolbarLeft.appendChild(btnPublic);
+
+                // Edit button (GitHub style)
+                const btnEdit = document.createElement('button');
+                btnEdit.innerHTML = '<span title="Edit">✏️</span>';
+                btnEdit.style.cssText = btnStyle;
+                
+                let isEditing = false;
+                let githubEditContainer = null;
+                
+                btnEdit.onclick = () => {
+                    if (!isEditing) {
+                        isEditing = true;
+                        contentDiv.style.display = 'none';
+                        
+                        if (!githubEditContainer) {
+                            githubEditContainer = document.createElement('div');
+                            githubEditContainer.style.cssText = "border: 1px solid var(--border-color); border-radius: 6px; margin-bottom: 20px; background: var(--bg-color); font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;";
+                            
+                            // Header with tabs
+                            const header = document.createElement('div');
+                            header.style.cssText = "background: var(--header-bg); border-bottom: 1px solid var(--border-color); padding: 10px 15px 0 15px; display: flex; border-radius: 6px 6px 0 0;";
+                            
+                            const tabEdit = document.createElement('div');
+                            tabEdit.innerText = "Edit file";
+                            tabEdit.style.cssText = "padding: 8px 16px; cursor: pointer; border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; font-size: 14px; font-weight: 600;";
+                            
+                            const tabPreview = document.createElement('div');
+                            tabPreview.innerText = "Preview";
+                            tabPreview.style.cssText = "padding: 8px 16px; cursor: pointer; border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; font-size: 14px;";
+                            
+                            header.appendChild(tabEdit);
+                            header.appendChild(tabPreview);
+                            githubEditContainer.appendChild(header);
+                            
+                            // Body
+                            const body = document.createElement('div');
+                            body.style.cssText = "padding: 10px;";
+                            
+                            const textarea = document.createElement('textarea');
+                            textarea.style.cssText = "width: 100%; height: calc(100vh - 280px); font-family: monospace; font-size: 14px; padding: 15px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color); color: var(--text-color); box-sizing: border-box; resize: vertical;";
+                            
+                            const previewArea = document.createElement('div');
+                            previewArea.className = "markdown-body";
+                            previewArea.style.cssText = "display: none; padding: 15px; height: calc(100vh - 280px); overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px;";
+                            
+                            body.appendChild(textarea);
+                            body.appendChild(previewArea);
+                            githubEditContainer.appendChild(body);
+                            
+                            // Footer with Commit Button
+                            const footer = document.createElement('div');
+                            footer.style.cssText = "padding: 15px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end;";
+                            
+                            const btnCommit = document.createElement('button');
+                            btnCommit.innerText = "Commit changes...";
+                            btnCommit.style.cssText = "background: #2ea44f; color: white; border: none; padding: 5px 16px; border-radius: 6px; font-weight: 500; cursor: pointer; font-size: 14px; line-height: 20px;";
+                            
+                            const btnCancel = document.createElement('button');
+                            btnCancel.innerText = "Cancel";
+                            btnCancel.style.cssText = "background: transparent; color: #d73a49; border: none; padding: 5px 16px; font-weight: 500; cursor: pointer; font-size: 14px; line-height: 20px; margin-right: 10px;";
+                            
+                            footer.appendChild(btnCancel);
+                            footer.appendChild(btnCommit);
+                            githubEditContainer.appendChild(footer);
+                            
+                            contentDiv.parentNode.insertBefore(githubEditContainer, contentDiv);
+                            
+                            // Modal for commit
+                            const commitModal = document.createElement('div');
+                            commitModal.style.cssText = "display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;";
+                            commitModal.innerHTML = `
+                                <div style="background: var(--bg-color); width: 400px; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border: 1px solid var(--border-color); overflow: hidden;">
+                                    <div style="padding: 16px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: var(--header-bg);">
+                                        <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-color);">Commit changes</h3>
+                                        <span style="cursor: pointer; font-weight: bold; color: var(--text-color);" id="closeCommitModal">&times;</span>
+                                    </div>
+                                    <div style="padding: 16px;">
+                                        <input type="text" id="commitMsg" placeholder="Update document" style="width: 100%; box-sizing: border-box; padding: 5px 12px; margin-bottom: 15px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px; line-height: 20px; background: var(--bg-color); color: var(--text-color);">
+                                        <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                                            <button id="cancelCommitBtn" style="background: var(--header-bg); color: var(--text-color); border: 1px solid var(--border-color); padding: 5px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px;">Cancel</button>
+                                            <button id="confirmCommitBtn" style="background: #2ea44f; color: white; border: none; padding: 5px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px;">Commit changes</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                            document.body.appendChild(commitModal);
+                            
+                            // Logic
+                            const activateTab = (active, inactive, showEl, hideEl) => {
+                                active.style.border = "1px solid var(--border-color)";
+                                active.style.borderBottom = "1px solid var(--bg-color)";
+                                active.style.marginBottom = "-1px";
+                                active.style.color = "var(--text-color)";
+                                
+                                inactive.style.border = "1px solid transparent";
+                                inactive.style.borderBottom = "none";
+                                inactive.style.marginBottom = "0";
+                                inactive.style.color = "#586069";
+                                
+                                showEl.style.display = "block";
+                                hideEl.style.display = "none";
+                            };
+                            
+                            tabEdit.onclick = () => activateTab(tabEdit, tabPreview, textarea, previewArea);
+                            tabPreview.onclick = () => {
+                                activateTab(tabPreview, tabEdit, previewArea, textarea);
+                                previewArea.innerHTML = marked.parse(textarea.value);
+                            };
+                            
+                            textarea.value = markdown;
+                            activateTab(tabEdit, tabPreview, textarea, previewArea);
+                            
+                            btnCancel.onclick = () => {
+                                githubEditContainer.style.display = 'none';
+                                contentDiv.style.display = 'block';
+                                isEditing = false;
+                            };
+                            
+                            btnCommit.onclick = () => {
+                                commitModal.style.display = 'flex';
+                            };
+                            
+                            commitModal.querySelector('#closeCommitModal').onclick = () => commitModal.style.display = 'none';
+                            commitModal.querySelector('#cancelCommitBtn').onclick = () => commitModal.style.display = 'none';
+                            
+                            commitModal.querySelector('#confirmCommitBtn').onclick = async () => {
+                                const btnConfirm = commitModal.querySelector('#confirmCommitBtn');
+                                btnConfirm.innerText = "Committing...";
+                                btnConfirm.disabled = true;
+                                
+                                try {
+                                    const newMarkdown = textarea.value;
+                                    const res = await fetch(`/vault/doc/update/${docId}`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ markdown: newMarkdown, message: commitModal.querySelector('#commitMsg').value })
+                                    });
+                                    
+                                    if (res.ok) {
+                                        markdown = newMarkdown;
+                                        window.location.reload();
+                                    } else {
+                                        alert('Failed to save document');
+                                    }
+                                } catch (err) {
+                                    console.error(err);
+                                    alert('Error saving document');
+                                }
+                                btnConfirm.innerText = "Commit changes";
+                                btnConfirm.disabled = false;
+                            };
+                        } else {
+                            githubEditContainer.querySelector('textarea').value = markdown;
+                            githubEditContainer.style.display = 'block';
+                            
+                            const tabEdit = githubEditContainer.children[0].children[0];
+                            const tabPreview = githubEditContainer.children[0].children[1];
+                            const textarea = githubEditContainer.children[1].children[0];
+                            const previewArea = githubEditContainer.children[1].children[1];
+                            
+                            tabEdit.style.border = "1px solid var(--border-color)";
+                            tabEdit.style.borderBottom = "1px solid var(--bg-color)";
+                            tabEdit.style.marginBottom = "-1px";
+                            tabEdit.style.color = "var(--text-color)";
+                            tabPreview.style.border = "1px solid transparent";
+                            tabPreview.style.borderBottom = "none";
+                            tabPreview.style.marginBottom = "0";
+                            tabPreview.style.color = "#586069";
+                            textarea.style.display = "block";
+                            previewArea.style.display = "none";
+                        }
+                    }
+                };
+                toolbarLeft.appendChild(btnEdit);
+                
+                // Collections button
+                const btnCols = document.createElement('button');
+                btnCols.textContent = 'Collections';
+                btnCols.style.cssText = btnStyle;
+                btnCols.onclick = () => openCollectionsModal(docId);
+                toolbarLeft.appendChild(btnCols);
+                
+                contentDiv.insertBefore(actionToolbar, contentDiv.firstChild);
+                contentDiv.insertBefore(askDocContainer, actionToolbar);
+                
+                function highlightTextInDOM(root, textToHighlight, color, elementToAppend = null, itemData = null, annotationCounter = null) {
+                    const text = textToHighlight;
+                    if (!text) return;
+                    
+                    // Strip markdown from snippet by rendering it and taking textContent
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = marked.parse(text);
+                    const plainSnippet = tempDiv.textContent;
+                    
+                    const walker = document.createTreeWalker(
+                        root, 
+                        NodeFilter.SHOW_TEXT, 
+                        {
+                            acceptNode: function(node) {
+                                if (node.parentNode && node.parentNode.closest('.ai-block')) {
+                                    return NodeFilter.FILTER_REJECT;
+                                }
+                                return NodeFilter.FILTER_ACCEPT;
+                            }
+                        }, 
+                        false
+                    );
+                    let node;
+                    const textNodes = [];
+                    while (node = walker.nextNode()) textNodes.push(node);
+                    
+                    let fullText = textNodes.map(n => n.nodeValue).join('');
+                    let snippetNoSpace = plainSnippet.replace(/\s+/g, '').toLowerCase();
+                    let fullTextNoSpace = fullText.replace(/\s+/g, '').toLowerCase();
+                    
+                    let matchIdxNoSpace = fullTextNoSpace.indexOf(snippetNoSpace);
+                    if (matchIdxNoSpace !== -1) {
+                        let noSpaceCount = 0;
+                        let startIdx = -1, endIdx = -1;
+                        for (let i = 0; i < fullText.length; i++) {
+                            if (!/\s/.test(fullText[i])) {
+                                if (noSpaceCount === matchIdxNoSpace) startIdx = i;
+                                if (noSpaceCount === matchIdxNoSpace + snippetNoSpace.length - 1) {
+                                    endIdx = i; break;
+                                }
+                                noSpaceCount++;
+                            }
+                        }
+                        
+                        if (startIdx !== -1 && endIdx !== -1) {
+                            let currentIdx = 0, startNodeIdx = -1, startOffset = 0, endNodeIdx = -1, endOffset = 0;
+                            for (let i = 0; i < textNodes.length; i++) {
+                                let len = textNodes[i].nodeValue.length;
+                                if (startNodeIdx === -1 && currentIdx + len > startIdx) {
+                                    startNodeIdx = i; startOffset = startIdx - currentIdx;
+                                }
+                                if (endNodeIdx === -1 && currentIdx + len > endIdx) {
+                                    endNodeIdx = i; endOffset = endIdx - currentIdx + 1; break;
+                                }
+                                currentIdx += len;
+                            }
+                            
+                            if (startNodeIdx !== -1 && endNodeIdx !== -1) {
+                                try {
+                                    const nodesToWrap = [];
+                                for (let i = startNodeIdx; i <= endNodeIdx; i++) {
+                                    const node = textNodes[i];
+                                    let start = (i === startNodeIdx) ? startOffset : 0;
+                                    let end = (i === endNodeIdx) ? endOffset : node.nodeValue.length;
+                                    if (start < end) {
+                                        nodesToWrap.push({ node, start, end });
+                                    }
+                                }
+                                
+                                const modifiedElements = new Set();
+                                
+                                nodesToWrap.forEach(({ node, start, end }) => {
+                                    const middleText = node.nodeValue.substring(start, end);
+                                    if (!middleText.trim()) return;
+                                    
+                                    const span = document.createElement('span');
+                                    span.className = 'annotation-highlight';
+                                    span.style.backgroundColor = color;
+                                    span.style.color = color === '#000000' ? '#ffffff' : '#000000';
+                                    if (itemData) {
+                                        span.dataset.annotationUrl = itemData.url || '';
+                                    }
+                                    span.textContent = middleText;
+                                    modifiedElements.add(span);
+                                    
+                                    const beforeText = node.nodeValue.substring(0, start);
+                                    const afterText = node.nodeValue.substring(end);
+                                    
+                                    const fragment = document.createDocumentFragment();
+                                    if (beforeText) fragment.appendChild(document.createTextNode(beforeText));
+                                    fragment.appendChild(span);
+                                    if (afterText) fragment.appendChild(document.createTextNode(afterText));
+                                    
+                                    node.parentNode.replaceChild(fragment, node);
+                                });
+                                
+                                let insertPoint = null;
+                                const elArr = Array.from(modifiedElements);
+                                if (elArr.length > 0) {
+                                    const lastEl = elArr[elArr.length - 1];
+                                    insertPoint = { parent: lastEl.parentNode, next: lastEl.nextSibling };
+                                }
+                                
+                                    let marker = null;
+                                    if (annotationCounter !== null) {
+                                        marker = document.createElement('sup');
+                                        marker.className = 'annotation-marker';
+                                        marker.style.cssText = "cursor: pointer; color: #8b5cf6; font-weight: bold; margin-left: 2px; padding: 0 3px; background: rgba(139, 92, 246, 0.1); border-radius: 3px;";
+                                        marker.innerText = `[${annotationCounter}]`;
+                                        
+                                        let dateStr = 'Unknown';
+                                        if (itemData && (itemData.dateCreated || itemData.datePublished)) {
+                                            try { dateStr = new Date(itemData.dateCreated || itemData.datePublished).toLocaleString(); } catch(e) {}
+                                        } else if (itemData && Array.isArray(itemData.creator)) {
+                                            const cWithDate = itemData.creator.find(c => c.dateCreated || c.datePublished);
+                                            if (cWithDate) {
+                                                try { dateStr = new Date(cWithDate.dateCreated || cWithDate.datePublished).toLocaleString(); } catch(e) {}
+                                            }
+                                        } else if (itemData && itemData.creator && (itemData.creator.dateCreated || itemData.creator.datePublished)) {
+                                            try { dateStr = new Date(itemData.creator.dateCreated || itemData.creator.datePublished).toLocaleString(); } catch(e) {}
+                                        }
+                                        
+                                        let creatorName = 'Unknown';
+                                        if (itemData && itemData.creator) {
+                                            if (Array.isArray(itemData.creator)) creatorName = itemData.creator.map(c => c.name || c.id || 'Unknown').join(', ');
+                                            else creatorName = itemData.creator.name || itemData.creator.id || 'Unknown';
+                                        }
+                                        
+                                        marker.onclick = (e) => {
+                                            e.stopPropagation();
+                                            const existing = document.getElementById('provenance-popup');
+                                            if (existing) existing.remove();
+                                            
+                                            const popup = document.createElement('div');
+                                            popup.id = 'provenance-popup';
+                                            popup.style.cssText = "position: absolute; background: var(--bg-color); border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); z-index: 1000; font-size: 0.9rem; width: 320px; color: var(--text-color); font-family: 'Inter', sans-serif;";
+                                            
+                                            popup.innerHTML = `<h4 style="margin:0 0 10px 0; color: var(--accent-color); border-bottom: 1px solid var(--border-color); padding-bottom: 5px;">Annotation Provenance</h4>
+                                                <div style="margin-bottom: 8px;"><strong>Creator:</strong> <span style="opacity: 0.8;">${creatorName}</span></div>
+                                                <div style="margin-bottom: 8px;"><strong>Date:</strong> <span style="opacity: 0.8;">${dateStr}</span></div>
+                                                <div><strong>Link:</strong> <a href="${(itemData ? itemData.url : '')}" target="_blank" style="color: #8b5cf6; text-decoration: underline;">${(itemData && itemData.url ? itemData.url.split('/').pop() : '')}</a></div>
+                                            `;
+                                            
+                                            popup.style.left = e.pageX + 'px';
+                                            popup.style.top = (e.pageY + 15) + 'px';
+                                            
+                                            const closePopup = (ev) => {
+                                                if (!popup.contains(ev.target) && ev.target !== marker) {
+                                                    popup.remove();
+                                                    document.removeEventListener('click', closePopup);
+                                                }
+                                            };
+                                            
+                                            document.body.appendChild(popup);
+                                            setTimeout(() => document.addEventListener('click', closePopup), 0);
+                                        };
+                                    }
+                                    
+                                    // Now append marker and elementToAppend safely
+                                    if (insertPoint) {
+                                        if (marker) insertPoint.parent.insertBefore(marker, insertPoint.next);
+                                        if (elementToAppend) {
+                                            insertPoint.parent.insertBefore(elementToAppend, insertPoint.next ? marker.nextSibling : null);
+                                        }
+                                    } else {
+                                        // Fallback if execCommand did not mutate DOM
+                                        const endRange = highlightRange.cloneRange();
+                                        endRange.collapse(false);
+                                        if (marker) endRange.insertNode(marker);
+                                        if (elementToAppend) {
+                                            const blockRange = highlightRange.cloneRange();
+                                            blockRange.collapse(false);
+                                            blockRange.insertNode(elementToAppend);
+                                        }
+                                    }
+                                } catch(e) {
+                                    console.error("Error highlighting text:", e);
+                                }
+                                sel.removeAllRanges();
+                                return true;
+                            }
+                        }
+                    } else {
+                        console.warn("highlightTextInDOM: Could not find exact text match in DOM. Text:", snippetNoSpace.substring(0, 50) + "...");
+                    }
+                    return null;
+                }
+                
+                generateTOC(contentDiv);
+                
+                // Handle inline intra-page links
+                contentDiv.querySelectorAll('a[href^="#"]').forEach(a => {
+                    a.addEventListener('click', (e) => {
+                        const targetId = a.getAttribute('href').substring(1);
+                        const targetElement = document.getElementById(targetId);
+                        if (targetElement) {
+                            e.preventDefault();
+                            targetElement.scrollIntoView({ behavior: 'smooth' });
+                            history.pushState(null, null, '#' + targetId);
+                        }
+                    });
+                });
+                
+                // Scroll to hash if present on initial load
+                if (window.location.hash) {
+                    setTimeout(() => {
+                        const targetId = window.location.hash.substring(1);
+                        const targetElement = document.getElementById(targetId);
+                        if (targetElement) {
+                            targetElement.scrollIntoView({ behavior: 'smooth' });
+                        }
+                    }, 100);
+                }
+                
+                // Fetch JSON-LD provenance
+                try {
+                    const jsonldRes = await fetch(`/vault/${docId}.jsonld?t=${Date.now()}`);
+                    if (jsonldRes.ok) {
+                        const data = await jsonldRes.json();
+                        
+                        // Inject Status Banner
+                        if (data.reviewStatus) {
+                            let bannerColor = '#d4edda';
+                            let bannerText = 'Snippet';
+                            let bannerTextColor = '#000';
+                            let status = data.reviewStatus.toLowerCase();
+                            
+                            if (status === 'approve' || status === 'approved') { bannerColor = '#d4edda'; bannerText = 'Approved Snippet'; }
+                            if (status === 'reject' || status === 'rejected') { bannerColor = '#ffcccc'; bannerText = 'Rejected Snippet'; }
+                            if (status === 'hide') { bannerColor = '#000000'; bannerTextColor = '#fff'; bannerText = 'Hidden Snippet'; }
+                            if (status === 'note') { bannerColor = '#ffeb3b'; bannerText = 'Note Snippet'; }
+                            
+                            const banner = document.createElement('div');
+                            banner.style.cssText = `background-color: ${bannerColor}; color: ${bannerTextColor}; padding: 10px; margin-bottom: 20px; border-radius: 5px; font-weight: bold; text-align: center; font-size: 1.1rem;`;
+                            banner.textContent = bannerText;
+                            contentDiv.insertBefore(banner, contentDiv.firstChild);
+                        }
+                        
+                        // Extract and display CSV download button if available
+                        if (data.distribution) {
+                            let distArray = Array.isArray(data.distribution) ? data.distribution : [data.distribution];
+                            let csvDist = distArray.find(d => d.encodingFormat === 'text/csv' && d.contentUrl);
+                            if (csvDist) {
+                                const toolbarRight = document.getElementById('action-toolbar-right');
+                                if (toolbarRight) {
+                                    const btnCsv = document.createElement('a');
+                                    btnCsv.href = csvDist.contentUrl;
+                                    btnCsv.target = '_blank';
+                                    btnCsv.innerHTML = '📊 CSV';
+                                    btnCsv.style.cssText = 'padding: 4px 12px; border-radius: 4px; border: 1px solid var(--border-color); cursor: pointer; background: var(--header-bg); color: var(--text-color); font-size: 0.85rem; text-decoration: none; display: flex; align-items: center; gap: 5px;';
+                                    toolbarRight.appendChild(btnCsv);
+                                }
+                            }
+                        }
+                        
+                        // Inject Annotations button
+                        if (data.isBasedOn) {
+                            const toolbarLeft = document.getElementById('action-toolbar-left');
+                            if (toolbarLeft) {
+                                let btnAnnotations = document.createElement('button');
+                                btnAnnotations.innerText = 'Annotations';
+                                btnAnnotations.style.cssText = 'padding: 4px 12px; border-radius: 4px; border: 1px solid var(--border-color); cursor: pointer; background: var(--header-bg); color: var(--text-color); font-size: 0.85rem;';
+                                btnAnnotations.onclick = async () => {
+                                    btnAnnotations.disabled = true;
+                                    btnAnnotations.innerText = 'Loading...';
+                                    
+                                    let basedOnArray = Array.isArray(data.isBasedOn) ? data.isBasedOn : [data.isBasedOn];
+                                    let annotationCounter = 1;
+                                    for (const item of basedOnArray) {
+                                        if (item && (item.reviewStatus || (item.url && item.url.includes('/vault/')) || (item.name && (item.name.includes('Snippet from') || item.name.includes('Task Output'))))) {
+                                            try {
+
+                                                
+                                                                                                let snippetText = "";
+                                                let snippetFilename = item.url ? item.url.split('/').pop() : item.name;
+                                                if (!snippetFilename.endsWith('.md')) { snippetFilename += '.md'; }
+                                                
+                                                if (snippetFilename === `${docId}.md`) continue;
+
+                                                if (item.annotationText) {
+                                                    snippetText = item.annotationText;
+                                                } else {
+                                                    const snippetRes = await fetch(`/vault/${snippetFilename}?t=${Date.now()}`);
+                                                    if (snippetRes.ok) {
+                                                        snippetText = await snippetRes.text();
+                                                        snippetText = snippetText.replace(/^\[View Croissant JSON-LD Data\].*?<\/button>\s*/is, '');
+                                                        snippetText = snippetText.replace(/\s*---\s*\*Source Document:\* \[View Original\].*?(?=\s*---|$)/is, '');
+                                                        snippetText = snippetText.replace(/\s*---\s*\*\*Digital Signature:\*\* `.*?`\s*$/is, '');
+                                                    } else {
+                                                        continue;
+                                                    }
+                                                }
+                                                    
+                                                    const color = (item.reviewStatus === 'rejected' || item.reviewStatus === 'reject') ? '#ffcccc' : (item.reviewStatus === 'note' ? '#ffeb3b' : '#d4edda');
+                                                    
+                                                    let textToHighlight = snippetText;
+                                                    let aiType = null;
+                                                    let aiTitle = null;
+                                                    let aiModel = 'AI';
+                                                    
+                                                    if (item.name && item.name.includes('Task Output')) {
+                                                        aiType = 'Task Output';
+                                                        aiTitle = 'Agent Task Result';
+                                                        aiModel = 'AI Agent';
+                                                        // For task outputs, we don't have a specific text to highlight in the original document,
+                                                        // so it will fail to highlight and fall back to the orphan-annotations section at the bottom.
+                                                    } else if (item.reviewStatus === 'note') {
+                                                        const taskMatch = snippetText.match(/\*\*Task Generated by (.*?)\*\*\s*\*Objective: (.*?)\*\s*\*Context:\*\s*>\s*(.*?)\s*\*\*Claude Prompt:\*\*\s*(.*)/s);
+                                                        const qaMatch = snippetText.match(/\*\*Context:\*\*\s*>\s*(.*?)\s*(?:===\s*PREVIOUS Q&A\s*===.*?)?(?:===\s*CURRENT Q&A\s*===\s*)?\*\*Question:\*\*\s*(.*?)\s*\*\*Answer(?: by (.*?))?:\*\*\s*(.*)/s);
+                                                        const noteMatch = snippetText.match(/\*\*User Note:\*\*\s*(.*?)\s*---\s*\*Source Text:\*\s*(.*)/s);
+                                                        
+                                                        if (taskMatch) {
+                                                            aiType = 'Task Plan';
+                                                            aiModel = taskMatch[1].trim();
+                                                            aiTitle = taskMatch[2].trim();
+                                                            textToHighlight = taskMatch[3].trim().replace(/\n>\s*/g, '\n');
+                                                            snippetText = taskMatch[4].trim();
+                                                        } else if (qaMatch) {
+                                                            aiType = 'Answer';
+                                                            textToHighlight = qaMatch[1].trim().replace(/\n>\s*/g, '\n');
+                                                            aiTitle = qaMatch[2].trim();
+                                                            aiModel = qaMatch[3] ? qaMatch[3].trim() : 'AI';
+                                                            snippetText = qaMatch[4].trim();
+                                                        } else if (noteMatch) {
+                                                            aiType = 'Note';
+                                                            aiTitle = 'User Note';
+                                                            snippetText = noteMatch[1].trim();
+                                                            textToHighlight = noteMatch[2].trim();
+                                                        } else {
+                                                            // Fallback: If no specific markdown pattern perfectly matches, preserve the whole snippet
+                                                            aiType = 'Note';
+                                                            aiTitle = 'Annotation';
+                                                            textToHighlight = item.annotationText || snippetText;
+                                                        }
+                                                    }
+
+                                                    let blockToInsert = null;
+                                                    if (aiType) {
+                                                        // Pass false for isCollapsed so that loaded annotations are fully expanded and visible by default as requested by the user
+                                                        blockToInsert = createInlineAIBlock(aiType, aiTitle, snippetText, aiModel, false);
+                                                    }
+                                                    let highlightSuccess = highlightTextInDOM(contentDiv, textToHighlight, color, blockToInsert, item, annotationCounter);
+                                                    
+                                                    if (highlightSuccess) {
+                                                        annotationCounter++;
+                                                    } else if (blockToInsert) {
+                                                        let orphanContainer = document.getElementById('orphan-annotations');
+                                                        if (!orphanContainer) {
+                                                            orphanContainer = document.createElement('div');
+                                                            orphanContainer.id = 'orphan-annotations';
+                                                            orphanContainer.style.cssText = "margin-top: 40px; padding-top: 20px; border-top: 2px dashed var(--border-color);";
+                                                            orphanContainer.innerHTML = '<h3 style="color: var(--accent-color); margin-bottom: 15px;">AI annotations</h3><p style="font-size: 0.9em; opacity: 0.8; margin-bottom: 20px;">The following annotations could not be automatically anchored to their original text context.</p>';
+                                                            contentDiv.appendChild(orphanContainer);
+                                                        }
+                                                        
+                                                        const marker = document.createElement('sup');
+                                                        marker.className = 'annotation-marker';
+                                                        marker.style.cssText = "cursor: pointer; color: #8b5cf6; font-weight: bold; margin-left: 5px; padding: 0 3px; background: rgba(139, 92, 246, 0.1); border-radius: 3px;";
+                                                        marker.innerText = `[${annotationCounter}]`;
+                                                        
+                                                        let dateStr = 'Unknown';
+                                                        if (item && (item.dateCreated || item.datePublished)) {
+                                                            try { dateStr = new Date(item.dateCreated || item.datePublished).toLocaleString(); } catch(e) {}
+                                                        } else if (item && Array.isArray(item.creator)) {
+                                                            const cWithDate = item.creator.find(c => c.dateCreated || c.datePublished);
+                                                            if (cWithDate) {
+                                                                try { dateStr = new Date(cWithDate.dateCreated || cWithDate.datePublished).toLocaleString(); } catch(e) {}
+                                                            }
+                                                        } else if (item && item.creator && (item.creator.dateCreated || item.creator.datePublished)) {
+                                                            try { dateStr = new Date(item.creator.dateCreated || item.creator.datePublished).toLocaleString(); } catch(e) {}
+                                                        }
+                                                        let creatorName = 'Unknown';
+                                                        if (item && item.creator) {
+                                                            if (Array.isArray(item.creator)) creatorName = item.creator.map(c => c.name || c.id || 'Unknown').join(', ');
+                                                            else creatorName = item.creator.name || item.creator.id || 'Unknown';
+                                                        }
+                                                        
+                                                        marker.onclick = (e) => {
+                                                            e.stopPropagation();
+                                                            const existing = document.getElementById('provenance-popup');
+                                                            if (existing) existing.remove();
+                                                            
+                                                            const popup = document.createElement('div');
+                                                            popup.id = 'provenance-popup';
+                                                            popup.style.cssText = "position: absolute; background: var(--bg-color); border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.2); z-index: 1000; font-size: 0.9rem; width: 320px; color: var(--text-color); font-family: 'Inter', sans-serif;";
+                                                            
+                                                            popup.innerHTML = `<h4 style="margin:0 0 10px 0; color: var(--accent-color); border-bottom: 1px solid var(--border-color); padding-bottom: 5px;">Annotation Provenance</h4>
+                                                                <div style="margin-bottom: 8px;"><strong>Creator:</strong> <span style="opacity: 0.8;">${creatorName}</span></div>
+                                                                <div style="margin-bottom: 8px;"><strong>Date:</strong> <span style="opacity: 0.8;">${dateStr}</span></div>
+                                                                <div><strong>Link:</strong> <a href="${(item ? item.url : '')}" target="_blank" style="color: #8b5cf6; text-decoration: underline;">${(item && item.url ? item.url.split('/').pop() : '')}</a></div>
+                                                            `;
+                                                            
+                                                            popup.style.left = e.pageX + 'px';
+                                                            popup.style.top = (e.pageY + 15) + 'px';
+                                                            
+                                                            const closePopup = (ev) => {
+                                                                if (!popup.contains(ev.target) && ev.target !== marker) {
+                                                                    popup.remove();
+                                                                    document.removeEventListener('click', closePopup);
+                                                                }
+                                                            };
+                                                            
+                                                            document.body.appendChild(popup);
+                                                            setTimeout(() => document.addEventListener('click', closePopup), 0);
+                                                        };
+                                                        
+                                                        blockToInsert.firstChild.appendChild(marker);
+                                                        // Prepend the missing context text inside the AI block to make it clear what this was about
+                                                        const contextHint = document.createElement('div');
+                                                        contextHint.style.cssText = "font-size: 0.85em; font-style: italic; opacity: 0.7; margin-bottom: 10px; padding: 10px; background: rgba(0,0,0,0.05); border-radius: 4px;";
+                                                        contextHint.innerText = "Context: " + (textToHighlight.length > 100 ? textToHighlight.substring(0, 100) + '...' : textToHighlight);
+                                                        blockToInsert.querySelector('.markdown-body').insertBefore(contextHint, blockToInsert.querySelector('.markdown-body').firstChild);
+                                                        
+                                                        orphanContainer.appendChild(blockToInsert);
+                                                    }
+                                            } catch (err) {
+                                                console.error("Error rendering annotation:", err, item);
+                                            }
+                                        }
+                                    }
+                                    btnAnnotations.disabled = true;
+                                    btnAnnotations.innerText = 'Annotations';
+                                    btnAnnotations.style.background = '#e9ecef';
+                                    // Add legend after the Annotations button in the toolbar
+                                    if (!document.getElementById('annotation-legend')) {
+                                        const legendDiv = document.createElement('div');
+                                        legendDiv.id = 'annotation-legend';
+                                        legendDiv.style.cssText = "margin-left: 15px; font-size: 0.85rem; display: flex; gap: 15px; align-items: center; color: var(--text-color);";
+                                        legendDiv.innerHTML = `
+                                            <span style="display: flex; align-items: center; gap: 5px;"><span style="display: inline-block; width: 12px; height: 12px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 2px;"></span> Approved</span>
+                                            <span style="display: flex; align-items: center; gap: 5px;"><span style="display: inline-block; width: 12px; height: 12px; background: #ffcccc; border: 1px solid #f5c6cb; border-radius: 2px;"></span> Rejected</span>
+                                            <span style="display: flex; align-items: center; gap: 5px;"><span style="display: inline-block; width: 12px; height: 12px; background: #000000; border: 1px solid #000000; border-radius: 2px;"></span> Hidden</span>
+                                            <span style="display: flex; align-items: center; gap: 5px;"><span style="display: inline-block; width: 12px; height: 12px; background: #ffeb3b; border: 1px solid #fbc02d; border-radius: 2px;"></span> Comments</span>
+                                        `;
+                                        btnAnnotations.parentNode.insertBefore(legendDiv, btnAnnotations.nextSibling);
+                                    }
+                                };
+                                toolbarLeft.appendChild(btnAnnotations);
+                                
+                                if (window.location.href.includes('highlights=on') || window.location.href.endsWith('/annotations')) {
+                                    btnAnnotations.click();
+                                }
+                            }
+                        }
+
+                        let aiModel = "Unknown";
+                        let userDid = "Unknown";
+                        if (Array.isArray(data.creator)) {
+                            data.creator.forEach(c => {
+                                if (c['@type'] === 'SoftwareApplication') aiModel = c.name || c['@id'];
+                                if (c['@type'] === 'Person') userDid = c.identifier || c['@id'] || c.name;
+                            });
+                        } else if (data.creator) {
+                            if (data.creator['@type'] === 'SoftwareApplication') aiModel = data.creator.name || data.creator['@id'];
+                            if (data.creator['@type'] === 'Person') userDid = data.creator.identifier || data.creator['@id'] || data.creator.name;
+                        }
+                        const unf = (data.service && data.service[0] && data.service[0].unf) ? data.service[0].unf : "N/A";
+                        const sig = (data.signature && data.signature.value) ? data.signature.value : "N/A";
+                        const did = data.id || "N/A";
+                        
+                        document.getElementById('toc').style.display = 'block';
+                        const provHtml = `
+                            <div style="margin-top: 30px; padding-top: 15px; border-top: 1px solid var(--border-color); font-size: 0.75rem; line-height: 1.4; font-family: monospace;">
+                                <h4 style="margin-top:0; margin-bottom:10px; color:var(--text-color); font-size: 0.9rem; font-family: -apple-system, sans-serif;">Provenance</h4>
+                                <div style="margin-bottom:8px;"><strong>AI Model:</strong><br><span style="word-break:break-all; color:var(--text-color); opacity:0.8;">${aiModel}</span></div>
+                                <div style="margin-bottom:8px;"><strong>Creator:</strong><br><span style="word-break:break-all; color:var(--text-color); opacity:0.8;">${userDid}</span></div>
+                                <div style="margin-bottom:8px;"><strong>DID:</strong><br><span style="word-break:break-all; color:var(--text-color); opacity:0.8;">${did}</span></div>
+                                <div style="margin-bottom:8px;"><strong>UNF:</strong><br><span style="word-break:break-all; color:var(--text-color); opacity:0.8;">${unf}</span></div>
+                                <div style="margin-bottom:8px;"><strong>Signature:</strong><br><span style="word-break:break-all; color:var(--text-color); opacity:0.8;">${sig}</span></div>
+                            </div>
+                        `;
+                        document.getElementById('toc').innerHTML += provHtml;
+                    }
+                } catch (e) {
+                    console.error("Failed to load provenance", e);
+                }
+                
+                document.getElementById('loading').style.display = 'none';
+                contentDiv.style.display = 'block';
+                document.getElementById('page-footer').style.display = 'block';
+                
+            } catch (err) {
+                document.getElementById('loading').innerHTML = `
+                    <div style="color: #cf222e; text-align: center;">
+                        <h3>Failed to load document</h3>
+                        <p>${err.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        loadDocument();
+    </script>
+
+    <!-- Collections Modal -->
+    <div id="collections-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+        <div style="background: var(--bg-color); width: 400px; max-width: 90%; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); display: flex; flex-direction: column;">
+            <div style="padding: 15px 20px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: var(--header-bg); border-radius: 8px 8px 0 0;">
+                <h3 style="margin: 0; font-size: 1.1rem; color: var(--text-color);">Add to Collection</h3>
+                <button onclick="document.getElementById('collections-modal').style.display='none'" style="background: none; border: none; cursor: pointer; font-size: 1.2rem; color: var(--text-color);">&times;</button>
+            </div>
+            <div style="padding: 20px;">
+                <div id="active-collections-container" style="margin-bottom: 15px;"></div>
+                <input type="text" id="col-search-input" placeholder="Search collections by keyword..." style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; background: var(--header-bg); color: var(--text-color);">
+                <div id="col-search-results" style="max-height: 300px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 4px; background: var(--header-bg);">
+                    <!-- Results populate here -->
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let allCollections = [];
+        let currentDocId = null;
+        
+        async function openCollectionsModal(docId) {
+            currentDocId = docId;
+            document.getElementById('collections-modal').style.display = 'flex';
+            const resultsDiv = document.getElementById('col-search-results');
+            resultsDiv.innerHTML = '<div style="padding: 10px; color: #666; text-align: center;">Loading...</div>';
+            
+            try {
+                const res = await fetch('/api/collections');
+                const data = await res.json();
+                allCollections = data.collections || [];
+                renderActiveCollections();
+                renderCollectionResults(allCollections);
+            } catch(e) {
+                resultsDiv.innerHTML = '<div style="padding: 10px; color: red;">Failed to load collections</div>';
+            }
+        }
+        
+        function renderActiveCollections() {
+            const container = document.getElementById('active-collections-container');
+            const activeCols = allCollections.filter(c => c.items && c.items.includes(currentDocId));
+            
+            if (activeCols.length === 0) {
+                container.innerHTML = '';
+                return;
+            }
+            
+            let html = '<div style="font-size: 0.9rem; margin-bottom: 8px; color: #666;">Currently in:</div><div style="display: flex; flex-wrap: wrap; gap: 8px;">';
+            activeCols.forEach(c => {
+                html += `
+                    <div style="display: flex; align-items: center; background: #1a73e8; color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.85rem;">
+                        <span>${c.name}</span>
+                        <span onclick="removeFromCollection('${c.id}')" style="margin-left: 6px; cursor: pointer; font-weight: bold; background: rgba(0,0,0,0.2); border-radius: 50%; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center;">&times;</span>
+                    </div>
+                `;
+            });
+            html += '</div><hr style="border: 0; border-top: 1px solid var(--border-color); margin-top: 15px;">';
+            container.innerHTML = html;
+        }
+        
+        async function removeFromCollection(collectionId) {
+            try {
+                const res = await fetch(`/api/collections/${collectionId}/remove`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ docId: currentDocId })
+                });
+                
+                if (res.ok) {
+                    const data = await res.json();
+                    const index = allCollections.findIndex(c => c.id === collectionId);
+                    if (index !== -1) {
+                        allCollections[index] = data.collection;
+                    }
+                    renderActiveCollections();
+                } else {
+                    alert('Failed to remove from collection');
+                }
+            } catch(e) {
+                alert('Error removing from collection');
+            }
+        }
+        
+        document.getElementById('col-search-input').addEventListener('input', (e) => {
+            const q = e.target.value.toLowerCase();
+            const filtered = allCollections.filter(c => 
+                (c.name && c.name.toLowerCase().includes(q)) || 
+                (c.description && c.description.toLowerCase().includes(q))
+            );
+            renderCollectionResults(filtered);
+        });
+        
+        function renderCollectionResults(collections) {
+            const resultsDiv = document.getElementById('col-search-results');
+            const toShow = collections.slice(0, 10);
+            
+            if (toShow.length === 0) {
+                resultsDiv.innerHTML = '<div style="padding: 10px; color: #666; text-align: center;">No collections found</div>';
+                return;
+            }
+            
+            let html = '';
+            toShow.forEach(c => {
+                html += `
+                    <div class="col-result-item" style="padding: 10px; border-bottom: 1px solid var(--border-color); cursor: pointer; transition: background 0.2s;" 
+                         onclick="addToCollection('${c.id}')"
+                         onmouseover="this.style.background='var(--button-bg)'" 
+                         onmouseout="this.style.background='var(--header-bg)'">
+                        <div style="font-weight: bold; color: #1a73e8;">${c.name}</div>
+                        ${c.description ? `<div style="font-size: 0.85rem; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${c.description}</div>` : ''}
+                    </div>
+                `;
+            });
+            resultsDiv.innerHTML = html;
+        }
+        
+        async function addToCollection(collectionId) {
+            if (!currentDocId) return;
+            try {
+                const res = await fetch(`/api/collections/${collectionId}/add`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ docId: currentDocId })
+                });
+                
+                if (res.ok) {
+                    const data = await res.json();
+                    const index = allCollections.findIndex(c => c.id === collectionId);
+                    if (index !== -1) {
+                        allCollections[index] = data.collection;
+                    }
+                    renderActiveCollections();
+                    // Optional: document.getElementById('collections-modal').style.display = 'none';
+                } else {
+                    const data = await res.json();
+                    alert('Failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch(e) {
+                alert('Error adding to collection');
+            }
+        }
+    </script>
+    <div id="add-resource-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">
+        <div style="background: var(--bg-color); padding: 20px; border-radius: 8px; width: 400px; max-width: 90%; border: 1px solid var(--border-color);">
+            <h3 style="margin-top: 0; color: var(--text-color);">Add Resource</h3>
+            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-color);">Enter the URL of the resource you want to ingest:</p>
+            <input type="text" id="add-resource-input" placeholder="https://..." style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; background: var(--panel-bg); color: var(--text-color); font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') document.getElementById('add-resource-submit').click()">
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button onclick="document.getElementById('add-resource-modal').style.display='none'" class="theme-toggle">Cancel</button>
+                <button id="add-resource-submit" onclick="var url = document.getElementById('add-resource-input').value; if(url) window.location.href='/dataverse?url=' + encodeURIComponent(url);" style="background-color: #006bb3; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="add-text-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">
+        <div style="background: var(--bg-color); padding: 20px; border-radius: 8px; width: 600px; max-width: 90%; border: 1px solid var(--border-color);">
+            <h3 style="margin-top: 0; color: var(--text-color);">Add Text</h3>
+            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-color);">Paste the text you want to ingest into the vault:</p>
+            <textarea id="add-text-input" placeholder="Enter text here..." style="width: 100%; height: 300px; padding: 8px; margin-bottom: 15px; border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; background: var(--panel-bg); color: var(--text-color); font-family: inherit; font-size: 14px;"></textarea>
+            <div id="add-text-error" style="color: red; display: none; margin-bottom: 10px; font-size: 14px;"></div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button onclick="document.getElementById('add-text-modal').style.display='none'" class="theme-toggle">Cancel</button>
+                <button id="add-text-submit" onclick="
+                    var btn = this;
+                    var text = document.getElementById('add-text-input').value;
+                    if(!text) return;
+                    btn.disabled = true;
+                    btn.innerText = 'Processing... (takes ~2 mins)';
+                    document.getElementById('add-text-error').style.display = 'none';
+                    fetch('/api/text/process', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text: text })
+                    })
+                    .then(r => r.json().then(data => ({ok: r.ok, data})))
+                    .then(res => {
+                        if(res.ok && res.data.redirect_url) {
+                            window.location.href = res.data.redirect_url;
+                        } else {
+                            throw new Error(res.data.detail || 'Failed to process text');
+                        }
+                    })
+                    .catch(e => {
+                        btn.disabled = false;
+                        btn.innerText = 'Ingest';
+                        document.getElementById('add-text-error').innerText = e.message;
+                        document.getElementById('add-text-error').style.display = 'block';
+                    });
+                " style="background-color: #008855; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
+            </div>
+        </div>
+    </div>
+    <footer id="page-footer" style="position: fixed; bottom: 0; left: 0; right: 0; margin: 0; padding: 10px 20px; font-size: 0.85rem; color: #888; background-color: var(--bg-color); border-top: 1px solid var(--border-color); z-index: 10000; width: 100%; box-sizing: border-box; font-family: 'Inter', -apple-system, sans-serif; box-shadow: 0 -2px 5px rgba(0,0,0,0.05); display: flex; justify-content: center; align-items: center;">
+        <div style="text-align: center; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap;">
+            <span>Ghostwriter 2.0 UI | Semantic Croissant with CDIF 1.1 (v2.3)</span>
+            <span style="color: #ccc;">|</span>
+            <span>Created by <a href="https://codata.org" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CODATA</a> in <a href="https://cdif4eosc.eu" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CDIF4EOSC</a> under Grant Agreement 101292473</span>
+            <img src="https://www.cdif4eosc.eu/assets/images/eu_flag.svg" alt="EU Flag" style="height: 20px;">
+        </div>
+    </footer>
+</body>
+</html>
