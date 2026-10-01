@@ -554,18 +554,23 @@ async def read_vault_article(url_or_filename: str) -> list[types.TextContent]:
             response.release_conn()
             r_status_code = 200
         except Exception:
-            if not filename.endswith(".gz"):
-                filename += ".gz"
+            candidates = [filename + ".gz"]
+            if filename.endswith(".md"):
+                base = filename[:-3]
+                candidates.extend([base + ".jsonld", base + ".jsonld.gz", base + ".csv", base + ".csv.gz"])
+            
+            r_status_code = 404
+            for cand in candidates:
                 try:
-                    response = m_client.get_object("vault", filename)
+                    response = m_client.get_object("vault", cand)
                     content = response.read()
                     response.close()
                     response.release_conn()
+                    filename = cand
                     r_status_code = 200
+                    break
                 except Exception:
-                    r_status_code = 404
-            else:
-                r_status_code = 404
+                    pass
                 
         if r_status_code == 200:
             import gzip
@@ -1482,62 +1487,7 @@ async def update_vault_document(target_id: str, referenced_ids: list[str], new_c
         new_id = target_id
         
         if new_content is not None:
-            import uuid
-            new_task_id = uuid.uuid4().hex[:16]
-            
-            # Save the new content as a separate file
-            new_md_bytes = new_content.encode("utf-8")
-            await asyncio.to_thread(
-                client.put_object,
-                "vault",
-                f"{new_task_id}.md",
-                io.BytesIO(new_md_bytes),
-                len(new_md_bytes),
-                content_type="text/markdown"
-            )
-                
-            # Save a basic JSON-LD for the new task file
-            summary_text = summary if summary else "Task Output"
-            
-            # Create provenance identifying the AI model if available
-            ai_model = ai_model_override if ai_model_override else "AI Agent"
-            creator_node = [{"@type": "SoftwareApplication", "name": ai_model}]
-            
-            global SERVER_USER_INFO
-            if SERVER_USER_INFO and SERVER_USER_INFO.get("email"):
-                creator_node.append({
-                    "@id": SERVER_USER_INFO.get("email"), 
-                    "@type": "Person",
-                    "name": SERVER_USER_INFO.get("name", "MCP Agent User")
-                })
-            
-            new_jsonld_obj = {
-                "@context": {"@vocab": "https://schema.org/", "cr": "http://mlcommons.org/croissant/"},
-                "@type": "cr:Dataset",
-                "name": f"Task Output for {target_id}",
-                "description": summary_text,
-                "creator": creator_node,
-                "isBasedOn": [{"@type": "CreativeWork", "name": f"{target_id}.md", "url": f"{HOST}/vault/doc/{target_id}"}]
-            }
-            new_jsonld_bytes = json.dumps(new_jsonld_obj, indent=2).encode("utf-8")
-            await asyncio.to_thread(
-                client.put_object,
-                "vault",
-                f"{new_task_id}.jsonld",
-                io.BytesIO(new_jsonld_bytes),
-                len(new_jsonld_bytes),
-                content_type="application/ld+json"
-            )
-            
-            new_doc_url = f"{HOST}/vault/doc/{new_task_id}"
-            if new_doc_url not in final_md:
-                if "### Related AI Analysis" not in final_md:
-                    final_md += "\n\n---\n### Related AI Analysis\n"
-                final_md += f"- [{summary_text}]({new_doc_url})\n"
-            
-            # We also add the new task ID to the referenced_ids so it gets linked in JSON-LD
-            if new_task_id not in referenced_ids:
-                referenced_ids.append(new_task_id)
+            final_md = new_content
         
         # 3. Use new jsonld if provided, else original
         final_jsonld = json.loads(new_jsonld) if new_jsonld is not None else original_jsonld
@@ -4189,6 +4139,8 @@ def main(port: int, transport: str) -> int:
                     "name": data.get("name"),
                     "description": data.get("description", ""),
                     "link": data.get("link", ""),
+                    "parent_id": data.get("parent_id", None),
+                    "is_supercollection": data.get("is_supercollection", False),
                     "created_at": datetime.datetime.utcnow().isoformat() + "Z",
                     "items": []
                 }
@@ -4281,9 +4233,11 @@ def main(port: int, transport: str) -> int:
                 resp.close()
                 resp.release_conn()
                 
-                col_data["name"] = data.get("name", col_data["name"])
-                col_data["description"] = data.get("description", col_data["description"])
-                col_data["link"] = data.get("link", col_data["link"])
+                col_data["name"] = data.get("name", col_data.get("name", ""))
+                col_data["description"] = data.get("description", col_data.get("description", ""))
+                col_data["link"] = data.get("link", col_data.get("link", ""))
+                col_data["parent_id"] = data.get("parent_id", col_data.get("parent_id"))
+                col_data["is_supercollection"] = data.get("is_supercollection", col_data.get("is_supercollection", False))
                 
                 content = json.dumps(col_data).encode("utf-8")
                 m_client.put_object("collections", f"{cid}.json", io.BytesIO(content), len(content), content_type="application/json")
@@ -4339,7 +4293,40 @@ def main(port: int, transport: str) -> int:
                 except Exception:
                     return JSONResponse({"error": "Collection not found"}, status_code=404)
                 
-                items = col_data.get("items", [])
+                items = list(col_data.get("items", []))
+                
+                try:
+                    objects = m_client.list_objects("collections")
+                    all_cols = []
+                    for obj in objects:
+                        if obj.object_name.endswith(".json"):
+                            try:
+                                c_resp = m_client.get_object("collections", obj.object_name)
+                                all_cols.append(json.loads(c_resp.read().decode("utf-8")))
+                                c_resp.close()
+                                c_resp.release_conn()
+                            except Exception:
+                                pass
+                    
+                    descendants = set([cid])
+                    added = True
+                    while added:
+                        added = False
+                        for c in all_cols:
+                            if c.get("id") not in descendants and c.get("parent_id") in descendants:
+                                descendants.add(c.get("id"))
+                                added = True
+                                
+                    for c in all_cols:
+                        if c.get("id") in descendants and c.get("id") != cid:
+                            items.extend(c.get("items", []))
+                            
+                    # Remove duplicates
+                    seen = set()
+                    items = [x for x in items if not (x in seen or seen.add(x))]
+                except Exception as e:
+                    pass
+
                 resolved_items = []
                 if items:
                     es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
@@ -4574,8 +4561,10 @@ def main(port: int, transport: str) -> int:
                     else:
                         return JSONResponse({"detail": "Could not determine generated filename from output"}, status_code=500)
                         
-                if redirect_url.startswith("http"):
-                    redirect_url = "/vault/doc/" + redirect_url.split("/vault/")[-1]
+                doc_id = redirect_url.rstrip("/").split("/")[-1]
+                if doc_id.endswith(".md"):
+                    doc_id = doc_id[:-3]
+                redirect_url = f"/vault/doc/{doc_id}"
                     
                 return JSONResponse({"status": "success", "redirect_url": redirect_url})
                 
@@ -4661,8 +4650,10 @@ def main(port: int, transport: str) -> int:
                     else:
                         return JSONResponse({"detail": "Could not determine generated filename from output"}, status_code=500)
                         
-                if redirect_url.startswith("http"):
-                    redirect_url = "/vault/doc/" + redirect_url.split("/vault/")[-1]
+                doc_id = redirect_url.rstrip("/").split("/")[-1]
+                if doc_id.endswith(".md"):
+                    doc_id = doc_id[:-3]
+                redirect_url = f"/vault/doc/{doc_id}"
                     
                 return JSONResponse({"status": "success", "redirect_url": redirect_url})
                 
@@ -4842,13 +4833,78 @@ def main(port: int, transport: str) -> int:
                     else:
                         return JSONResponse({"detail": "Could not determine generated filename from output"}, status_code=500)
                         
-                if redirect_url.startswith("http"):
-                    redirect_url = "/vault/doc/" + redirect_url.split("/vault/")[-1]
+                doc_id = redirect_url.rstrip("/").split("/")[-1]
+                if doc_id.endswith(".md"):
+                    doc_id = doc_id[:-3]
+                redirect_url = f"/vault/doc/{doc_id}"
                     
                 return JSONResponse({"status": "success", "redirect_url": redirect_url})
                 
             except Exception as e:
                 print(f"Error processing delpher url: {e}")
+                return JSONResponse({"detail": str(e)}, status_code=500)
+
+        async def view_add(request):
+            import os
+            from starlette.responses import FileResponse
+            file_path = os.path.join(os.path.dirname(__file__), "static/generic_loading.html")
+            if not os.path.exists(file_path):
+                file_path = "api/static/generic_loading.html"
+            return FileResponse(file_path)
+
+        async def process_generic(request):
+            import asyncio
+            import re
+            import os
+            from starlette.responses import JSONResponse
+            
+            url = request.query_params.get("url")
+            
+            if not url:
+                return JSONResponse({"detail": "Missing url parameter"}, status_code=400)
+            
+            try:
+                script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../convertors/url_to_croissant.py"))
+                if not os.path.exists(script_path):
+                    script_path = "convertors/url_to_croissant.py"
+                    
+                cmd = ["python3", script_path, url, "--elastic"]
+                
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await process.communicate()
+                
+                if process.returncode != 0:
+                    return JSONResponse({"detail": f"Conversion failed: {stderr.decode('utf-8')}"}, status_code=500)
+                    
+                output = stdout.decode('utf-8')
+                
+                match = re.search(r"Extracted markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+                translated_match = re.search(r"Translated markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+                
+                if translated_match:
+                    redirect_url = translated_match.group(1)
+                elif match:
+                    redirect_url = match.group(1)
+                else:
+                    file_match = re.search(r"Extracted markdown saved to [^/]+/([^/]+)/([a-zA-Z0-9_-]+\.md)", output)
+                    if file_match:
+                        redirect_url = f"/vault/doc/{file_match.group(2)}"
+                    else:
+                        return JSONResponse({"detail": "Could not determine generated filename from output"}, status_code=500)
+                        
+                doc_id = redirect_url.rstrip("/").split("/")[-1]
+                if doc_id.endswith(".md"):
+                    doc_id = doc_id[:-3]
+                redirect_url = f"/vault/doc/{doc_id}"
+                    
+                return JSONResponse({"status": "success", "redirect_url": redirect_url})
+                
+            except Exception as e:
+                print(f"Error processing generic url: {e}")
                 return JSONResponse({"detail": str(e)}, status_code=500)
         
     if transport == "sse":
@@ -4864,7 +4920,9 @@ def main(port: int, transport: str) -> int:
                 Route("/api/dataverse/process", endpoint=process_dataverse, methods=["POST"]),
                 Route("/delpher", endpoint=view_delpher),
                 Route("/api/delpher/process", endpoint=process_delpher, methods=["POST"]),
-                Route("/collections_index", endpoint=view_collections_index),
+                Route("/add", endpoint=view_add),
+                Route("/api/generic/process", endpoint=process_generic, methods=["POST"]),
+                Route("/collectionsindex", endpoint=view_collections_index),
                 Route("/api/text/process", endpoint=process_text, methods=["POST"]),
                 Route("/logo.png", endpoint=serve_logo),
                 Route("/", endpoint=index),
@@ -4883,7 +4941,7 @@ def main(port: int, transport: str) -> int:
                 Route("/api/collections/{id}", endpoint=api_collections_get_single, methods=["GET"]),
                 Route("/api/collections/{id}/resolved", endpoint=api_collections_get_resolved, methods=["GET"]),
                 Route("/api/collections/{id}/ask", endpoint=api_collections_ask, methods=["POST"]),
-                Route("/api/collections_index/ask", endpoint=api_collections_index_ask, methods=["POST"]),
+                Route("/api/collectionsindex/ask", endpoint=api_collections_index_ask, methods=["POST"]),
                 Route("/collections/{es_id}", endpoint=collection_es_doc_html),
                 Route("/api/collections/{id}", endpoint=api_collections_put, methods=["PUT"]),
                 Route("/api/collections/{id}/add", endpoint=api_collections_add_item, methods=["POST"]),

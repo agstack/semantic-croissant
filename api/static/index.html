@@ -514,7 +514,7 @@
                     <div style="display: flex; gap: 10px;">
                         ${parentId ? `<button id="btn-back-col" data-parent="${allCollections.find(c=>c.id===parentId)?.parent_id || ''}" style="padding: 6px 12px; background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">&larr; Back</button>` : ''}
                         <button id="btn-add-collection" style="padding: 6px 12px; background: var(--accent-color); color: white; border: none; border-radius: 4px; cursor: pointer;">+ Add New ${parentId ? 'Subcollection' : 'Collection'}</button>
-                        <button onclick="window.open('/collections_index', '_blank')" style="padding: 6px 12px; background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">Open Collections</button>
+                        <button onclick="window.open('/collectionsindex', '_blank')" style="padding: 6px 12px; background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">Open Collections</button>
                     </div>
                 </div>
                 <div id="collection-form-container" style="display: none; margin-bottom: 20px; padding: 15px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--header-bg);">

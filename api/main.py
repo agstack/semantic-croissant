@@ -266,6 +266,14 @@ async def view_dataverse():
         file_path = "api/static/dataverse_loading.html"
     return FileResponse(file_path)
 
+@app.get("/add")
+async def view_add():
+    import os
+    file_path = os.path.join(os.path.dirname(__file__), "static/generic_loading.html")
+    if not os.path.exists(file_path):
+        file_path = "api/static/generic_loading.html"
+    return FileResponse(file_path)
+
 @app.get("/dspace")
 async def process_dspace(url: str):
     import urllib.parse
@@ -372,6 +380,53 @@ async def process_dspace(url: str):
     croissant = {k: v for k, v in croissant.items() if v}
     
     return croissant
+
+@app.post("/api/generic/process")
+async def process_generic(url: str = None):
+    import asyncio
+    import re
+    from fastapi import HTTPException
+    
+    if not url:
+        raise HTTPException(status_code=400, detail="Missing required parameter url")
+        
+    import os
+    script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../convertors/url_to_croissant.py"))
+    if not os.path.exists(script_path):
+        script_path = "convertors/url_to_croissant.py"
+        
+    cmd = ["python3", script_path, url, "--elastic"]
+    
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await process.communicate()
+    
+    if process.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"Conversion failed: {stderr.decode('utf-8')}")
+        
+    output = stdout.decode('utf-8')
+    
+    match = re.search(r"Extracted markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+    translated_match = re.search(r"Translated markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+    
+    if translated_match:
+        redirect_url = translated_match.group(1)
+    elif match:
+        redirect_url = match.group(1)
+    else:
+        file_match = re.search(r"Extracted markdown saved to [^/]+/([^/]+)/([a-zA-Z0-9_-]+\.md)", output)
+        if file_match:
+            redirect_url = f"/vault/doc/{file_match.group(2)}"
+        else:
+            raise HTTPException(status_code=500, detail="Could not determine generated filename from output")
+            
+    if redirect_url.startswith("http"):
+        redirect_url = "/vault/doc/" + redirect_url.split("/vault/")[-1]
+        
+    return {"status": "success", "redirect_url": redirect_url}
 
 @app.post("/api/dataverse/process")
 async def process_dataverse(callback: str = None, url: str = None, siteUrl: str = None, datasetPid: str = None):
