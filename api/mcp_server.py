@@ -84,19 +84,18 @@ def get_login_button_html(request=None):
         if name.startswith("did:"):
             name = "User"
         orcid = user.get("orcid", "")
-        orcid_badge = f' <small style="font-size:11px;color:#a0a0b0;">ORCID {orcid}</small>' if orcid else ""
-        login_btn_html = ""
-        dropdown_btn = f'''<button onclick="if(confirm('Log out?')) {{ document.cookie='auth_did=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'; fetch('/api/auth/logout', {{method:'POST'}}).then(()=>window.location.href='/'); }}" style="width:100%; padding:10px; text-align:left; background:none; border:none; cursor:pointer; font-size:14px; color:#d93025;">Logout</button>'''
+        orcid_badge = f'<br><small style="font-size:11px;color:#888;font-weight:normal;">ORCID {orcid}</small>' if orcid else ""
         
         if name == "Guest":
-            login_btn_html = '<button class="theme-toggle" onclick="window.location.href=\'/login\'" style="background-color: #4285f4; color: white; border: none; font-weight: 500; margin-left: 10px;">Login</button>'
-            dropdown_btn = f'''<button onclick="window.location.href='/login'" style="width:100%; padding:10px; text-align:left; background:none; border:none; cursor:pointer; font-size:14px; color:#4285f4;">Login</button>'''
+            return '<div style="position:relative; display:inline-block;"><button class="theme-toggle" onclick="window.location.href=\'/login\'" style="background-color: #4285f4; color: white; border: none; font-weight: 500;">Login</button></div>'
 
-        return f'''<div style="position:relative; display:inline-block; display: flex;" id="user-menu-container">
-            <button class="theme-toggle" onclick="document.getElementById('user-dropdown').style.display = document.getElementById('user-dropdown').style.display === 'block' ? 'none' : 'block'" style="background-color: #f1f3f4; color: #333; border: 1px solid var(--border-color, #ccc); font-weight: 500;">👤 {name}{orcid_badge}</button>
-            {login_btn_html}
-            <div id="user-dropdown" style="display:none; position:absolute; top:100%; right:0; background:white; border:1px solid #ccc; border-radius:4px; box-shadow:0 2px 5px rgba(0,0,0,0.2); z-index:1000; margin-top:5px; min-width:150px;">
-                {dropdown_btn}
+        return f'''<div style="position:relative; display:inline-block;" id="user-menu-container">
+            <button class="theme-toggle" onclick="document.getElementById('user-dropdown').style.display = document.getElementById('user-dropdown').style.display === 'block' ? 'none' : 'block'" style="background-color: transparent; color: inherit; border: 1px solid var(--border-color, #ccc); font-size: 1.2rem; padding: 4px 10px; border-radius: 50%; cursor: pointer;">👤</button>
+            <div id="user-dropdown" style="display:none; position:absolute; top:100%; right:0; background:var(--bg-color, white); border:1px solid var(--border-color, #ccc); border-radius:4px; box-shadow:0 2px 10px rgba(0,0,0,0.1); z-index:1000; margin-top:5px; min-width:200px;">
+                <div style="padding: 12px 15px; border-bottom: 1px solid var(--border-color, #eee); color: var(--text-color, #333); font-size: 14px; white-space: nowrap; font-weight: bold;">
+                    {name}{orcid_badge}
+                </div>
+                <button onclick="if(confirm('Log out?')) {{ document.cookie='auth_did=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'; fetch('/api/auth/logout', {{method:'POST'}}).then(()=>window.location.href='/'); }}" style="width:100%; padding:10px 15px; text-align:left; background:none; border:none; cursor:pointer; font-size:14px; color:#d93025; border-radius: 0 0 4px 4px;">Logout</button>
             </div>
             <script>
                 document.addEventListener('click', function(e) {{
@@ -400,7 +399,7 @@ async def elasticsearch_fulltext_search(q: str, limit: int = 10, format: str = "
     except Exception as e:
         return [types.TextContent(type="text", text=f"Failed to query Elasticsearch: {str(e)}")]
 
-async def build_collection_from_expert(collection_name: str, expert_index: str, query: str) -> list[types.TextContent]:
+async def build_collection_from_expert(collection_name: str, expert_index: str, query: str, is_private: bool = False) -> list[types.TextContent]:
     import os, uuid, datetime, json, httpx, io
     es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
     from minio import Minio
@@ -487,10 +486,26 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
             
         # Step 2: Create collection
         cid = str(uuid.uuid4())
+        
+        owner = None
+        if is_private:
+            auth_file = "/app/.odrl/authorize"
+            if not os.path.exists(auth_file):
+                auth_file = os.path.expanduser("~/.odrl/authorize")
+            if os.path.exists(auth_file):
+                try:
+                    with open(auth_file) as f:
+                        cred = json.load(f)
+                        owner = cred.get("credentialSubject", None)
+                except Exception:
+                    pass
+        
         col_data = {
             "id": cid,
             "name": collection_name,
             "description": f"Automatically generated collection from expert '{expert_index}' for query '{query}'.",
+            "is_private": is_private,
+            "owner": owner,
             "created_at": datetime.datetime.utcnow().isoformat() + "Z",
             "items": doc_ids
         }
@@ -2461,7 +2476,8 @@ Here is detailed information about how every tool works:
         return await build_collection_from_expert(
             collection_name=arguments.get("collection_name"),
             expert_index=arguments.get("expert_index"),
-            query=arguments.get("query")
+            query=arguments.get("query"),
+            is_private=arguments.get("is_private", False)
         )
     elif name == "ask_expert":
         return await ask_expert(
@@ -2657,6 +2673,10 @@ async def list_tools() -> list[types.Tool]:
                     "query": {
                         "type": "string",
                         "description": "The search query to ask the expert for."
+                    },
+                    "is_private": {
+                        "type": "boolean",
+                        "description": "Whether the collection should be private to the authenticated user."
                     }
                 }
             }
@@ -4210,6 +4230,28 @@ def main(port: int, transport: str) -> int:
             from minio import Minio
             endpoint = minio_base.replace("http://", "").replace("https://", "")
             return Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
+
+        def check_user_access(col_owner_did, request_user):
+            if not col_owner_did: return True
+            if not request_user: return False
+            user_did = request_user.get("did")
+            if col_owner_did == user_did: return True
+            user_orcid = request_user.get("orcid")
+            if user_orcid:
+                import os, json
+                safe_did = "".join(c for c in col_owner_did if c.isalnum() or c in ":-")
+                owner_file = os.path.join(_odrl_base_dir(), "users", f"{safe_did}.json")
+                if os.path.exists(owner_file):
+                    try:
+                        with open(owner_file) as f:
+                            owner_data = json.load(f)
+                            if owner_data.get("orcid") == user_orcid:
+                                return True
+                    except:
+                        pass
+            return False
+            
+
             
         async def api_collections_get(request):
             from starlette.responses import JSONResponse
@@ -4220,11 +4262,21 @@ def main(port: int, transport: str) -> int:
                     m_client.make_bucket("collections")
                 objects = m_client.list_objects("collections")
                 cols = []
+                user = get_user_info_from_odrl(request)
+                user_did = user.get("did") if user else None
                 for obj in objects:
-                    resp = m_client.get_object("collections", obj.object_name)
-                    cols.append(json.loads(resp.read().decode("utf-8")))
-                    resp.close()
-                    resp.release_conn()
+                    if obj.object_name.endswith(".json"):
+                        resp = m_client.get_object("collections", obj.object_name)
+                        col = json.loads(resp.read().decode("utf-8"))
+                        resp.close()
+                        resp.release_conn()
+                        
+                        is_private = col.get("is_private", False)
+                        owner = col.get("owner", None)
+                        if is_private and not check_user_access(owner, user):
+                            continue
+                            
+                        cols.append(col)
                 return JSONResponse({"collections": cols})
             except Exception as e:
                 import traceback
@@ -4243,9 +4295,9 @@ def main(port: int, transport: str) -> int:
                 
                 owner = None
                 if data.get("is_private", False):
-                    user_info = get_user_info_from_odrl()
-                    if user_info and user_info.get("email"):
-                        owner = user_info["email"]
+                    user_info = get_user_info_from_odrl(request)
+                    if user_info and user_info.get("did"):
+                        owner = user_info["did"]
                         
                 col_data = {
                     "id": cid,
@@ -4289,6 +4341,13 @@ def main(port: int, transport: str) -> int:
                 resp.close()
                 resp.release_conn()
                 
+                is_private = col_data.get("is_private", False)
+                if is_private:
+                    user = get_user_info_from_odrl(request)
+                    user_did = user.get("did") if user else None
+                    if not check_user_access(col_data.get("owner"), user):
+                        return JSONResponse({"error": "Forbidden: You do not have access to this private collection"}, status_code=403)
+                
                 if "items" not in col_data:
                     col_data["items"] = []
                     
@@ -4322,6 +4381,13 @@ def main(port: int, transport: str) -> int:
                 resp.close()
                 resp.release_conn()
                 
+                is_private = col_data.get("is_private", False)
+                if is_private:
+                    user = get_user_info_from_odrl(request)
+                    user_did = user.get("did") if user else None
+                    if not check_user_access(col_data.get("owner"), user):
+                        return JSONResponse({"error": "Forbidden: You do not have access to this private collection"}, status_code=403)
+                
                 if "items" in col_data and doc_id in col_data["items"]:
                     col_data["items"].remove(doc_id)
                     content_bytes = json.dumps(col_data).encode("utf-8")
@@ -4347,6 +4413,13 @@ def main(port: int, transport: str) -> int:
                 col_data = json.loads(resp.read().decode("utf-8"))
                 resp.close()
                 resp.release_conn()
+                
+                is_private = col_data.get("is_private", False)
+                if is_private:
+                    user = get_user_info_from_odrl(request)
+                    user_did = user.get("did") if user else None
+                    if not check_user_access(col_data.get("owner"), user):
+                        return JSONResponse({"error": "Forbidden: You do not have access to this private collection"}, status_code=403)
                 
                 col_data["name"] = data.get("name", col_data.get("name", ""))
                 col_data["description"] = data.get("description", col_data.get("description", ""))
@@ -4389,6 +4462,14 @@ def main(port: int, transport: str) -> int:
                     col_data = json.loads(resp.read().decode("utf-8"))
                     resp.close()
                     resp.release_conn()
+                    
+                    is_private = col_data.get("is_private", False)
+                    if is_private:
+                        user = get_user_info_from_odrl(request)
+                        user_did = user.get("did") if user else None
+                        if not check_user_access(col_data.get("owner"), user):
+                            return JSONResponse({"error": "Forbidden: You do not have access to this private collection"}, status_code=403)
+                            
                     return JSONResponse(col_data)
                 except Exception:
                     return JSONResponse({"error": "Collection not found"}, status_code=404)
@@ -4406,6 +4487,13 @@ def main(port: int, transport: str) -> int:
                     col_data = json.loads(resp.read().decode("utf-8"))
                     resp.close()
                     resp.release_conn()
+                    
+                    is_private = col_data.get("is_private", False)
+                    if is_private:
+                        user = get_user_info_from_odrl(request)
+                        user_did = user.get("did") if user else None
+                        if not check_user_access(col_data.get("owner"), user):
+                            return JSONResponse({"error": "Forbidden: You do not have access to this private collection"}, status_code=403)
                 except Exception:
                     return JSONResponse({"error": "Collection not found"}, status_code=404)
                 
@@ -4494,6 +4582,22 @@ def main(port: int, transport: str) -> int:
             try:
                 cid = request.path_params["id"]
                 m_client = get_minio_client()
+                
+                try:
+                    resp = m_client.get_object("collections", f"{cid}.json")
+                    col_data = json.loads(resp.read().decode("utf-8"))
+                    resp.close()
+                    resp.release_conn()
+                    
+                    is_private = col_data.get("is_private", False)
+                    if is_private:
+                        user = get_user_info_from_odrl(request)
+                        user_did = user.get("did") if user else None
+                        if not check_user_access(col_data.get("owner"), user):
+                            return JSONResponse({"error": "Forbidden: You do not have access to this private collection"}, status_code=403)
+                except Exception:
+                    pass
+                    
                 m_client.remove_object("collections", f"{cid}.json")
                 import httpx
                 async with httpx.AsyncClient() as client:
@@ -4816,11 +4920,27 @@ def main(port: int, transport: str) -> int:
                 return HTMLResponse("<h1>Error: Missing static/collections_index.html</h1>", status_code=404)
 
         async def api_collections_ask(request):
-            import httpx
+            import httpx, json
             from starlette.responses import JSONResponse
             collection_id = request.path_params["id"]
             data = await request.json()
             query = data.get("query", "")
+            
+            # Privacy check
+            m_client = get_minio_client()
+            try:
+                resp = m_client.get_object("collections", f"{collection_id}.json")
+                col_data = json.loads(resp.read().decode("utf-8"))
+                resp.close()
+                resp.release_conn()
+                is_private = col_data.get("is_private", False)
+                if is_private:
+                    user = get_user_info_from_odrl(request)
+                    user_did = user.get("did") if user else None
+                    if not check_user_access(col_data.get("owner"), user):
+                        return JSONResponse({"error": "Forbidden: You do not have access to this private collection"}, status_code=403)
+            except Exception:
+                pass
             
             docs_content = await get_collection_documents(collection_id, limit=50)
             context = docs_content[0].text
@@ -5048,7 +5168,7 @@ def main(port: int, transport: str) -> int:
                         user_profile = _resolve_did_name(did)
 
                 if not did or not user_profile:
-                    return JSONResponse({"success": False, "error": "Could not extract DID or user profile"})
+                    print(f"Auth save failed. data: {data}"); return JSONResponse({"success": False, "error": "Could not extract DID or user profile"})
 
                 safe_did = "".join(c for c in did if c.isalnum() or c in ":-")
                 base = _odrl_base_dir()

@@ -651,18 +651,18 @@ def get_login_button_html(request=None):
         if name.startswith("did:"):
             name = "User"
         orcid = user.get("orcid", "")
-        orcid_badge = f' <small style="font-size:11px;color:#a0a0b0;">ORCID {orcid}</small>' if orcid else ""
-        login_btn_html = ""
-        dropdown_btn = f'''<button onclick="if(confirm('Log out?')) {{ document.cookie='auth_did=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'; fetch('/api/auth/logout', {{method:'POST'}}).then(()=>window.location.href='/'); }}" style="width:100%; padding:10px; text-align:left; background:none; border:none; cursor:pointer; font-size:14px; color:#d93025;">Logout</button>'''
+        orcid_badge = f'<br><small style="font-size:11px;color:#888;font-weight:normal;">ORCID {orcid}</small>' if orcid else ""
         
         if name == "Guest":
-            login_btn_html = '<button class="theme-toggle" onclick="window.location.href=\'/login\'" style="background-color: #4285f4; color: white; border: none; font-weight: 500; margin-left: 10px;">Login</button>'
-            dropdown_btn = f'''<button onclick="window.location.href='/login'" style="width:100%; padding:10px; text-align:left; background:none; border:none; cursor:pointer; font-size:14px; color:#4285f4;">Login</button>'''
+            return '<div style="position:relative; display:inline-block;"><button class="theme-toggle" onclick="window.location.href=\'/login\'" style="background-color: #4285f4; color: white; border: none; font-weight: 500;">Login</button></div>'
 
         return f'''<div style="position:relative; display:inline-block;" id="user-menu-container">
-            <button class="theme-toggle" onclick="document.getElementById('user-dropdown').style.display = document.getElementById('user-dropdown').style.display === 'block' ? 'none' : 'block'" style="background-color: #f1f3f4; color: #333; border: 1px solid var(--border-color, #ccc); font-weight: 500;">👤 {name}{orcid_badge}</button>
-            <div id="user-dropdown" style="display:none; position:absolute; top:100%; right:0; background:white; border:1px solid #ccc; border-radius:4px; box-shadow:0 2px 5px rgba(0,0,0,0.2); z-index:1000; margin-top:5px; min-width:150px;">
-                {dropdown_btn}
+            <button class="theme-toggle" onclick="document.getElementById('user-dropdown').style.display = document.getElementById('user-dropdown').style.display === 'block' ? 'none' : 'block'" style="background-color: transparent; color: inherit; border: 1px solid var(--border-color, #ccc); font-size: 1.2rem; padding: 4px 10px; border-radius: 50%; cursor: pointer;">👤</button>
+            <div id="user-dropdown" style="display:none; position:absolute; top:100%; right:0; background:var(--bg-color, white); border:1px solid var(--border-color, #ccc); border-radius:4px; box-shadow:0 2px 10px rgba(0,0,0,0.1); z-index:1000; margin-top:5px; min-width:200px;">
+                <div style="padding: 12px 15px; border-bottom: 1px solid var(--border-color, #eee); color: var(--text-color, #333); font-size: 14px; white-space: nowrap; font-weight: bold;">
+                    {name}{orcid_badge}
+                </div>
+                <button onclick="if(confirm('Log out?')) {{ document.cookie='auth_did=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'; fetch('/api/auth/logout', {{method:'POST'}}).then(()=>window.location.href='/'); }}" style="width:100%; padding:10px 15px; text-align:left; background:none; border:none; cursor:pointer; font-size:14px; color:#d93025; border-radius: 0 0 4px 4px;">Logout</button>
             </div>
             <script>
                 document.addEventListener('click', function(e) {{
@@ -671,10 +671,16 @@ def get_login_button_html(request=None):
                     }}
                 }});
             </script>
-        </div>{login_btn_html}'''
+        </div>'''
     else:
-        return '<button class="theme-toggle" onclick="window.location.href=\'/login\'" style="background-color: #4285f4; color: white; border: none; font-weight: 500;">Login</button>'
+        return '<div style="position:relative; display:inline-block;"><button class="theme-toggle" onclick="window.location.href=\'/login\'" style="background-color: #4285f4; color: white; border: none; font-weight: 500;">Login</button></div>'
 
+def get_auth_headers(base_headers=None):
+    headers = base_headers.copy() if base_headers else {}
+    token = get_odrl_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 @app.post("/api/auth/logout")
 async def api_auth_logout(request: Request):

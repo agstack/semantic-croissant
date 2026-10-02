@@ -199,7 +199,7 @@
                         <div class="collection-card" style="padding: 10px; display: flex; flex-direction: column; background: var(--header-bg); border: 1px solid var(--border-color); border-radius: 6px;">
                             <div style="display: flex; justify-content: space-between; align-items: baseline;">
                                 <div>
-                                    <a href="/collections/${col.id}" target="_blank" class="title-link" data-id="${col.id}" style="text-decoration: none; font-weight: bold; font-size: ${col.is_supercollection ? '1.6rem' : '1.1rem'}; color: #0000cc; font-family: serif;">${col.name}</a>
+                                    <a href="/collections/${col.id}" target="_blank" class="title-link" data-id="${col.id}" style="text-decoration: none; font-weight: bold; font-size: ${col.is_supercollection ? '1.6rem' : '1.1rem'}; color: #0000cc; font-family: serif;">${col.is_private ? '<span title="Private" style="font-size: 0.9em; text-decoration: none; display: inline-block;">🔒</span> ' : ''}${col.name}</a>
                                 </div>
                                 <div style="display: flex; gap: 4px; opacity: 0.3;" class="col-actions" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.3">
                                     <button class="btn-col-link" data-id="${col.id}" style="font-size: 0.75rem; cursor: pointer; padding: 2px 4px; border: 1px solid #ccc; background: #eee; border-radius: 3px;" title="Open Viewer">👀</button>
@@ -388,6 +388,9 @@
             <img src="https://www.cdif4eosc.eu/assets/images/eu_flag.svg" alt="EU Flag" style="height: 20px;">
         </div>
         <div style="width: 120px; text-align: right;">
+        </div>
+            <div style="position: absolute; right: 20px; display: flex; gap: 10px; align-items: center;">
+            <button class="theme-toggle" onclick="document.getElementById('share-url-input').value = window.location.href; document.getElementById('share-modal').style.display='flex'">Share</button>
             <button class="theme-toggle" id="theme-toggle" style="font-size: 0.8rem; padding: 4px 8px;">Toggle Theme</button>
         </div>
     </footer>
