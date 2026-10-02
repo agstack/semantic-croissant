@@ -339,9 +339,21 @@
         let isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
         setTheme(isDarkMode);
         
-        toggleBtn.addEventListener('click', () => {
-            isDarkMode = !isDarkMode;
-            setTheme(isDarkMode);
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', () => {
+                isDarkMode = !isDarkMode;
+                setTheme(isDarkMode);
+            });
+        }
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            const bottomBtn = document.getElementById('theme-toggle');
+            if (bottomBtn) {
+                bottomBtn.addEventListener('click', () => {
+                    isDarkMode = !isDarkMode;
+                    setTheme(isDarkMode);
+                });
+            }
         });
 
         // Setup Marked.js with highlight.js

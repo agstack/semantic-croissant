@@ -203,7 +203,7 @@
             let html = `
                 <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 15px;">
                     <div>
-                        <h3 style="margin-top: 0; font-size: 1.8rem;">${data.name || 'Unnamed Collection'}</h3>
+                        <h3 style="margin-top: 0; font-size: 1.8rem;">${data.is_private ? '<span title="Private" style="font-size: 0.9em;">🔒</span> ' : ''}${data.name || 'Unnamed Collection'}</h3>
                         <div style="font-size: 0.9rem; color: #666; margin-bottom: 15px;">
                             ID: ${data.id}<br>
                             Created: ${dateStr}

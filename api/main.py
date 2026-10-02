@@ -638,7 +638,9 @@ def get_user_info_from_odrl(request=None):
     if os.path.exists(user_file):
         try:
             with open(user_file) as f:
-                return json.load(f)
+                data = json.load(f)
+                data["did"] = did
+                return data
         except Exception:
             pass
     return {"name": "Guest", "did": "did:oyd:guest", "certificate": "guest_cert"}
@@ -811,6 +813,33 @@ async def view_index(request: Request):
     
     return HTMLResponse(content=html_content)
 
+@app.get("/vault/doc/raw/{es_id}")
+async def proxy_vault_doc_raw(es_id: str, request: Request):
+    import httpx
+    from fastapi import Response
+    headers = {}
+    cookie = request.headers.get("cookie")
+    if cookie:
+        headers["cookie"] = cookie
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"http://mcp:7070/vault/doc/raw/{es_id}", headers=headers)
+        return Response(content=resp.content, status_code=resp.status_code,
+                        media_type=resp.headers.get("content-type", "text/markdown"))
+
+@app.post("/vault/doc/update/{es_id}")
+async def proxy_vault_doc_update(es_id: str, request: Request):
+    import httpx
+    from fastapi import Response
+    headers = {"Content-Type": "application/json"}
+    cookie = request.headers.get("cookie")
+    if cookie:
+        headers["cookie"] = cookie
+    body = await request.body()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(f"http://mcp:7070/vault/doc/update/{es_id}", content=body, headers=headers)
+        return Response(content=resp.content, status_code=resp.status_code,
+                        media_type=resp.headers.get("content-type", "application/json"))
+
 @app.get("/vault/doc/{filename:path}")
 async def view_vault_doc(filename: str, request: Request):
     user_agent = request.headers.get("user-agent", "").lower()
@@ -826,10 +855,10 @@ async def view_vault_doc(filename: str, request: Request):
         from fastapi import Response
         async with httpx.AsyncClient(timeout=10.0) as client:
             if "json" in accept:
-                resp = await client.get(f"http://localhost:7110/vault/{doc_id}.jsonld")
+                resp = await client.get(f"http://mcp:7070/vault/{doc_id}.jsonld")
                 return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
             else:
-                resp = await client.get(f"http://localhost:7070/vault/doc/raw/{doc_id}")
+                resp = await client.get(f"http://mcp:7070/vault/doc/raw/{doc_id}")
                 return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "text/markdown"))
             
     import os
@@ -1773,3 +1802,33 @@ async def ollama_gateway(request: Request, path: str = "", x_api_key: str = Head
     except Exception as e:
         await client.aclose()
         raise HTTPException(status_code=502, detail=f"Bad Gateway: Error communicating with backend ({str(e)})")
+
+@app.get("/collections/{es_id}")
+async def view_collections(es_id: str, request: Request):
+    import httpx
+    from fastapi import Response, HTTPException
+    
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(f"http://mcp:7070/collections/{es_id}", headers=headers)
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "text/html"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/collectionsindex")
+async def view_collections_index(request: Request):
+    import httpx
+    from fastapi import Response, HTTPException
+    
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(f"http://mcp:7070/collectionsindex", headers=headers)
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "text/html"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))

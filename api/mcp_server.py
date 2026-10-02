@@ -71,7 +71,9 @@ def get_user_info_from_odrl(request=None):
     if os.path.exists(user_file):
         try:
             with open(user_file) as f:
-                return json.load(f)
+                data = json.load(f)
+                data["did"] = did
+                return data
         except Exception:
             pass
     return {"name": "Guest", "did": "did:oyd:guest", "certificate": "guest_cert"}
@@ -3501,7 +3503,7 @@ def main(port: int, transport: str) -> int:
                 from starlette.responses import Response
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     if "json" in accept:
-                        resp = await client.get(f"http://localhost:7110/vault/{es_id}.jsonld")
+                        resp = await client.get(f"http://localhost:7070/vault/{es_id}.jsonld")
                         return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
                     else:
                         resp = await client.get(f"http://localhost:7070/vault/doc/raw/{es_id}")
