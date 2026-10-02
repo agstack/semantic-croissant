@@ -369,6 +369,13 @@
                             <div class="cred-desc">Link your ORCID identifier</div>
                         </div>
                     </div>
+                    <div class="cred-item" id="cred-item" onclick="selectCred('item')">
+                        <div class="cred-icon" style="background:rgba(234,179,8,.1)">📦</div>
+                        <div class="cred-info">
+                            <div class="cred-name">Register Item</div>
+                            <div class="cred-desc">Issue a VC for a generic item</div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Upload issuing panel -->
@@ -465,6 +472,34 @@
                     </div>
                 </div>
 
+                <!-- Item issuing panel -->
+                <div class="issuing-panel" id="panel-item" style="display:none">
+                    <div>
+                        <div class="panel-title">Issuing: Item Credential</div>
+                        <div class="panel-h3">Register a new Item</div>
+                    </div>
+
+                    <div class="field">
+                        <label>Item DID <span style="color:#4a5070;font-weight:400;">(auto-generated if empty)</span></label>
+                        <input type="text" id="subject-did-item" placeholder="did:oyd:z..." />
+                    </div>
+
+                    <div class="field">
+                        <label>Item Name</label>
+                        <input type="text" id="item-name" placeholder="Name of the item" />
+                    </div>
+                    
+                    <div class="field">
+                        <label>Description</label>
+                        <input type="text" id="item-desc" placeholder="Description of the item" />
+                    </div>
+                    
+                    <div class="field">
+                        <label>Geolocation <span style="color:#4a5070;font-weight:400;">(optional)</span></label>
+                        <input type="text" id="item-geo" placeholder="lon, lat (e.g., -74.006, 40.7128)" />
+                    </div>
+                </div>
+
                 <!-- Success panel -->
                 <div class="success-screen" id="success-screen">
                     <div class="success-icon">✅</div>
@@ -497,16 +532,18 @@
         const panelOrcid = document.getElementById('panel-orcid');
         const panelGoogle = document.getElementById('panel-google');
         const panelUpload = document.getElementById('panel-upload');
+        const panelItem = document.getElementById('panel-item');
         const other = document.getElementById('panel-other');
         
         // Hide all first
         panelOrcid.style.display = 'none';
         if (panelGoogle) panelGoogle.style.display = 'none';
         if (panelUpload) panelUpload.style.display = 'none';
+        if (panelItem) panelItem.style.display = 'none';
         other.style.display = 'none';
 
         // Move the common elements into the active panel
-        const activePanel = type === 'orcid' ? panelOrcid : (type === 'google' ? panelGoogle : (type === 'upload' ? panelUpload : other));
+        const activePanel = type === 'orcid' ? panelOrcid : (type === 'google' ? panelGoogle : (type === 'upload' ? panelUpload : (type === 'item' ? panelItem : other)));
         
         if (type === 'orcid') {
             panelOrcid.style.display = 'flex';
@@ -518,6 +555,11 @@
             panelGoogle.appendChild(document.getElementById('status-box'));
             panelGoogle.appendChild(document.getElementById('btn-issue'));
             panelGoogle.appendChild(other);
+        } else if (type === 'item') {
+            panelItem.style.display = 'flex';
+            panelItem.appendChild(document.getElementById('status-box'));
+            panelItem.appendChild(document.getElementById('btn-issue'));
+            panelItem.appendChild(other);
         } else if (type === 'upload') {
             panelUpload.style.display = 'flex';
         } else {
@@ -700,6 +742,22 @@
                 : { purpose: 'vc-subject' };
             endpoint = '/vc/google';
             body = { subject_did: subjectDid, token: token };
+        } else if (currentCred === 'item') {
+            const itemName = document.getElementById('item-name').value.trim();
+            const itemDesc = document.getElementById('item-desc').value.trim();
+            const itemGeo = document.getElementById('item-geo').value.trim();
+            subjectDid = document.getElementById('subject-did-item').value.trim();
+            
+            if (!itemName) { showStatus('error', 'Please enter an item name.'); return; }
+            
+            payload = { name: itemName, description: itemDesc };
+            const claims = { name: itemName, description: itemDesc };
+            if (itemGeo) {
+                payload.geolocation = itemGeo;
+                claims.geolocation = itemGeo;
+            }
+            endpoint = '/vc/issue';
+            body = { subject_did: subjectDid, claims: claims };
         } else {
             showStatus('error', 'Unsupported credential type'); return;
         }
@@ -709,6 +767,7 @@
 
         try {
             // Step 1: Create or resolve DID
+            let createdDidData = null;
             if (!subjectDid) {
                 const didResp = await fetch(ODRL_API + '/did/create', {
                     method: 'POST',
@@ -719,9 +778,11 @@
                 const didData = await didResp.json();
                 subjectDid = didData.did;
                 body.subject_did = subjectDid;
+                createdDidData = didData;
                 
                 if (currentCred === 'orcid') document.getElementById('subject-did').value = subjectDid;
                 if (currentCred === 'google') document.getElementById('subject-did-google').value = subjectDid;
+                if (currentCred === 'item') document.getElementById('subject-did-item').value = subjectDid;
             }
 
             showStatus('info', 'Issuing Verifiable Credential…');
@@ -737,6 +798,11 @@
                 throw new Error(err.detail || 'VC issuance failed');
             }
             const vc = await vcResp.json();
+            
+            if (createdDidData) {
+                vc.did_document = createdDidData.did_document;
+                vc.keys = createdDidData.keys;
+            }
 
             showStatus('info', 'Authenticating with Semantic Croissant…');
 
@@ -756,9 +822,14 @@
             let displayName = saved.user?.name || subjectDid;
             if (currentCred === 'orcid' && (orcidProfile || orcidId)) displayName = saved.user?.name || orcidProfile?.name || orcidId;
             if (currentCred === 'google' && (googleProfile || saved.user?.email)) displayName = saved.user?.name || googleProfile?.name || saved.user?.email;
+            if (currentCred === 'item') displayName = document.getElementById('item-name').value.trim() || subjectDid;
             
             document.getElementById('success-name').textContent = `Welcome, ${displayName}!`;
-            document.getElementById('success-msg').textContent = `Your ${currentCred} credential was issued and you're now signed in.`;
+            if (currentCred === 'item') {
+                document.getElementById('success-msg').textContent = `Your Item credential was successfully issued.`;
+            } else {
+                document.getElementById('success-msg').textContent = `Your ${currentCred} credential was issued and you're now signed in.`;
+            }
             document.getElementById('panel-' + currentCred).style.display = 'none';
             document.getElementById('success-screen').classList.add('show');
 
