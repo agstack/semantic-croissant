@@ -18,6 +18,9 @@ API_BASE = os.environ.get("API_BASE", "http://localhost:7013")
 MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "mcp.dev.codata.org")
 HOST = os.environ.get("HOST", f"https://{MCP_DOMAIN}")
 
+# Global user info set when MCP server is authenticated
+SERVER_USER_INFO = None
+
 def get_odrl_token():
     auth_file = "/app/.odrl/authorize"
     if not os.path.exists(auth_file):
