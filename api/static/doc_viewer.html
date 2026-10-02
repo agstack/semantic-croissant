@@ -1459,6 +1459,33 @@
                 contentDiv.insertBefore(actionToolbar, contentDiv.firstChild);
                 contentDiv.insertBefore(askDocContainer, actionToolbar);
                 
+                // Fetch and render breadcrumbs
+                fetch('/api/collections').then(r => r.json()).then(data => {
+                    const cols = data.collections || [];
+                    const activeCols = cols.filter(c => c.items && c.items.includes(docId));
+                    if (activeCols.length > 0) {
+                        const bcDiv = document.createElement('div');
+                        bcDiv.style.cssText = 'padding: 8px 12px; margin-bottom: 20px; background: var(--header-bg); border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;';
+                        bcDiv.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent-color);"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> <strong>Collections:</strong> ';
+                        activeCols.forEach((c, idx) => {
+                            const a = document.createElement('a');
+                            a.href = '/collections/' + c.id;
+                            a.textContent = c.name;
+                            a.style.cssText = 'color: var(--accent-color); text-decoration: none;';
+                            a.onmouseover = () => a.style.textDecoration = 'underline';
+                            a.onmouseout = () => a.style.textDecoration = 'none';
+                            bcDiv.appendChild(a);
+                            if (idx < activeCols.length - 1) {
+                                const sep = document.createElement('span');
+                                sep.textContent = ' • ';
+                                sep.style.color = 'var(--border-color)';
+                                bcDiv.appendChild(sep);
+                            }
+                        });
+                        contentDiv.insertBefore(bcDiv, askDocContainer);
+                    }
+                }).catch(console.error);
+                
                 function highlightTextInDOM(root, textToHighlight, color, elementToAppend = null, itemData = null, annotationCounter = null) {
                     const text = textToHighlight;
                     if (!text) return;

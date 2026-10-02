@@ -153,6 +153,7 @@
     <script>
         const pathParts = window.location.pathname.split('/');
         const colId = pathParts[pathParts.length - 1];
+        let currentCollectionData = null;
 
         async function loadCollection() {
             try {
@@ -164,12 +165,14 @@
                 
                 // Fetch all collections to find subcollections
                 let subCollections = [];
+                let allCollections = [];
                 try {
                     const colsRes = await fetch('/api/collections');
                     if (colsRes.ok) {
                         let allCols = await colsRes.json();
                         if (allCols.collections) allCols = allCols.collections;
                         if (Array.isArray(allCols)) {
+                            allCollections = allCols;
                             subCollections = allCols.filter(c => c.parent_id === colId);
                         }
                     }
@@ -177,7 +180,8 @@
                     console.error("Failed to load subcollections", e);
                 }
 
-                renderCollection(data, subCollections);
+                currentCollectionData = data;
+                renderCollection(data, subCollections, allCollections);
             } catch (err) {
                 document.getElementById('collections-container').innerHTML = `
                     <div style="color: #cf222e; padding: 20px;">
@@ -189,7 +193,7 @@
             }
         }
         
-        function renderCollection(data, subCollections = []) {
+        function renderCollection(data, subCollections = [], allCollections = []) {
             const container = document.getElementById('collections-container');
             const items = data.resolved_items || [];
             
@@ -200,9 +204,35 @@
 
             document.title = `${data.name || 'Collection'} - Semantic Croissant AI Studio`;
 
+            let breadcrumbHtml = `<div style="margin-bottom: 15px; font-size: 0.95rem; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">`;
+            breadcrumbHtml += `<a href="/collectionsindex" style="color: var(--accent-color); text-decoration: none;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:-2px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Collections</a>`;
+            
+            let path = [];
+            let current = data.parent_id;
+            let seen = new Set([data.id]);
+            while(current) {
+                const parent = allCollections.find(c => c.id === current);
+                if (parent && !seen.has(parent.id)) {
+                    path.unshift(parent);
+                    seen.add(parent.id);
+                    current = parent.parent_id;
+                } else {
+                    break;
+                }
+            }
+            
+            path.forEach(p => {
+                breadcrumbHtml += `<span style="color: var(--border-color);">/</span>`;
+                breadcrumbHtml += `<a href="/collections/${p.id}" style="color: var(--accent-color); text-decoration: none;">${p.name || 'Unnamed'}</a>`;
+            });
+            breadcrumbHtml += `<span style="color: var(--border-color);">/</span>`;
+            breadcrumbHtml += `<span style="color: var(--text-color); font-weight: bold;">${data.name || 'Unnamed'}</span>`;
+            breadcrumbHtml += `</div>`;
+
             let html = `
                 <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 15px;">
                     <div>
+                        ${breadcrumbHtml}
                         <h3 style="margin-top: 0; font-size: 1.8rem;">${data.is_private ? '<span title="Private" style="font-size: 0.9em;">🔒</span> ' : ''}${data.name || 'Unnamed Collection'}</h3>
                         <div style="font-size: 0.9rem; color: #666; margin-bottom: 15px;">
                             ID: ${data.id}<br>
@@ -212,6 +242,7 @@
                         
                         <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                             <button onclick="window.location.href='/collectionsindex'" style="padding: 6px 12px; background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">&larr; Back to Collections</button>
+                            <button onclick="openEditModal()" style="padding: 6px 12px; background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer; margin-left: 10px;">Edit</button>
                             <div style="display: flex; align-items: center; gap: 5px; margin-left: 20px;">
                                 <span style="font-size: 0.9rem; font-weight: bold;">Join Collection (Parent):</span>
                                 <select id="join-parent-select" style="padding: 6px; border-radius: 4px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color);">
@@ -221,7 +252,7 @@
                             </div>
                         </div>
                     </div>
-                    <form id="ask-form" onsubmit="event.preventDefault(); const btn = this.querySelector('button'); btn.disabled=true; btn.innerText='Thinking...'; document.getElementById('qa-result').innerHTML=''; document.getElementById('qa-result').style.display='block'; fetch('/api/collections/' + '${data.id}' + '/ask', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({query: this.querySelector('input').value})}).then(res => res.json()).then(res => { if(typeof marked !== 'undefined') { document.getElementById('qa-result').innerHTML = marked.parse(res.answer); } else { document.getElementById('qa-result').innerText = res.answer; } btn.disabled=false; btn.innerText='Ask'; }).catch(e => { document.getElementById('qa-result').innerText = 'Error: ' + e; btn.disabled=false; btn.innerText='Ask'; });" style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
+                    <form id="ask-form" onsubmit="handleAskSubmit(event)" style="display: flex; gap: 10px; align-items: center; margin-top: 5px;">
                         <input type="text" placeholder="Ask question about datasets in the collection..." style="padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); width: 350px; font-size: 14px;">
                         <button type="submit" style="padding: 8px 15px; background: #008855; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">Ask</button>
                     </form>
@@ -521,6 +552,57 @@
         </div>
     </div>
     
+    
+    <!-- Edit Collection Modal -->
+    <div id="edit-collection-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">
+        <div style="background: var(--bg-color); padding: 20px; border-radius: 8px; width: 500px; max-width: 90%; border: 1px solid var(--border-color);">
+            <h3 style="margin-top: 0; color: var(--text-color);">Edit Collection</h3>
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 5px; color: var(--text-color); font-weight: bold;">Name</label>
+                <input type="text" id="edit-col-name" style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color);">
+            </div>
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 5px; color: var(--text-color); font-weight: bold;">Description</label>
+                <textarea id="edit-col-desc" style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); min-height: 100px;"></textarea>
+            </div>
+            <div style="margin-bottom: 15px; display: flex; gap: 20px; color: var(--text-color);">
+                <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                    <input type="checkbox" id="edit-col-private"> Private
+                </label>
+                <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
+                    <input type="checkbox" id="edit-col-super"> Supercollection
+                </label>
+            </div>
+            <div style="margin-bottom: 20px; color: var(--text-color); font-size: 0.9rem;">
+                <strong>Owner:</strong> <span id="edit-col-owner"></span>
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button onclick="document.getElementById('edit-collection-modal').style.display='none'" style="padding: 8px 15px; background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button id="edit-col-save-btn" onclick="saveCollectionEdit()" style="padding: 8px 15px; background: var(--accent-color); color: white; border: none; border-radius: 4px; cursor: pointer;">Save</button>
+            </div>
+        </div>
+    </div>
+
+        <!-- Expert Modal -->
+    <div id="expert-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">
+        <div style="background: var(--bg-color); padding: 20px; border-radius: 8px; width: 600px; max-width: 90%; border: 1px solid var(--border-color);">
+            <h3 style="margin-top: 0; color: var(--text-color);">Dataverse Expert Task</h3>
+            <div style="margin-bottom: 15px; color: var(--text-color);">
+                <strong>Materials (Sources):</strong><br>
+                <div id="expert-materials" style="font-size: 0.9rem; margin-top: 5px; max-height: 100px; overflow-y: auto; background: var(--panel-bg); padding: 8px; border-radius: 4px; border: 1px solid var(--border-color);">
+                </div>
+            </div>
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 5px; color: var(--text-color); font-weight: bold;">Message to Dataverse Expert:</label>
+                <textarea id="expert-msg" style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); min-height: 120px;">Please populate the "Coffee Prices" subcollection using the sources listed above. Please prioritize the extraction of quantitative data regarding export volumes, price fluctuations tied to climate/tariffs, and the economic impact of production challenges (such as coffee rust) on the market value of Honduran coffee.</textarea>
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button onclick="document.getElementById('expert-modal').style.display='none'" style="padding: 8px 15px; background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button id="expert-execute-btn" onclick="executeExpertTask()" style="padding: 8px 15px; background: var(--accent-color); color: white; border: none; border-radius: 4px; cursor: pointer;">Execute</button>
+            </div>
+        </div>
+    </div>
+    
     <script>
         const toggleBtn = document.getElementById('theme-toggle');
         if (toggleBtn) {
@@ -530,6 +612,154 @@
                 document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
             });
         }
+
+        function openEditModal() {
+            if (!currentCollectionData) return;
+            document.getElementById('edit-col-name').value = currentCollectionData.name || '';
+            document.getElementById('edit-col-desc').value = currentCollectionData.description || '';
+            document.getElementById('edit-col-private').checked = !!currentCollectionData.is_private;
+            document.getElementById('edit-col-super').checked = !!currentCollectionData.is_supercollection;
+            document.getElementById('edit-col-owner').innerText = currentCollectionData.owner || 'None';
+            document.getElementById('edit-collection-modal').style.display = 'flex';
+        }
+        
+        async function saveCollectionEdit() {
+            const btn = document.getElementById('edit-col-save-btn');
+            btn.disabled = true;
+            btn.innerText = 'Saving...';
+            
+            const payload = {
+                name: document.getElementById('edit-col-name').value,
+                description: document.getElementById('edit-col-desc').value,
+                is_private: document.getElementById('edit-col-private').checked,
+                is_supercollection: document.getElementById('edit-col-super').checked
+            };
+            
+            try {
+                const res = await fetch('/api/collections/' + colId, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (res.ok) {
+                    window.location.reload();
+                } else {
+                    const data = await res.json();
+                    alert('Error: ' + data.error);
+                    btn.disabled = false;
+                    btn.innerText = 'Save';
+                }
+            } catch (e) {
+                alert('Error saving collection: ' + e);
+                btn.disabled = false;
+                btn.innerText = 'Save';
+            }
+        }
+        
+        let expertSubColName = "Coffee Prices";
+        
+        function openExpertModal(subColName, expertMsg) {
+            if (subColName) {
+                expertSubColName = subColName;
+            }
+            const msgArea = document.getElementById('expert-msg');
+            if (expertMsg) {
+                msgArea.value = expertMsg;
+            } else {
+                msgArea.value = `Please populate the "${expertSubColName}" subcollection using the sources listed above. Please prioritize the extraction of quantitative data regarding export volumes, price fluctuations tied to climate/tariffs, and the economic impact of production challenges (such as coffee rust) on the market value of Honduran coffee.`;
+            }
+            
+            const materialsDiv = document.getElementById('expert-materials');
+            materialsDiv.innerHTML = '';
+            
+            if (currentCollectionData && currentCollectionData.resolved_items && currentCollectionData.resolved_items.length > 0) {
+                currentCollectionData.resolved_items.forEach(item => {
+                    const div = document.createElement('div');
+                    div.style.marginBottom = '4px';
+                    div.innerHTML = `• ${item.name || item.id}`;
+                    materialsDiv.appendChild(div);
+                });
+            } else {
+                materialsDiv.innerHTML = '<i>No items in the current collection.</i>';
+            }
+            
+            document.getElementById('expert-modal').style.display = 'flex';
+        }
+
+        async function executeExpertTask() {
+            const btn = document.getElementById('expert-execute-btn');
+            btn.disabled = true;
+            btn.innerText = 'Executing...';
+            
+            const msg = document.getElementById('expert-msg').value;
+            
+            const payload = {
+                name: expertSubColName,
+                description: msg,
+                parent_id: colId,
+                is_private: false,
+                is_supercollection: false
+            };
+            
+            try {
+                const res = await fetch('/api/collections', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (res.ok) {
+                    const data = await res.json();
+                    alert(`Subcollection "${expertSubColName}" created successfully and task delegated!`);
+                    window.location.href = '/collections/' + data.collection.id;
+                } else {
+                    const data = await res.json();
+                    alert('Error: ' + data.error);
+                }
+            } catch (e) {
+                alert('Error creating collection: ' + e);
+            }
+            
+            btn.disabled = false;
+            btn.innerText = 'Execute';
+        }
+
+        async function handleAskSubmit(event) {
+            event.preventDefault();
+            const form = event.target;
+            const queryInput = form.querySelector('input').value;
+            const btn = form.querySelector('button');
+            
+            btn.disabled = true;
+            btn.innerText = 'Thinking...';
+            document.getElementById('qa-result').innerHTML = '';
+            document.getElementById('qa-result').style.display = 'block';
+            
+            try {
+                const res = await fetch('/api/collections/' + colId + '/ask', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({query: queryInput})
+                });
+                const data = await res.json();
+                
+                if (data.action === "expert_task") {
+                    document.getElementById('qa-result').style.display = 'none';
+                    openExpertModal(data.subcollection_name, data.message);
+                } else if(typeof marked !== 'undefined') {
+                    document.getElementById('qa-result').innerHTML = marked.parse(data.answer);
+                } else {
+                    document.getElementById('qa-result').innerText = data.answer;
+                }
+            } catch (e) {
+                document.getElementById('qa-result').innerText = 'Error: ' + e;
+            }
+            
+            btn.disabled = false;
+            btn.innerText = 'Ask';
+        }
+
     </script>
 </body>
 </html>

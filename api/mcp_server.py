@@ -4459,6 +4459,8 @@ def main(port: int, transport: str) -> int:
                 col_data["link"] = data.get("link", col_data.get("link", ""))
                 col_data["parent_id"] = data.get("parent_id", col_data.get("parent_id"))
                 col_data["is_supercollection"] = data.get("is_supercollection", col_data.get("is_supercollection", False))
+                if "is_private" in data:
+                    col_data["is_private"] = data["is_private"]
                 
                 content = json.dumps(col_data).encode("utf-8")
                 m_client.put_object("collections", f"{cid}.json", io.BytesIO(content), len(content), content_type="application/json")
@@ -4969,13 +4971,46 @@ def main(port: int, transport: str) -> int:
             except Exception:
                 pass
             
-            docs_content = await get_collection_documents(collection_id, limit=50)
-            context = docs_content[0].text
-            
-            system_prompt = f"You are an AI assistant. Use the following context about datasets in a collection to answer the user's question:\n\n{context}\n\nIMPORTANT: When listing or referencing datasets, you MUST format them as Markdown links using their exact Vault URLs as provided in the context."
-            
             ollama_url = os.environ.get("OLLAMA_HOST", "http://ollama:11434")
             model = os.environ.get("MODEL", "gemma4:31b-cloud")
+            
+            intent_prompt = f"Analyze this user query: '{query}'. If the user wants to create a collection/subcollection and ask an expert to populate it, output a JSON object with keys 'intent' (set to 'CREATE_EXPERT_TASK'), 'subcollection_name', 'expert_type', and 'message' (a detailed instruction for the expert). Otherwise, output {{\"intent\": \"QA\"}}."
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                try:
+                    intent_resp = await client.post(f"{ollama_url}/api/chat", json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": intent_prompt}],
+                        "stream": False,
+                        "format": "json"
+                    })
+                    intent_data = intent_resp.json()
+                    content = intent_data["message"]["content"].strip()
+                    if content.startswith("```"):
+                        content = content.split("```")[1]
+                        if content.startswith("json"):
+                            content = content[4:]
+                        content = content.strip()
+                    print(f"Parsed Intent LLM content: {content}")
+                    intent_json = json.loads(content)
+                    if intent_json.get("intent") == "CREATE_EXPERT_TASK":
+                        print("Intent matched CREATE_EXPERT_TASK")
+                        return JSONResponse({
+                            "action": "expert_task",
+                            "subcollection_name": intent_json.get("subcollection_name", "Subcollection"),
+                            "expert_type": intent_json.get("expert_type", "Expert"),
+                            "message": intent_json.get("message", "Please populate this collection.")
+                        })
+                except Exception as e:
+                    import traceback
+                    print(f"Intent check failed: {e}")
+                    traceback.print_exc()
+                    pass
+
+            docs_content = await get_collection_documents(collection_id, limit=50)
+            context = docs_content[0].text if docs_content else ""
+            
+            system_prompt = f"You are an AI assistant. Use the following context about datasets in a collection to answer the user's question:\n\n{context}\n\nIMPORTANT: When listing or referencing datasets, you MUST format them as Markdown links using their exact Vault URLs as provided in the context."
             
             async with httpx.AsyncClient(timeout=120.0) as client:
                 resp = await client.post(f"{ollama_url}/api/chat", json={
