@@ -3104,9 +3104,6 @@ def main(port: int, transport: str) -> int:
             index_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
             
             if os.path.exists(index_path):
-                with open(index_path, "r", encoding="utf-8") as f:
-                    html_content = f.read()
-                
                 user = get_user_info_from_odrl(request)
                 if user and user.get("name"):
                     auth_status = f'<span style="color: #4CAF50;">Authenticated as {user["name"]}</span>'
@@ -3114,13 +3111,8 @@ def main(port: int, transport: str) -> int:
                     auth_status = '<span style="color: #4CAF50;">Authenticated via /app/.odrl/authorize</span>'
                 else:
                     auth_status = '<span style="color: #F44336;">Not Authenticated</span>'
-                html_content = html_content.replace('{{AUTH_STATUS}}', auth_status)
                 
-                logo_url = os.environ.get("VAULT_LOGO_URL", "/logo.png")
-                logo_html = f'<a href="/" style="display:flex; align-items:center; justify-content:center; text-decoration:none; padding: 10px;"><img src="{logo_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Logo" /></a>' if logo_url else ""
-                html_content = html_content.replace('{{VAULT_LOGO_HTML}}', logo_html)
-                html_content = html_content.replace('{{LOGIN_BUTTON_HTML}}', get_login_button_html(request))
-                
+                html_content = render_html_template(index_path, request, auth_status=auth_status)
                 return HTMLResponse(html_content)
             else:
                 return HTMLResponse("<h1>Error: UI not found. Missing static/index.html</h1>", status_code=404)
@@ -4927,9 +4919,6 @@ def main(port: int, transport: str) -> int:
                 file_path = "api/static/collections_index.html"
                 
             if os.path.exists(file_path):
-                with open(file_path, "r", encoding="utf-8") as f:
-                    html_content = f.read()
-                    
                 user = get_user_info_from_odrl(request)
                 if user and user.get("name"):
                     auth_status = f'<span style="color: #4CAF50;">Authenticated as {user["name"]}</span>'
@@ -4937,13 +4926,8 @@ def main(port: int, transport: str) -> int:
                     auth_status = '<span style="color: #4CAF50;">Authenticated via /app/.odrl/authorize</span>'
                 else:
                     auth_status = '<span style="color: #F44336;">Not Authenticated</span>'
-                html_content = html_content.replace('{{AUTH_STATUS}}', auth_status)
                 
-                logo_url = os.environ.get("VAULT_LOGO_URL", "/logo.png")
-                logo_html = f'<a href="/" style="display:flex; align-items:center; justify-content:center; text-decoration:none; padding: 10px;"><img src="{logo_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Logo" /></a>' if logo_url else ""
-                html_content = html_content.replace('{{VAULT_LOGO_HTML}}', logo_html)
-                html_content = html_content.replace('{{LOGIN_BUTTON_HTML}}', get_login_button_html(request))
-                
+                html_content = render_html_template(file_path, request, auth_status=auth_status)
                 return HTMLResponse(html_content)
             else:
                 return HTMLResponse("<h1>Error: Missing static/collections_index.html</h1>", status_code=404)
