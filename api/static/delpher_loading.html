@@ -91,10 +91,7 @@
     </script>
     <footer style="position: fixed; bottom: 0; left: 0; right: 0; margin: 0; padding: 10px 20px; font-size: 0.85rem; color: #888; background-color: var(--bg-color); border-top: 1px solid var(--border-color); z-index: 10000; width: 100%; box-sizing: border-box; font-family: 'Inter', -apple-system, sans-serif; box-shadow: 0 -2px 5px rgba(0,0,0,0.05); display: flex; justify-content: center; align-items: center;">
         <div style="text-align: center; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap;">
-            <span>Ghostwriter 2.0 UI | Semantic Croissant with CDIF 1.1 (v2.3)</span>
-            <span style="color: #ccc;">|</span>
-            <span>Created by <a href="https://codata.org" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CODATA</a> in <a href="https://cdif4eosc.eu" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CDIF4EOSC</a> under Grant Agreement 101292473</span>
-            <img src="https://www.cdif4eosc.eu/assets/images/eu_flag.svg" alt="EU Flag" style="height: 20px;">
+            {{VAULT_FOOTER_HTML}}
         </div>
             <div style="position: absolute; right: 20px; display: flex; gap: 10px; align-items: center;">
             <button class="theme-toggle" onclick="document.getElementById('share-url-input').value = window.location.href; document.getElementById('share-modal').style.display='flex'">Share</button>

@@ -273,7 +273,8 @@ async def view_dataverse():
     file_path = os.path.join(os.path.dirname(__file__), "static/dataverse_loading.html")
     if not os.path.exists(file_path):
         file_path = "api/static/dataverse_loading.html"
-    return FileResponse(file_path)
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=render_html_template(file_path, request=None))
 
 @app.get("/add")
 async def view_add():
@@ -281,7 +282,8 @@ async def view_add():
     file_path = os.path.join(os.path.dirname(__file__), "static/generic_loading.html")
     if not os.path.exists(file_path):
         file_path = "api/static/generic_loading.html"
-    return FileResponse(file_path)
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=render_html_template(file_path, request=None))
 
 @app.get("/dspace")
 async def process_dspace(url: str):
@@ -646,6 +648,34 @@ def get_user_info_from_odrl(request=None):
     return {"name": "Guest", "did": "did:oyd:guest", "certificate": "guest_cert"}
 
 
+
+def render_html_template(file_path: str, request=None, auth_status=None):
+    import os
+    with open(file_path, 'r', encoding='utf-8') as f:
+        html = f.read()
+    
+    logo_url = os.environ.get("VAULT_LOGO_URL", "/logo.png")
+    logo_html = f'<a href="/" style="display:flex; align-items:center; justify-content:center; text-decoration:none; padding: 10px;"><img src="{logo_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Logo" /></a>' if logo_url else ""
+    
+    footer_html = os.environ.get("VAULT_FOOTER_HTML", """            <span>Ghostwriter 2.0 UI | Semantic Croissant with CDIF 1.1 (v2.3)</span>
+            <span style="color: #ccc;">|</span>
+            <span>Created by <a href="https://codata.org" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CODATA</a> in <a href="https://cdif4eosc.eu" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CDIF4EOSC</a> under Grant Agreement 101292473</span>
+            <img src="https://www.cdif4eosc.eu/assets/images/eu_flag.svg" alt="EU Flag" style="height: 20px;">""")
+    
+    html = html.replace('{{VAULT_LOGO_HTML}}', logo_html)
+    html = html.replace('{{VAULT_FOOTER_HTML}}', footer_html)
+    
+    if '{{LOGIN_BUTTON_HTML}}' in html and request:
+        try:
+            html = html.replace('{{LOGIN_BUTTON_HTML}}', get_login_button_html(request))
+        except:
+            pass
+            
+    if auth_status and '{{AUTH_STATUS}}' in html:
+        html = html.replace('{{AUTH_STATUS}}', auth_status)
+        
+    return html
+
 def get_login_button_html(request=None):
     user = get_user_info_from_odrl(request)
     if user and user.get("name"):
@@ -803,15 +833,7 @@ async def view_index(request: Request):
     if not os.path.exists(file_path):
         file_path = "api/static/index.html" # fallback
     
-    with open(file_path, "r", encoding="utf-8") as f:
-        html_content = f.read()
-        
-    logo_url = os.environ.get("VAULT_LOGO_URL", "/logo.png")
-    logo_html = f'<a href="/" style="display:flex; align-items:center; justify-content:center; text-decoration:none; padding: 10px;"><img src="{logo_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Logo" /></a>' if logo_url else ""
-    html_content = html_content.replace('{{VAULT_LOGO_HTML}}', logo_html)
-    html_content = html_content.replace('{{LOGIN_BUTTON_HTML}}', get_login_button_html(request))
-    
-    return HTMLResponse(content=html_content)
+        return HTMLResponse(content=render_html_template(file_path, request))
 
 @app.get("/vault/doc/raw/{es_id}")
 async def proxy_vault_doc_raw(es_id: str, request: Request):
@@ -865,7 +887,8 @@ async def view_vault_doc(filename: str, request: Request):
     file_path = os.path.join(os.path.dirname(__file__), "static/doc_viewer.html")
     if not os.path.exists(file_path):
         file_path = "api/static/doc_viewer.html" # fallback
-    return FileResponse(file_path)
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=render_html_template(file_path, request=None))
 
 @app.post("/vault/approve/{es_id}")
 async def proxy_vault_approve(request: Request, es_id: str):
