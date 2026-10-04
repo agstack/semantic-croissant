@@ -126,8 +126,9 @@ def get_login_button_html(request=None):
             <button class="theme-toggle" onclick="document.getElementById('user-dropdown').style.display = document.getElementById('user-dropdown').style.display === 'block' ? 'none' : 'block'" style="background-color: transparent; color: inherit; border: 1px solid var(--border-color, #ccc); font-size: 1.2rem; padding: 4px 10px; border-radius: 50%; cursor: pointer;">👤</button>
             <div id="user-dropdown" style="display:none; position:absolute; top:100%; right:0; background:var(--bg-color, white); border:1px solid var(--border-color, #ccc); border-radius:4px; box-shadow:0 2px 10px rgba(0,0,0,0.1); z-index:1000; margin-top:5px; min-width:200px;">
                 <div style="padding: 12px 15px; border-bottom: 1px solid var(--border-color, #eee); color: var(--text-color, #333); font-size: 14px; white-space: nowrap; font-weight: bold;">
-                    {name}{orcid_badge}
+                    {name}
                 </div>
+                <button onclick="window.location.href='/profile'" style="width:100%; padding:10px 15px; text-align:left; background:none; border:none; cursor:pointer; font-size:14px; color:var(--text-color, #333); border-bottom: 1px solid var(--border-color, #eee);">Profile</button>
                 <button onclick="if(confirm('Log out?')) {{ document.cookie='auth_did=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'; fetch('/api/auth/logout', {{method:'POST'}}).then(()=>window.location.href='/'); }}" style="width:100%; padding:10px 15px; text-align:left; background:none; border:none; cursor:pointer; font-size:14px; color:#d93025; border-radius: 0 0 4px 4px;">Logout</button>
             </div>
             <script>
@@ -5134,6 +5135,144 @@ def main(port: int, transport: str) -> int:
                 print(f"Error processing delpher url: {e}")
                 return JSONResponse({"detail": str(e)}, status_code=500)
 
+        async def view_profile(request):
+            from starlette.responses import HTMLResponse, RedirectResponse
+            user = get_user_info_from_odrl(request)
+            if not user or not user.get("name"):
+                return RedirectResponse(url="/login")
+            
+            email = user.get("email", "Not provided")
+            orcid = user.get("orcid", "Not provided")
+            did = user.get("did", "Not provided")
+            name = user.get("name", "Unknown")
+            
+            html = f"""<!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>User Profile - Semantic Croissant</title>
+                <style>
+                    :root {{
+                        --bg-color: #ffffff;
+                        --text-color: #333333;
+                        --border-color: #e0e0e0;
+                        --accent-color: #1a73e8;
+                        --panel-bg: #f8f9fa;
+                    }}
+                    body {{
+                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                        background-color: var(--panel-bg);
+                        color: var(--text-color);
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                        height: 100vh;
+                        margin: 0;
+                    }}
+                    .profile-card {{
+                        background: var(--bg-color);
+                        padding: 30px;
+                        border-radius: 8px;
+                        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+                        width: 100%;
+                        max-width: 500px;
+                        border: 1px solid var(--border-color);
+                    }}
+                    .profile-card h2 {{
+                        margin-top: 0;
+                        color: var(--accent-color);
+                        border-bottom: 2px solid var(--accent-color);
+                        padding-bottom: 10px;
+                        margin-bottom: 20px;
+                    }}
+                    .info-row {{
+                        margin-bottom: 15px;
+                        font-size: 15px;
+                    }}
+                    .info-row strong {{
+                        display: inline-block;
+                        width: 80px;
+                        color: #555;
+                    }}
+                    .info-row span {{
+                        color: var(--text-color);
+                    }}
+                    .back-btn {{
+                        display: inline-block;
+                        margin-top: 20px;
+                        padding: 10px 20px;
+                        background: var(--accent-color);
+                        color: white;
+                        text-decoration: none;
+                        border-radius: 4px;
+                        font-weight: 500;
+                        border: none;
+                        cursor: pointer;
+                        font-size: 14px;
+                    }}
+                    .back-btn:hover {{
+                        opacity: 0.9;
+                    }}
+                </style>
+                <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+                <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+            </head>
+            <body>
+                <div class="profile-card">
+                    <h2>User Profile</h2>
+                    <div class="info-row"><strong>Name:</strong> <span>{name}</span></div>
+                    <div class="info-row"><strong>Email:</strong> <span>{email}</span></div>
+                    <div class="info-row"><strong>ORCID:</strong> <span>{orcid}</span></div>
+                    <div class="info-row"><strong>DID:</strong> <span style="word-break: break-all; font-family: monospace; font-size: 13px;">{did}</span></div>
+                    
+                    <div style="margin-top: 30px; border-top: 1px solid var(--border-color); padding-top: 20px;">
+                        {f"<div class='info-row'><strong>GeoID:</strong> <span style='color: green; font-weight: bold;'>Connected ✓</span><br><span style='font-family: monospace; font-size: 13px; word-break: break-all; margin-top: 5px; display: inline-block;'>{request.cookies.get('geoid_value')}</span><div id='geoid-map' style='height: 200px; width: 100%; margin-top: 15px; border-radius: 8px; border: 1px solid #ccc; z-index: 1;'></div></div>" if request.cookies.get("geoid_token") and request.cookies.get("geoid_value") else "<button onclick='connectGeoId()' class='back-btn' id='connect-geoid-btn' style='background: #008855; margin-right: 10px;'>Connect to GeoID</button><span id='geoid-loading' style='display:none; font-size: 13px; color: #666;'>Connecting...</span>"}
+                        <a href="/" class="back-btn">Back to Home</a>
+                    </div>
+                </div>
+                
+                <script>
+                document.addEventListener("DOMContentLoaded", function() {{
+                    const mapDiv = document.getElementById('geoid-map');
+                    if (mapDiv) {{
+                        const lat = 14.84065777807457;
+                        const lng = -87.03022062778474;
+                        const map = L.map('geoid-map').setView([lat, lng], 13);
+                        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+                            maxZoom: 19,
+                            attribution: '© OpenStreetMap'
+                        }}).addTo(map);
+                        L.marker([lat, lng]).addTo(map).bindPopup('GeoID Location').openPopup();
+                    }}
+                }});
+
+                async function connectGeoId() {{
+                    const btn = document.getElementById('connect-geoid-btn');
+                    const loader = document.getElementById('geoid-loading');
+                    if(btn) btn.style.display = 'none';
+                    if(loader) loader.style.display = 'inline-block';
+                    
+                    try {{
+                        const res = await fetch('/api/geoid/connect', {{ method: 'POST' }});
+                        const data = await res.json();
+                        if (data.success) {{
+                            window.location.reload();
+                        }} else {{
+                            alert('GeoID Connect failed: ' + (data.error || JSON.stringify(data)));
+                            if(btn) btn.style.display = 'inline-block';
+                            if(loader) loader.style.display = 'none';
+                        }}
+                    }} catch (e) {{
+                        alert('Error connecting to GeoID: ' + e);
+                        if(btn) btn.style.display = 'inline-block';
+                        if(loader) loader.style.display = 'none';
+                    }}
+                }}
+                </script>
+            </body>
+            </html>"""
+            return HTMLResponse(content=html)
         async def view_login(request):
             import os
             from starlette.responses import HTMLResponse
@@ -5245,6 +5384,94 @@ def main(port: int, transport: str) -> int:
             except Exception as e:
                 return JSONResponse({"success": False})
 
+        async def api_geoid_connect(request):
+            from starlette.responses import JSONResponse
+            import httpx
+            import json
+            import os
+            
+            user = get_user_info_from_odrl(request)
+            if not user or not user.get("name"):
+                return JSONResponse({"success": False, "error": "Not authenticated"})
+            
+            geoid_server = os.environ.get("GEOID_SERVER", "http://66.220.3.93:8000")
+            
+            # 1. Parse user info
+            full_name = user.get("name", "Test User").split(" ", 1)
+            first_name = full_name[0]
+            last_name = full_name[1] if len(full_name) > 1 else "User"
+            
+            email = user.get("email")
+            if not email or email == "Not provided":
+                # Mock email if not available
+                did_clean = user.get("did", "unknown").replace(":", "_")
+                email = f"{did_clean}@semantic-croissant.local"
+                
+            password = "GeoIDPassword@1234"
+            
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    # 2. Try signup
+                    signup_data = {
+                        "first_name": first_name,
+                        "last_name": last_name,
+                        "email": email,
+                        "password": password,
+                        "role": "farmer",
+                        "country": "USA"
+                    }
+                    try:
+                        await client.post(f"{geoid_server}/signup", json=signup_data)
+                    except Exception:
+                        pass # Ignore signup errors, might already exist
+                        
+                    # 3. Login
+                    login_data = {
+                        "username": email,
+                        "password": password
+                    }
+                    login_res = await client.post(
+                        f"{geoid_server}/login", 
+                        data=login_data,
+                        headers={"Content-Type": "application/x-www-form-urlencoded"}
+                    )
+                    
+                    if login_res.status_code != 200:
+                        return JSONResponse({"success": False, "error": f"Login failed: {login_res.text}"})
+                        
+                    token_data = login_res.json()
+                    access_token = token_data.get("access_token")
+                    
+                    if not access_token:
+                        return JSONResponse({"success": False, "error": "No access token received"})
+                        
+                    # 4. Register a point to get a GeoID
+                    register_point_data = {
+                        "wkt": "POINT(-87.03022062778474 14.84065777807457)",
+                        "field_name": "Profile Location Point"
+                    }
+                    register_res = await client.post(
+                        f"{geoid_server}/register-point",
+                        json=register_point_data,
+                        headers={"Authorization": f"Bearer {access_token}"}
+                    )
+                    
+                    if register_res.status_code != 200:
+                        return JSONResponse({"success": False, "error": f"Register point failed: {register_res.text}"})
+                        
+                    reg_data = register_res.json()
+                    geoid_value = reg_data.get("Geo Id")
+                    
+                    if not geoid_value:
+                        return JSONResponse({"success": False, "error": "No Geo Id received"})
+                        
+                    resp = JSONResponse({"success": True})
+                    resp.set_cookie("geoid_token", access_token, max_age=86400 * 30, path="/", samesite="lax")
+                    resp.set_cookie("geoid_value", geoid_value, max_age=86400 * 30, path="/", samesite="lax")
+                    return resp
+            except Exception as e:
+                return JSONResponse({"success": False, "error": str(e)})
+
         async def view_add(request):
             import os
             from starlette.responses import FileResponse
@@ -5321,10 +5548,12 @@ def main(port: int, transport: str) -> int:
                 Route("/api/dataverse/process", endpoint=process_dataverse, methods=["POST"]),
                 Route("/delpher", endpoint=view_delpher),
                 Route("/api/delpher/process", endpoint=process_delpher, methods=["POST"]),
+                Route("/profile", endpoint=view_profile),
                 Route("/login", endpoint=view_login),
                 Route("/api/auth/logout", endpoint=api_auth_logout, methods=["POST"]),
                 Route("/api/auth/status", endpoint=api_auth_status, methods=["GET"]),
                 Route("/api/auth/save", endpoint=api_auth_save, methods=["POST"]),
+                Route("/api/geoid/connect", endpoint=api_geoid_connect, methods=["POST"]),
                 Route("/api/auth/debug", endpoint=api_auth_debug, methods=["POST"]),
                 Route("/add", endpoint=view_add),
                 Route("/api/generic/process", endpoint=process_generic, methods=["POST"]),
