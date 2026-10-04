@@ -5,9 +5,9 @@
     <title>Groups - Semantic Croissant</title>
     <style>
         :root { --bg-color: #ffffff; --text-color: #333333; --border-color: #e0e0e0; --accent-color: #1a73e8; --panel-bg: #f8f9fa; --border: #e0e0e0; --accent: #1a73e8; }
-        body { font-family: sans-serif; background-color: var(--panel-bg); color: var(--text-color); margin: 0; padding: 0; }
+        body { font-family: sans-serif; background-color: var(--panel-bg); color: var(--text-color); margin: 0; padding: 0; display: flex; flex-direction: column; min-height: 100vh; }
         .header { background: white; height: 96px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 20px 0 0; position: sticky; top: 0; z-index: 100; }
-        .container { background: var(--bg-color); padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 100%; max-width: 800px; border: 1px solid var(--border-color); margin: 40px auto; }
+        .container { background: var(--bg-color); padding: 30px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 100%; max-width: 800px; border: 1px solid var(--border-color); margin: 40px auto; flex: 1; }
         .group-item { border-bottom: 1px solid var(--border-color); padding: 15px 0; display: flex; justify-content: space-between; align-items: center; }
         .group-item:last-child { border-bottom: none; }
         .group-info h3 { margin: 0 0 5px 0; color: var(--accent-color); font-size: 1.1rem; }
@@ -46,7 +46,7 @@
     </div>
 
     <!-- Footer -->
-    <div style="text-align: center; font-size: 0.85rem; color: #888; margin-top: 40px; padding: 20px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: center; gap: 10px;">
+    <div style="text-align: center; font-size: 0.85rem; color: #888; margin-top: auto; padding: 20px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: center; gap: 10px;">
         {{VAULT_FOOTER_HTML}}
     </div>
 
