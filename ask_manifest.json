@@ -1,0 +1,18 @@
+{
+  "displayName": "Ask Dataverse",
+  "toolName": "ghostwriter",
+  "description": "Ask Dataverse",
+  "scope": "dataset",
+  "type": "explore",
+  "toolUrl": "https://ask.dataverse.org/dataverse",
+  "toolParameters": {
+    "queryParameters": [
+      {
+        "datasetPid": "{datasetPid}"
+      },
+      {
+        "siteUrl": "{siteUrl}"
+      }
+    ]
+  }
+}
