@@ -3309,7 +3309,9 @@ def main(port: int, transport: str) -> int:
                 data = await request.json()
                 question = data.get("question", "").strip()
                 context_text = data.get("context", "").strip()
-                model_name = data.get("model", "llama3.1").strip()
+                model_name = data.get("model", "gemma4:31b-cloud").strip()
+                if not model_name:
+                    model_name = "gemma4:31b-cloud"
                 if not question:
                     from starlette.responses import JSONResponse
                     return JSONResponse({"success": False, "error": "No question provided"})
@@ -3328,6 +3330,7 @@ Please answer the question based ONLY on the context provided above, or by using
                 def run_agent():
                     env = os.environ.copy()
                     env["MCP_URL"] = "http://localhost:7070/sse"
+                    env["OLLAMA_HOST"] = "http://10.147.18.82:11435"
                     env["MODEL"] = model_name
                     
                     proc = subprocess.run(
@@ -3362,18 +3365,27 @@ Please answer the question based ONLY on the context provided above, or by using
 
         async def vault_models(request):
             import os, httpx
-            ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+            ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY")
             headers = {}
             if ollama_token:
                 headers["Authorization"] = f"Bearer {ollama_token}"
             try:
                 import json
-                endpoints = [ollama_host]
-                if os.path.exists("gateway_config.json"):
-                    with open("gateway_config.json", "r") as f:
-                        cfg = json.load(f)
-                        endpoints.extend(cfg.get("ollama_endpoints", []))
+                endpoints = ["http://10.147.18.82:11435"]
+                if ollama_host and ollama_host not in endpoints:
+                    endpoints.append(ollama_host)
+                cfg_candidates = ["gateway_config.json", os.path.join(os.path.dirname(__file__), "gateway_config.json")]
+                for cfg_file in cfg_candidates:
+                    if os.path.exists(cfg_file):
+                        try:
+                            with open(cfg_file, "r") as f:
+                                cfg = json.load(f)
+                                for ep in cfg.get("ollama_endpoints", []):
+                                    if ep not in endpoints:
+                                        endpoints.append(ep)
+                        except Exception:
+                            pass
                 
                 all_models = []
                 seen_ids = set()
@@ -3391,6 +3403,15 @@ Please answer the question based ONLY on the context provided above, or by using
                         except Exception as e:
                             print(f"Failed to fetch models from {ep}: {e}")
                             
+                # Ensure gemma4:31b-cloud alias is available and prioritized
+                has_31b = any(m.get("id") in ("gemma4:31b", "gemma4-31b", "gemma4:31b-cloud") for m in all_models)
+                if has_31b and "gemma4:31b-cloud" not in seen_ids:
+                    all_models.insert(0, {"id": "gemma4:31b-cloud", "object": "model", "created": 1788289193, "owned_by": "ollama.com"})
+                    seen_ids.add("gemma4:31b-cloud")
+
+                # Sort models so gemma4:31b-cloud is first
+                all_models.sort(key=lambda m: 0 if m.get("id") == "gemma4:31b-cloud" else (1 if "cloud" in m.get("id", "") else 2))
+
                 from starlette.responses import JSONResponse
                 if all_models:
                     return JSONResponse({"object": "list", "data": all_models})
@@ -3947,7 +3968,9 @@ Please answer the question based ONLY on the context provided above, or by using
                 return Response(json.dumps({"detail": "Unauthorized: Invalid API Key"}), status_code=401, media_type="application/json")
                 
             endpoints = config.get("ollama_endpoints", [])
-            env_endpoint = os.environ.get("OLLAMA_HOST")
+            env_endpoint = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
+            if "http://10.147.18.82:11435" not in endpoints:
+                endpoints.insert(0, "http://10.147.18.82:11435")
             if env_endpoint and env_endpoint not in endpoints:
                 endpoints.append(env_endpoint)
                 
@@ -4099,19 +4122,14 @@ Please answer the question based ONLY on the context provided above, or by using
                                 "created_at": "2024-01-01T00:00:00Z"
                             })
                         
-                        # Also add all original models for internal UI selection
-                        for m in data.get("models", []):
-                            m_name = m.get("name")
-                            if first_id is None:
-                                first_id = m_name
-                            last_id = m_name
-                            
-                            anthropic_data.append({
-                                "object": "model",
-                                "id": m_name,
-                                "display_name": f"{m_name}",
-                                "created_at": "2024-01-01T00:00:00Z"
-                            })
+                        # Prepend gemma4:31b-cloud as default model
+                        anthropic_data.insert(0, {
+                            "object": "model",
+                            "id": "gemma4:31b-cloud",
+                            "display_name": "gemma4:31b-cloud (Default / ollama.com)",
+                            "created_at": "2024-01-01T00:00:00Z"
+                        })
+                        first_id = "gemma4:31b-cloud"
                         
                         # Fallback if no models found
                         if not anthropic_data:
@@ -5048,8 +5066,12 @@ Please answer the question based ONLY on the context provided above, or by using
             except Exception:
                 pass
             
-            ollama_url = os.environ.get("OLLAMA_HOST", "http://ollama:11434")
+            ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
+            if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
+                ollama_url = "http://10.147.18.82:11435"
             model = os.environ.get("MODEL", "gemma4:31b-cloud")
+            ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
+            req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
             
             intent_prompt = f"Analyze this user query: '{query}'. If the user wants to create a collection/subcollection and ask an expert to populate it, output a JSON object with keys 'intent' (set to 'CREATE_EXPERT_TASK'), 'subcollection_name', 'expert_type', and 'message' (a detailed instruction for the expert). Otherwise, output {{\"intent\": \"QA\"}}."
             
@@ -5060,7 +5082,7 @@ Please answer the question based ONLY on the context provided above, or by using
                         "messages": [{"role": "user", "content": intent_prompt}],
                         "stream": False,
                         "format": "json"
-                    })
+                    }, headers=req_headers)
                     intent_data = intent_resp.json()
                     content = intent_data["message"]["content"].strip()
                     if content.startswith("```"):
@@ -5097,7 +5119,7 @@ Please answer the question based ONLY on the context provided above, or by using
                         {"role": "user", "content": query}
                     ],
                     "stream": False
-                })
+                }, headers=req_headers)
                 
                 resp_json = resp.json()
                 if "message" in resp_json and "content" in resp_json["message"]:
@@ -5118,8 +5140,12 @@ Please answer the question based ONLY on the context provided above, or by using
             
             system_prompt = f"You are an AI assistant. Use the following context about datasets across all collections to answer the user's question:\n\n{context}\n\nIMPORTANT: When listing or referencing datasets, you MUST format them as Markdown links using their exact URLs as provided in the context."
             
-            ollama_url = os.environ.get("OLLAMA_HOST", "http://ollama:11434")
+            ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
+            if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
+                ollama_url = "http://10.147.18.82:11435"
             model = os.environ.get("MODEL", "gemma4:31b-cloud")
+            ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
+            req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
             
             async with httpx.AsyncClient(timeout=120.0) as client:
                 resp = await client.post(f"{ollama_url}/api/chat", json={
@@ -5129,7 +5155,7 @@ Please answer the question based ONLY on the context provided above, or by using
                         {"role": "user", "content": query}
                     ],
                     "stream": False
-                })
+                }, headers=req_headers)
                 
                 resp_json = resp.json()
                 if "message" in resp_json and "content" in resp_json["message"]:

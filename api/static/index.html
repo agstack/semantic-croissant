@@ -909,7 +909,7 @@
                         const opt = document.createElement('option');
                         opt.value = model.id;
                         opt.textContent = model.display_name || model.id;
-                        if (model.id === 'gemma4:31b-cloud') {
+                        if (model.id === 'gemma4:31b' || model.id === 'gemma4-31b' || model.id === 'gemma4:31b-cloud' || model.id === 'gemma4-31b:cloud') {
                             opt.selected = true;
                         }
                         modelSelect.appendChild(opt);
