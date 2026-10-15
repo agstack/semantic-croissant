@@ -212,7 +212,7 @@ async def get_collection_documents(collection_id: str, limit: int = 50) -> list[
             if not items:
                 return [types.TextContent(type="text", text=f"Collection '{collection_id}' has no documents.")]
                 
-            # 2. Get summaries of documents from croissant index
+            # 2. Get summaries of documents from trump and croissant indices
             # We limit to requested limit to prevent context overflow
             doc_ids = items[:limit]
             
@@ -226,7 +226,7 @@ async def get_collection_documents(collection_id: str, limit: int = 50) -> list[
                 "_source": ["name", "description", "url"]
             }
             
-            docs_resp = await client.post(f"{es_url}/croissant/_search", json=payload)
+            docs_resp = await client.post(f"{es_url}/trump,croissant/_search", json=payload)
             if docs_resp.status_code != 200:
                 return [types.TextContent(type="text", text=f"Failed to fetch documents from index: {docs_resp.text}")]
                 
@@ -412,6 +412,11 @@ async def elasticsearch_fulltext_search(q: str, limit: int = 10, format: str = "
             r.pop("_full_text", None)
             r.pop("_markdown_text", None)
             r.pop("_source_url", None)
+            # Truncate overly long fields to avoid context blowup
+            if "description" in r and isinstance(r["description"], str) and len(r["description"]) > 500:
+                r["description"] = r["description"][:500] + "..."
+            if "schema:description" in r and isinstance(r["schema:description"], str) and len(r["schema:description"]) > 500:
+                r["schema:description"] = r["schema:description"][:500] + "..."
             
         if format != "markdown":
             return [types.TextContent(type="text", text=json.dumps(results, indent=2))]
@@ -434,26 +439,59 @@ async def elasticsearch_fulltext_search(q: str, limit: int = 10, format: str = "
     except Exception as e:
         return [types.TextContent(type="text", text=f"Failed to query Elasticsearch: {str(e)}")]
 
-async def build_collection_from_expert(collection_name: str, expert_index: str, query: str, is_private: bool = False) -> list[types.TextContent]:
+async def build_collection_from_expert(collection_name: str, expert_index: str, query: str, limit: int = None, is_private: bool = False) -> list[types.TextContent]:
     import os, uuid, datetime, json, httpx, io
     es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
     from minio import Minio
-    
     try:
+        # Normalize expert_index aliases
+        expert_map = {
+            "trump": "trump",
+            "croissant": "croissant",
+            "dataverse": "dataverse",
+            "openml": "openml",
+            "honduras": "honduras",
+            "hips": "hips",
+            "ollama": "ollama",
+            "huggingface": "huggingface",
+            "delpher": "delpher"
+        }
+        idx = expert_index.lower().strip()
+        if idx.endswith(" expert"):
+            idx = idx[:-7].strip()
+        expert_index_resolved = expert_map.get(idx, idx)
+
+        # Detect 'without limit' or 'no limit'
+        clean_query = query
+        without_limit = False
+        if limit is None:
+            q_lower = query.lower()
+            if "without limit" in q_lower or "no limit" in q_lower or "unlimited" in q_lower:
+                without_limit = True
+                clean_query = query
+                for phrase in ["without limit", "without limits", "no limit", "unlimited"]:
+                    import re
+                    clean_query = re.sub(re.escape(phrase), "", clean_query, flags=re.IGNORECASE).strip()
+            effective_limit = 10000 if without_limit else 25
+        elif limit <= 0 or limit >= 10000:
+            effective_limit = 10000
+        else:
+            effective_limit = limit
+
         # Step 1: Query the expert
-        if expert_index.lower() != "delpher":
+        if expert_index_resolved != "delpher":
             payload = {
-                "size": 25,
+                "size": effective_limit,
                 "query": {
                     "query_string": {
-                        "query": f"*{query}* OR {query}",
+                        "query": f"*{clean_query}* OR {clean_query}" if clean_query else "*",
                         "fields": ["_full_text", "_markdown_text", "name", "description", "schema:name", "schema:description", "title", "dcterms:title", "dsDescription.dsDescriptionValue", "citation:dsDescriptionValue", "*"]
                     }
                 }
             }
             
             async with httpx.AsyncClient(timeout=30.0) as client:
-                docs_resp = await client.post(f"{es_url}/{expert_index}/_search", json=payload)
+                docs_resp = await client.post(f"{es_url}/{expert_index_resolved}/_search", json=payload)
                 if docs_resp.status_code != 200:
                     return [types.TextContent(type="text", text=f"Failed to query expert '{expert_index}': {docs_resp.text}")]
                     
@@ -564,7 +602,23 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
         return [types.TextContent(type="text", text=f"Error building collection: {str(e)}")]
 
 async def ask_expert(index: str, q: str, limit: int = 10) -> list[types.TextContent]:
-    es_url = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200").rstrip("/")
+    es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+    expert_map = {
+        "trump": "trump",
+        "croissant": "croissant",
+        "dataverse": "dataverse",
+        "openml": "openml",
+        "honduras": "honduras",
+        "hips": "hips",
+        "ollama": "ollama",
+        "huggingface": "huggingface",
+        "delpher": "delpher"
+    }
+    idx = (index or "").lower().strip()
+    if idx.endswith(" expert"):
+        idx = idx[:-7].strip()
+    index_resolved = expert_map.get(idx, idx)
+
     try:
         payload = {
             "size": limit,
@@ -577,12 +631,12 @@ async def ask_expert(index: str, q: str, limit: int = 10) -> list[types.TextCont
         }
         async with httpx.AsyncClient(timeout=30.0, headers=get_auth_headers(get_auth_headers())) as client:
             response = await client.post(
-                f"{es_url}/{index}/_search",
+                f"{es_url}/{index_resolved}/_search",
                 json=payload,
                 headers={"Content-Type": "application/json"}
             )
             if response.status_code == 404:
-                return [types.TextContent(type="text", text=f"No index '{index}' found.")]
+                return [types.TextContent(type="text", text=f"No index '{index_resolved}' found.")]
             response.raise_for_status()
             data = response.json()
             
@@ -2468,13 +2522,17 @@ SYSTEM INSTRUCTION FOR LLM - Navigation Guide:
 
 7. If the user asks to analyze/describe a URL or file, use the 'url_to_croissant' tool first.
 
-8. If the user asks to search for datasets generally, use the 'ask_expert' tool. Start by querying a relevant index like 'dataverse' or 'openml'. If it does not return enough datasets to satisfy the user's request, try querying other indices. Then use 'extract_variables_from_croissant' for each found dataset.
+8. If the user asks to search for datasets generally, use the 'ask_expert' tool. Available expert collections in Elasticsearch include: 'trump' (for Trump expert/collection), 'croissant' (for Croissant expert/collection), 'dataverse', 'openml', 'honduras', 'hips', 'ollama', 'huggingface'. Start by querying the relevant index (e.g. 'trump' for Trump queries, 'croissant' for general Croissant datasets).
 
 9. CRITICAL: If you extract variables from datasets, you MUST include ALL extracted variables formatted clearly as a Markdown table or list in your Final Answer. Do NOT tell the user to check the tool outputs; output the actual variables in your markdown response!
 
 10. Do NOT use the 'save_to_vault' tool manually unless specifically requested. The system will automatically save your final results to the vault.
 
-11. If the user asks to create a collection from an expert or source (e.g. "Create collection Tesla by filling papers from Delpher on Nikola Tesla" or "Create Malawi datasets collection and ask Dataverse expert to fill it"), you MUST use the 'build_collection_from_expert' tool, providing the collection_name, expert_index (e.g., 'delpher', 'dataverse'), and query. Do not use url_to_croissant for this.
+11. If the user asks to create a collection from an expert or source (e.g. "Create collection Trump and ask Trump expert to fill it", "Create collection Trump diesel deal and ask trump expert to fill it on diesel without limit", "Create collection Tesla by filling papers from Delpher on Nikola Tesla", or "Create Malawi datasets collection and ask Dataverse expert to fill it"):
+   - You MUST use the 'build_collection_from_expert' tool immediately!
+   - Provide collection_name (e.g. 'Trump diesel deal'), expert_index (e.g. 'trump' for Trump expert, 'croissant' for Croissant expert, 'delpher', 'dataverse', etc.), and query (e.g. 'diesel' or 'Donald Trump').
+   - If the user specifies "without limit", "no limit", or similar, pass limit=10000 (or include "without limit" in the query).
+   - Do NOT call elasticsearch_fulltext_search or other tools first; call 'build_collection_from_expert' directly.
 
 12. If the user asks to "Search across all collections: <query>", use the 'elasticsearch_fulltext_search' tool to query elastic and summarize the relevant metadata based on the query.
 
@@ -2496,7 +2554,7 @@ Here is detailed information about how every tool works:
 - planner: Get navigation and instructions on which tool to use based on the user's intent.
 - search_croissant_datasets: Search for datasets across the Semantic Croissant database using keywords.
 - elasticsearch_fulltext_search: Query the Elasticsearch index directly for indexed Croissant datasets (includes full-text search over full Markdown and metadata).
-- ask_expert: Query one of the semantic expert indices (e.g., 'dataverse', 'openml', 'honduras') for highly specific knowledge and datasets.
+- ask_expert: Query one of the semantic expert indices in Elasticsearch: 'trump' (Trump expert/collection), 'croissant' (Croissant expert/collection), 'dataverse', 'openml', 'honduras', 'hips', 'ollama', 'huggingface'.
 - get_croissant_dataset: Get the full Croissant JSON-LD payload for a specific dataset ID. IMPORTANT: You MUST read the JSON payload and print a summary of the dataset (Title, Description, Creator, URL) for the user in readable Markdown. Do not hide the payload.
 - hazards_info_profile: Search for Hazard Information Profiles (HIPs) based on a query.
 - hazards_translation: Get translations for Hazard Information Profiles into a specific language.
@@ -2509,9 +2567,13 @@ Here is detailed information about how every tool works:
 - extract_keyfigures: Extract ALL numbers, key figures, and numerical data points from a text file or vault document and return them as a CSV.
 - finalize_keyfigures: After generating the CSV from extract_keyfigures, call this tool to save the CSV and the corresponding Croissant JSON-LD to the vault.
 - google-drive: Perform operations on Google Drive (search, read, upload).
-- build_collection_from_expert: A macro tool that queries an expert index for a specific topic, automatically creates a new Collection, and fills it with the returned documents.
+- build_collection_from_expert: A macro tool that queries an expert index for a specific topic, automatically creates a new Collection, and fills it with the returned documents. Available expert indices include: 'trump', 'croissant', 'dataverse', 'openml', 'honduras', 'hips', 'ollama', 'huggingface', 'delpher'.
 
-11. If the user asks to create a collection from an expert or source (e.g. "Create collection Tesla by filling papers from Delpher on Nikola Tesla" or "Create Malawi datasets collection and ask Dataverse expert to fill it"), you MUST use the 'build_collection_from_expert' tool, providing the collection_name, expert_index (e.g., 'delpher', 'dataverse'), and query. Do not use url_to_croissant for this.
+11. If the user asks to create a collection from an expert or source (e.g. "Create collection Trump and ask Trump expert to fill it", "Create collection Trump diesel deal and ask trump expert to fill it on diesel without limit", "Create collection Tesla by filling papers from Delpher on Nikola Tesla", or "Create Malawi datasets collection and ask Dataverse expert to fill it"):
+   - You MUST use the 'build_collection_from_expert' tool immediately!
+   - Provide collection_name (e.g. 'Trump diesel deal'), expert_index (e.g. 'trump' for Trump expert, 'croissant' for Croissant expert, 'delpher', 'dataverse', etc.), and query (e.g. 'diesel' or 'Donald Trump').
+   - If the user specifies "without limit", "no limit", or similar, pass limit=10000 (or include "without limit" in the query).
+   - Do NOT call elasticsearch_fulltext_search or other tools first; call 'build_collection_from_expert' directly.
 
 12. If the user asks to "Search across all collections: <query>", use the 'elasticsearch_fulltext_search' tool to query elastic and summarize the relevant metadata based on the query.
 
@@ -2576,10 +2638,13 @@ Here is detailed information about how every tool works:
             format=arguments.get("format", "json-ld")
         )
     elif name == "build_collection_from_expert":
+        raw_limit = arguments.get("limit")
+        limit_val = int(raw_limit) if raw_limit is not None else None
         return await build_collection_from_expert(
             collection_name=arguments.get("collection_name"),
             expert_index=arguments.get("expert_index"),
             query=arguments.get("query"),
+            limit=limit_val,
             is_private=arguments.get("is_private", False)
         )
     elif name == "ask_expert":
@@ -2767,22 +2832,26 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="build_collection_from_expert",
-            description="A macro tool that queries an expert index for a specific topic, automatically creates a new Collection, and fills it with the returned documents.",
+            description="A macro tool that queries an expert index for a specific topic, automatically creates a new Collection, and fills it with the returned documents. Available expert indices include: 'trump', 'croissant', 'dataverse', 'openml', 'honduras', 'hips', 'ollama', 'huggingface', 'delpher'.",
             inputSchema={
                 "type": "object",
                 "required": ["collection_name", "expert_index", "query"],
                 "properties": {
                     "collection_name": {
                         "type": "string",
-                        "description": "The name of the collection to create (e.g., 'Climate Change in the Netherlands')."
+                        "description": "The name of the collection to create (e.g., 'Trump', 'Climate Change in the Netherlands')."
                     },
                     "expert_index": {
                         "type": "string",
-                        "description": "The specific elastic index for the expert (e.g., 'dataverse', 'croissant')."
+                        "description": "The specific elastic index for the expert (e.g., 'trump', 'croissant', 'dataverse', 'openml', 'delpher'). For Trump expert, use 'trump'. For Croissant expert, use 'croissant'."
                     },
                     "query": {
                         "type": "string",
                         "description": "The search query to ask the expert for."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of documents to put into the collection (default 25). If the user asks 'without limit' or 'no limit', set this to 10000 or leave as null."
                     },
                     "is_private": {
                         "type": "boolean",
@@ -2794,7 +2863,7 @@ async def list_tools() -> list[types.Tool]:
         
         types.Tool(
             name="ask_expert",
-            description="Query the specific elastic index for the expert by name. Available collections: 'croissant', 'dataverse', 'ollama', 'huggingface', 'openml', 'hips', 'honduras'.",
+            description="Query the specific elastic index for the expert by name. Available collections/indices: 'trump', 'croissant', 'dataverse', 'ollama', 'huggingface', 'openml', 'hips', 'honduras'. For Trump expert use 'trump'. For Croissant expert use 'croissant'.",
             inputSchema={
                 "type": "object",
                 "required": ["index", "q"],
@@ -3605,8 +3674,19 @@ Please answer the question based ONLY on the context provided above, or by using
                         import json
                         from starlette.responses import Response
                         async with httpx.AsyncClient(timeout=10.0) as es_client:
-                            es_resp = await es_client.get(f"{es_url}/croissant/_doc/{es_id}")
-                            if es_resp.status_code == 200:
+                            es_resp = None
+                            for idx_name in ["trump", "croissant"]:
+                                r = await es_client.get(f"{es_url}/{idx_name}/_doc/{es_id}")
+                                if r.status_code == 200:
+                                    es_resp = r
+                                    break
+                            if not es_resp:
+                                r_all = await es_client.post(f"{es_url}/_all/_search", json={"query": {"term": {"_id": es_id}}, "size": 1})
+                                if r_all.status_code == 200:
+                                    hits = r_all.json().get("hits", {}).get("hits", [])
+                                    if hits:
+                                        es_resp = type("DummyResp", (), {"status_code": 200, "json": lambda: hits[0]})()
+                            if es_resp and es_resp.status_code == 200:
                                 es_data = es_resp.json().get("_source", {})
                                 es_data.pop("_full_text", None)
                                 es_data.pop("_markdown_text", None)
@@ -3747,15 +3827,29 @@ Please answer the question based ONLY on the context provided above, or by using
                 return "\n".join(md)
 
             es_id = request.path_params["es_id"]
-            es_url = "http://elasticsearch:9200"
+            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
             md_text = None
             media_type = "text/markdown"
             
             async with httpx.AsyncClient() as client:
                 try:
-                    r = await client.get(f"{es_url}/croissant/_doc/{es_id}")
-                    if r.status_code == 200:
-                        doc_source = r.json().get("_source", {})
+                    # Check across trump, croissant, and all indices
+                    candidate_indices = ["trump", "croissant"]
+                    doc_source = None
+                    for idx_name in candidate_indices:
+                        r = await client.get(f"{es_url}/{idx_name}/_doc/{es_id}")
+                        if r.status_code == 200:
+                            doc_source = r.json().get("_source", {})
+                            break
+                    if not doc_source:
+                        # Try generic search by _id across all indices
+                        r = await client.post(f"{es_url}/_all/_search", json={"query": {"term": {"_id": es_id}}, "size": 1})
+                        if r.status_code == 200:
+                            hits = r.json().get("hits", {}).get("hits", [])
+                            if hits:
+                                doc_source = hits[0].get("_source", {})
+
+                    if doc_source:
                         md_text = doc_source.get("_markdown_text", None)
                         
                         # Some ingested documents mistakenly have their raw JSON-LD or other JSON saved in the _markdown_text field.
@@ -4448,7 +4542,7 @@ Please answer the question based ONLY on the context provided above, or by using
                     "is_private": data.get("is_private", False),
                     "owner": owner,
                     "created_at": datetime.datetime.utcnow().isoformat() + "Z",
-                    "items": []
+                    "items": data.get("items", [])
                 }
                 
                 m_client = get_minio_client()
@@ -4670,18 +4764,46 @@ Please answer the question based ONLY on the context provided above, or by using
                 if items:
                     es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
                     async with httpx.AsyncClient() as client:
-                        payload = {"query": {"terms": {"_id": items}}, "size": len(items), "_source": ["name", "description"]}
-                        docs_resp = await client.post(f"{es_url}/croissant/_search", json=payload)
+                        payload = {"query": {"terms": {"_id": items}}, "size": len(items), "_source": ["name", "description", "url", "_source_url", "datePublished", "dateCreated", "dateModified", "unmappedFields", "_full_text", "keywords"]}
+                        docs_resp = await client.post(f"{es_url}/trump,croissant/_search", json=payload)
                         hits = docs_resp.json().get("hits", {}).get("hits", []) if docs_resp.status_code == 200 else []
                         es_docs = {h.get("_id"): h for h in hits}
                         
                         for doc_id in items:
                             name = "Vault Document"
                             desc = "Metadata not available in search index."
+                            item_date = None
+                            item_keywords = []
                             if doc_id in es_docs:
                                 s = es_docs[doc_id].get("_source", {})
                                 name = s.get("name", "Unknown Title")
                                 desc = str(s.get("description", ""))
+                                kw = s.get("keywords")
+                                if kw:
+                                    if isinstance(kw, list):
+                                        item_keywords = [str(k).strip() for k in kw if str(k).strip()]
+                                    elif isinstance(kw, str):
+                                        item_keywords = [str(k).strip() for k in kw.split(",") if str(k).strip()]
+                                item_date = s.get("datePublished") or s.get("dateCreated") or s.get("dateModified")
+                                if not item_date:
+                                    for uf in s.get("unmappedFields", []):
+                                        if isinstance(uf, dict):
+                                            for k, v in uf.items():
+                                                if any(x in k.lower() for x in ["date", "time", "published"]) and isinstance(v, str):
+                                                    item_date = v
+                                                    break
+                                        if item_date:
+                                            break
+                                if not item_date:
+                                    url_val = s.get("url") or s.get("_source_url") or ""
+                                    m_url = re.search(r'(20\d{2}[-/]\d{1,2}[-/]\d{1,2})', url_val)
+                                    if m_url:
+                                        item_date = m_url.group(1).replace('/', '-')
+                                if not item_date:
+                                    ft = s.get("_full_text", "")
+                                    m_ft = re.search(r'(20\d{2}-\d{2}-\d{2})', ft)
+                                    if m_ft:
+                                        item_date = m_ft.group(1)
                             else:
                                 try:
                                     j_resp = m_client.get_object("vault", doc_id + ".jsonld")
@@ -4691,6 +4813,13 @@ Please answer the question based ONLY on the context provided above, or by using
                                     if "name" in j_data:
                                         name = j_data["name"]
                                         desc = str(j_data.get("description", "Fetched from Vault."))
+                                        item_date = j_data.get("datePublished") or j_data.get("dateCreated")
+                                        kw = j_data.get("keywords")
+                                        if kw:
+                                            if isinstance(kw, list):
+                                                item_keywords = [str(k).strip() for k in kw if str(k).strip()]
+                                            elif isinstance(kw, str):
+                                                item_keywords = [str(k).strip() for k in kw.split(",") if str(k).strip()]
                                 except Exception:
                                     try:
                                         md_resp = m_client.get_object("vault", doc_id + ".md")
@@ -4701,16 +4830,172 @@ Please answer the question based ONLY on the context provided above, or by using
                                         if h1_match:
                                             name = h1_match.group(1).strip()
                                         desc = "Fetched from Vault (Markdown document)."
+                                        m_d = re.search(r'(20\d{2}-\d{2}-\d{2})', md_data)
+                                        if m_d:
+                                            item_date = m_d.group(1)
                                     except Exception:
                                         pass
                                         
-                            resolved_items.append({"id": doc_id, "name": name, "description": desc})
+                            resolved_items.append({"id": doc_id, "name": name, "description": desc, "date": item_date, "keywords": item_keywords})
                             
                 col_data["resolved_items"] = resolved_items
                 return JSONResponse(col_data)
             except Exception as e:
                 return JSONResponse({"error": str(e)}, status_code=500)
+
+        async def api_collections_export_croissant(request):
+            from starlette.responses import JSONResponse
+            import json, httpx, os, re
+            try:
+                cid = request.path_params["id"]
+                m_client = get_minio_client()
+                try:
+                    resp = m_client.get_object("collections", f"{cid}.json")
+                    col_data = json.loads(resp.read().decode("utf-8"))
+                    resp.close()
+                    resp.release_conn()
+                except Exception:
+                    return JSONResponse({"error": "Collection not found"}, status_code=404)
+
+                items = list(col_data.get("items", []))
                 
+                # Fetch descendant subcollections to include their items as well
+                try:
+                    objects = m_client.list_objects("collections")
+                    all_cols = []
+                    for obj in objects:
+                        if obj.object_name.endswith(".json"):
+                            try:
+                                c_resp = m_client.get_object("collections", obj.object_name)
+                                all_cols.append(json.loads(c_resp.read().decode("utf-8")))
+                                c_resp.close()
+                                c_resp.release_conn()
+                            except Exception:
+                                pass
+                    descendants = set([cid])
+                    added = True
+                    while added:
+                        added = False
+                        for c in all_cols:
+                            if c.get("id") not in descendants and c.get("parent_id") in descendants:
+                                descendants.add(c.get("id"))
+                                added = True
+                    for c in all_cols:
+                        if c.get("id") in descendants and c.get("id") != cid:
+                            items.extend(c.get("items", []))
+                    seen_ids = set()
+                    items = [x for x in items if not (x in seen_ids or seen_ids.add(x))]
+                except Exception:
+                    pass
+
+                es_docs = {}
+                if items:
+                    es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        # Batch in chunks of 500
+                        chunk_size = 500
+                        for i in range(0, len(items), chunk_size):
+                            chunk = items[i:i + chunk_size]
+                            payload = {
+                                "query": {"terms": {"_id": chunk}},
+                                "size": len(chunk),
+                                "_source": True
+                            }
+                            docs_resp = await client.post(f"{es_url}/trump,croissant/_search", json=payload)
+                            if docs_resp.status_code == 200:
+                                for h in docs_resp.json().get("hits", {}).get("hits", []):
+                                    es_docs[h["_id"]] = h.get("_source", {})
+
+                distributions = []
+                record_sets = []
+                has_parts = []
+                
+                for doc_id in items:
+                    src = es_docs.get(doc_id)
+                    doc_jsonld = None
+                    if not src:
+                        try:
+                            j_resp = m_client.get_object("vault", f"{doc_id}.jsonld")
+                            doc_jsonld = json.loads(j_resp.read().decode("utf-8"))
+                            j_resp.close()
+                            j_resp.release_conn()
+                        except Exception:
+                            pass
+                    
+                    doc_data = src or doc_jsonld or {}
+                    doc_name = doc_data.get("name") or f"Material {doc_id}"
+                    doc_desc = doc_data.get("description") or f"Collection material {doc_id}"
+                    doc_url = doc_data.get("url") or doc_data.get("_source_url") or f"https://ai.mediaquantum.eu/vault/doc/{doc_id}"
+                    doc_keywords = doc_data.get("keywords") or []
+                    if isinstance(doc_keywords, str):
+                        doc_keywords = [k.strip() for k in doc_keywords.split(",") if k.strip()]
+                    doc_date = doc_data.get("datePublished") or doc_data.get("dateCreated") or doc_data.get("dateModified")
+
+                    dist_obj = {
+                        "@type": "cr:FileObject",
+                        "@id": f"material-{doc_id}",
+                        "name": doc_name,
+                        "description": doc_desc,
+                        "contentUrl": doc_url,
+                        "encodingFormat": "text/html"
+                    }
+                    if doc_date:
+                        dist_obj["datePublished"] = doc_date
+                    if doc_keywords:
+                        dist_obj["keywords"] = doc_keywords
+
+                    distributions.append(dist_obj)
+
+                    has_parts.append({
+                        "@type": "schema:CreativeWork",
+                        "@id": f"https://ai.mediaquantum.eu/vault/doc/{doc_id}",
+                        "name": doc_name,
+                        "description": doc_desc,
+                        "url": doc_url
+                    })
+
+                col_name = col_data.get("name") or "Collection"
+                col_desc = col_data.get("description") or f"Croissant dataset collection {cid}"
+                created_date = col_data.get("created_at")
+
+                croissant_doc = {
+                    "@context": {
+                        "@vocab": "https://schema.org/",
+                        "schema": "https://schema.org/",
+                        "cr": "http://mlcommons.org/croissant/",
+                        "odrl": "http://www.w3.org/ns/odrl/2/",
+                        "dct": "http://purl.org/dc/terms/",
+                        "conformsTo": "dct:conformsTo",
+                        "distribution": "cr:distribution",
+                        "recordSet": "cr:recordSet",
+                        "field": "cr:field",
+                        "dataType": "cr:dataType"
+                    },
+                    "@type": ["schema:Dataset", "cr:Dataset"],
+                    "@id": f"https://ai.mediaquantum.eu/collections/{cid}",
+                    "name": col_name,
+                    "description": col_desc,
+                    "url": f"https://ai.mediaquantum.eu/collections/{cid}",
+                    "conformsTo": "http://mlcommons.org/croissant/1.1",
+                    "license": "https://creativecommons.org/licenses/by/4.0/",
+                    "distribution": distributions,
+                    "hasPart": has_parts
+                }
+                if created_date:
+                    croissant_doc["dateCreated"] = created_date
+
+                headers = {
+                    "Content-Disposition": f'inline; filename="collection-{cid}-croissant.jsonld"',
+                    "Content-Type": "application/ld+json; charset=utf-8"
+                }
+                if request.query_params.get("download") == "1":
+                    headers["Content-Disposition"] = f'attachment; filename="collection-{cid}-croissant.jsonld"'
+                return JSONResponse(croissant_doc, headers=headers)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                return JSONResponse({"error": str(e)}, status_code=500)
+
         async def api_collections_delete(request):
 
             from starlette.responses import JSONResponse
@@ -5106,8 +5391,104 @@ Please answer the question based ONLY on the context provided above, or by using
                     traceback.print_exc()
                     pass
 
-            docs_content = await get_collection_documents(collection_id, limit=50)
+            docs_content = await get_collection_documents(collection_id, limit=60)
             context = docs_content[0].text if docs_content else ""
+
+            # Check if user query is asking to cluster, categorize, organize, or create subcollections
+            q_lower = query.lower()
+            is_cluster_request = any(k in q_lower for k in [
+                "cluster", "clusters", "organize", "themes", "patterns", 
+                "categorize", "group", "subcollection", "subcollections", "topic-based"
+            ])
+
+            if is_cluster_request:
+                cluster_prompt = f"""You are an AI assistant analyzing a collection of documents.
+Context of collection items:
+{context}
+
+User query: {query}
+
+Please analyze the items in this collection, identify distinct recurring themes, patterns, or topics, and cluster the items into logical topic-based groups.
+Output a JSON object with:
+"intent": "CLUSTERS",
+"explanation": "A clear, concise summary of the recurring themes and rationale for the clusters.",
+"clusters": [
+  {{
+    "name": "Distinct Short Topic/Subcollection Name",
+    "description": "Brief description of this topic cluster",
+    "item_ids": ["id1", "id2", ...]
+  }}
+]"""
+
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    try:
+                        c_resp = await client.post(f"{ollama_url}/api/chat", json={
+                            "model": model,
+                            "messages": [{"role": "user", "content": cluster_prompt}],
+                            "stream": False,
+                            "format": "json"
+                        }, headers=req_headers)
+                        c_json = c_resp.json()
+                        c_text = c_json.get("message", {}).get("content", "").strip()
+                        if c_text.startswith("```"):
+                            c_text = c_text.split("```")[1]
+                            if c_text.startswith("json"):
+                                c_text = c_text[4:]
+                            c_text = c_text.strip()
+                        c_data = json.loads(c_text)
+                        
+                        created_subcollections = []
+                        clusters = c_data.get("clusters", [])
+                        if clusters and isinstance(clusters, list):
+                            import uuid, datetime, io
+                            from minio import Minio
+                            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+                            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                            endpoint = minio_base.replace("http://", "").replace("https://", "")
+                            m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
+                            
+                            for cl in clusters:
+                                sub_name = cl.get("name", "Untitled Cluster").strip()
+                                sub_desc = cl.get("description", "").strip()
+                                sub_items = cl.get("item_ids", [])
+                                sub_id = str(uuid.uuid4())
+                                sub_col_data = {
+                                    "id": sub_id,
+                                    "name": sub_name,
+                                    "description": sub_desc,
+                                    "parent_id": collection_id,
+                                    "is_supercollection": False,
+                                    "is_private": False,
+                                    "owner": None,
+                                    "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+                                    "items": sub_items
+                                }
+                                sub_bytes = json.dumps(sub_col_data).encode("utf-8")
+                                m_client.put_object("collections", f"{sub_id}.json", io.BytesIO(sub_bytes), len(sub_bytes), content_type="application/json")
+                                await client.put(f"{es_url}/collections/_doc/{sub_id}", json=sub_col_data)
+                                created_subcollections.append({
+                                    "id": sub_id,
+                                    "name": sub_name,
+                                    "description": sub_desc,
+                                    "count": len(sub_items)
+                                })
+                                
+                            explanation = c_data.get("explanation", "The collection has been organized into topic-based clusters.")
+                            md_response = [f"### 📂 Subcollections Created ({len(created_subcollections)})\n\n{explanation}\n"]
+                            for sub in created_subcollections:
+                                md_response.append(f"- [**{sub['name']}**](/collections/{sub['id']}) ({sub['count']} items)\n  *{sub['description']}*")
+                            
+                            md_response.append("\n\n*The subcollections have been created under this collection.*")
+                            return JSONResponse({
+                                "answer": "\n".join(md_response),
+                                "action": "subcollections_created",
+                                "subcollections": created_subcollections
+                            })
+                    except Exception as cluster_e:
+                        import traceback
+                        print(f"Error during clustering: {cluster_e}")
+                        traceback.print_exc()
+                        pass
             
             system_prompt = f"You are an AI assistant. Use the following context about datasets in a collection to answer the user's question:\n\n{context}\n\nIMPORTANT: When listing or referencing datasets, you MUST format them as Markdown links using their exact Vault URLs as provided in the context."
             
@@ -5594,6 +5975,7 @@ Please answer the question based ONLY on the context provided above, or by using
 
                 Route("/api/collections/{id}", endpoint=api_collections_get_single, methods=["GET"]),
                 Route("/api/collections/{id}/resolved", endpoint=api_collections_get_resolved, methods=["GET"]),
+                Route("/api/collections/{id}/export", endpoint=api_collections_export_croissant, methods=["GET"]),
                 Route("/api/collections/{id}/ask", endpoint=api_collections_ask, methods=["POST"]),
                 Route("/api/collectionsindex/ask", endpoint=api_collections_index_ask, methods=["POST"]),
                 Route("/collections/{es_id}", endpoint=collection_es_doc_html),
