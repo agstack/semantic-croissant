@@ -3960,7 +3960,10 @@ Please answer the question based ONLY on the context provided above, or by using
                         size = d.get('contentSize')
                         if size: md.append(f"- **Size:** {size}")
                         curl = d.get('contentUrl')
-                        if curl: md.append(f"- **[Download]({curl})**")
+                        if curl:
+                            import urllib.parse
+                            export_url = f"/export?url={urllib.parse.quote(curl, safe='')}"
+                            md.append(f"- **[Download]({curl})** &nbsp;|&nbsp; **[⚡ Export to CDIF]({export_url})**")
                         md.append("")
                     md.append("\n")
                     
