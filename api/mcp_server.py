@@ -3798,6 +3798,27 @@ Please answer the question based ONLY on the context provided above, or by using
                             d['encodingFormat'] = matched_df.get('contentType')
                         if matched_df.get('filesize'):
                             d['contentSize'] = str(matched_df.get('filesize'))
+
+                # Enrich each FileObject with subjectOf pointing to the DDI-CDI export
+                base_host = f"https://{MCP_DOMAIN}"
+                ds_for_export = data.get('url') or data.get('identifier')
+                for d in dists:
+                    if not isinstance(d, dict): continue
+                    curl = d.get('contentUrl')
+                    if curl:
+                        fn = d.get('name') or (d.get('@id') if isinstance(d.get('@id'), str) and not d.get('@id').startswith('http') else 'file')
+                        if ds_for_export:
+                            export_url = f"{base_host}/export?ds={urllib.parse.quote(ds_for_export, safe='')}&file={urllib.parse.quote(curl, safe='')}"
+                        else:
+                            export_url = f"{base_host}/export?file={urllib.parse.quote(curl, safe='')}"
+                        d['subjectOf'] = {
+                            "@type": "Dataset",
+                            "@id": export_url,
+                            "name": f"DDI-CDI description of {fn}",
+                            "encodingFormat": "application/ld+json",
+                            "conformsTo": "https://ddialliance.org/Specification/DDI-CDI/1.1/",
+                            "url": export_url
+                        }
             except Exception as e:
                 print(f"Failed to align Dataverse distributions: {e}")
             return data
@@ -3841,6 +3862,28 @@ Please answer the question based ONLY on the context provided above, or by using
                                             item["annotationText"] = s_text.strip()
                                         except Exception as e:
                                             item["annotationTextError"] = str(e)
+                        jdata = fix_croissant_dataverse_distributions(jdata)
+                        base_host = f"https://{MCP_DOMAIN}"
+                        ds_for_export = jdata.get('url') or jdata.get('identifier')
+                        dists = jdata.get('distribution') or jdata.get('fileObject') or jdata.get('fileSet') or []
+                        if isinstance(dists, list):
+                            import urllib.parse
+                            for d in dists:
+                                if isinstance(d, dict) and d.get('contentUrl') and not d.get('subjectOf'):
+                                    curl = d.get('contentUrl')
+                                    fn = d.get('name') or (d.get('@id') if isinstance(d.get('@id'), str) and not d.get('@id').startswith('http') else 'file')
+                                    if ds_for_export:
+                                        export_url = f"{base_host}/export?ds={urllib.parse.quote(ds_for_export, safe='')}&file={urllib.parse.quote(curl, safe='')}"
+                                    else:
+                                        export_url = f"{base_host}/export?file={urllib.parse.quote(curl, safe='')}"
+                                    d['subjectOf'] = {
+                                        "@type": "Dataset",
+                                        "@id": export_url,
+                                        "name": f"DDI-CDI description of {fn}",
+                                        "encodingFormat": "application/ld+json",
+                                        "conformsTo": "https://ddialliance.org/Specification/DDI-CDI/1.1/",
+                                        "url": export_url
+                                    }
                         data = json.dumps(jdata, indent=2).encode("utf-8")
                     except Exception as e:
                         import sys

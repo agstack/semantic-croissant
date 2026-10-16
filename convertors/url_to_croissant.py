@@ -932,6 +932,9 @@ def fix_croissant_dataverse_distributions(data):
             if orig_fn: api_by_name[orig_fn] = df
             if lbl: api_by_name[lbl] = df
 
+        MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "ai.mediaquantum.eu")
+        base_host = f"https://{MCP_DOMAIN}"
+        ds_for_export = data.get('url') or data.get('identifier')
         for d in dists:
             if not isinstance(d, dict): continue
             name = d.get('name')
@@ -948,6 +951,22 @@ def fix_croissant_dataverse_distributions(data):
                     d['encodingFormat'] = matched_df.get('contentType')
                 if matched_df.get('filesize'):
                     d['contentSize'] = str(matched_df.get('filesize'))
+
+            curl = d.get('contentUrl')
+            if curl:
+                fn = d.get('name') or (d.get('@id') if isinstance(d.get('@id'), str) and not d.get('@id').startswith('http') else 'file')
+                if ds_for_export:
+                    export_url = f"{base_host}/export?ds={urllib.parse.quote(ds_for_export, safe='')}&file={urllib.parse.quote(curl, safe='')}"
+                else:
+                    export_url = f"{base_host}/export?file={urllib.parse.quote(curl, safe='')}"
+                d['subjectOf'] = {
+                    "@type": "Dataset",
+                    "@id": export_url,
+                    "name": f"DDI-CDI description of {fn}",
+                    "encodingFormat": "application/ld+json",
+                    "conformsTo": "https://ddialliance.org/Specification/DDI-CDI/1.1/",
+                    "url": export_url
+                }
     except Exception as e:
         print(f"Failed to align Dataverse distributions: {e}")
     return data
