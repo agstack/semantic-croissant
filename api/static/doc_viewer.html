@@ -1203,19 +1203,79 @@
                     if (data.recordSet && Array.isArray(data.recordSet)) {
                         html += `<h3 style="border-bottom: 1px solid var(--border-color); padding-bottom: 5px; margin-top: 30px;">Record Sets (Schema)</h3>`;
                         data.recordSet.forEach(rs => {
-                            html += `<div style="margin-top: 15px; padding: 15px; border-left: 3px solid #6c757d; background: #f8f9fa;">`;
-                            html += `<h4 style="margin: 0 0 10px 0;">${rs.name || 'Record Set'}</h4>`;
-                            if (rs.description) html += `<p style="font-size: 0.9rem; margin-top: 0;">${rs.description}</p>`;
+                            // Determine source file and CDIF export link
+                            let fileId = null;
+                            const rsSrc = rs.data || rs.source || {};
+                            if (typeof rsSrc === 'object' && rsSrc) {
+                                fileId = rsSrc['@id'] || (typeof rsSrc.fileObject === 'object' ? rsSrc.fileObject['@id'] : rsSrc.fileObject);
+                            } else if (typeof rsSrc === 'string') {
+                                fileId = rsSrc;
+                            }
+                            if (!fileId && rs.field && Array.isArray(rs.field)) {
+                                for (const f of rs.field) {
+                                    const fSrc = f.source;
+                                    if (typeof fSrc === 'object' && fSrc) {
+                                        const fo = fSrc.fileObject;
+                                        if (typeof fo === 'object' && fo && fo['@id']) { fileId = fo['@id']; break; }
+                                        if (typeof fo === 'string') { fileId = fo; break; }
+                                        if (fSrc['@id']) { fileId = fSrc['@id']; break; }
+                                    }
+                                }
+                            }
+
+                            let matchedDist = null;
+                            if (dists && Array.isArray(dists)) {
+                                for (const d of dists) {
+                                    if (fileId && (d['@id'] === fileId || d.name === fileId)) { matchedDist = d; break; }
+                                }
+                                if (!matchedDist && fileId) {
+                                    for (const d of dists) {
+                                        if (d.name && (d.name.endsWith(fileId) || fileId.endsWith(d.name))) { matchedDist = d; break; }
+                                    }
+                                }
+                                if (!matchedDist && dists.length === 1) {
+                                    matchedDist = dists[0];
+                                }
+                            }
+
+                            const sourceFileName = matchedDist ? (matchedDist.name || matchedDist['@id']) : (fileId || null);
+                            let cdifDownloadHref = null;
+                            if (matchedDist && matchedDist.contentUrl) {
+                                const dsParam = data.url || data.identifier || '';
+                                cdifDownloadHref = dsParam ? `/export?ds=${encodeURIComponent(dsParam)}&file=${encodeURIComponent(matchedDist.contentUrl)}` : `/export?file=${encodeURIComponent(matchedDist.contentUrl)}`;
+                            } else if (matchedDist && matchedDist.subjectOf && matchedDist.subjectOf['@id']) {
+                                cdifDownloadHref = matchedDist.subjectOf['@id'];
+                            }
+
+                            html += `<div style="margin-top: 20px; padding: 18px; border-left: 4px solid var(--accent-color, #0066cc); background: #f8fafc; border-radius: 0 6px 6px 0; border: 1px solid var(--border-color); border-left-width: 4px;">`;
+                            html += `<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">`;
+                            html += `  <h4 style="margin: 0; font-size: 1.05rem; color: var(--text-color);">${rs.name || 'Record Set'}</h4>`;
+                            if (cdifDownloadHref) {
+                                html += `  <a href="${cdifDownloadHref}" target="_blank" class="dist-btn-cdif" title="Export to CDIF (DDI-CDI JSON-LD)" style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 0.82rem; font-weight: 500; text-decoration: none; border-radius: 4px;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                                    <span>Download CDIF</span>
+                                </a>`;
+                            }
+                            html += `</div>`;
+
+                            if (sourceFileName) {
+                                html += `<div style="font-size: 0.85rem; color: #475569; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+                                    <span style="font-weight: 600; color: #64748b;">Source File:</span>
+                                    <code style="background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-size: 0.82rem; color: #0f172a;">${sourceFileName}</code>
+                                </div>`;
+                            }
+
+                            if (rs.description) html += `<p style="font-size: 0.9rem; margin-top: 5px; margin-bottom: 12px; color: #334155;">${rs.description}</p>`;
                             
                             if (rs.field && Array.isArray(rs.field)) {
-                                html += `<table style="width: 100%; font-size: 0.85rem; border-collapse: collapse; margin-top: 10px;">`;
-                                html += `<thead><tr style="background: #e9ecef;"><th style="padding: 8px; text-align: left;">Field</th><th style="padding: 8px; text-align: left;">Type</th><th style="padding: 8px; text-align: left;">Description</th></tr></thead><tbody>`;
+                                html += `<table style="width: 100%; font-size: 0.85rem; border-collapse: collapse; margin-top: 10px; background: #fff; border: 1px solid var(--border-color); border-radius: 4px;">`;
+                                html += `<thead><tr style="background: var(--header-bg, #f1f5f9);"><th style="padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border-color);">Field</th><th style="padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border-color);">Type</th><th style="padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border-color);">Description</th></tr></thead><tbody>`;
                                 rs.field.forEach(f => {
                                     const dataType = f.dataType || f['cr:dataType'] || '';
-                                    html += `<tr style="border-bottom: 1px solid #ddd;">
-                                        <td style="padding: 8px; font-weight: bold;">${f.name || ''}</td>
-                                        <td style="padding: 8px; color: #d63384;">${dataType.replace('sc:', '')}</td>
-                                        <td style="padding: 8px;">${f.description || ''}</td>
+                                    html += `<tr style="border-bottom: 1px solid var(--border-color, #eee);">
+                                        <td style="padding: 8px 12px; font-weight: bold;">${f.name || ''}</td>
+                                        <td style="padding: 8px 12px; color: #d63384; font-family: monospace;">${dataType.replace('sc:', '')}</td>
+                                        <td style="padding: 8px 12px; color: #555;">${f.description || ''}</td>
                                     </tr>`;
                                 });
                                 html += `</tbody></table>`;

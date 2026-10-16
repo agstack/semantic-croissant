@@ -4713,6 +4713,66 @@ Please answer the question based ONLY on the context provided above, or by using
                     for rs in record_sets:
                         rs_name = rs.get('name', 'Record Set')
                         md.append(f"#### {rs_name}")
+                        
+                        # Determine source file and CDIF link
+                        file_id = None
+                        rs_src = rs.get('data') or rs.get('source') or {}
+                        if isinstance(rs_src, dict):
+                            file_id = rs_src.get('@id') or (rs_src.get('fileObject', {}).get('@id') if isinstance(rs_src.get('fileObject'), dict) else rs_src.get('fileObject'))
+                        elif isinstance(rs_src, str):
+                            file_id = rs_src
+                            
+                        if not file_id and rs.get('field') and isinstance(rs.get('field'), list):
+                            for f in rs.get('field'):
+                                f_src = f.get('source')
+                                if isinstance(f_src, dict):
+                                    fo = f_src.get('fileObject')
+                                    if isinstance(fo, dict) and fo.get('@id'):
+                                        file_id = fo.get('@id')
+                                        break
+                                    elif isinstance(fo, str):
+                                        file_id = fo
+                                        break
+                                    elif f_src.get('@id'):
+                                        file_id = f_src.get('@id')
+                                        break
+                                        
+                        matched_dist = None
+                        if dists and isinstance(dists, list):
+                            for d in dists:
+                                if not isinstance(d, dict): continue
+                                if file_id and (d.get('@id') == file_id or d.get('name') == file_id):
+                                    matched_dist = d
+                                    break
+                            if not matched_dist and file_id:
+                                for d in dists:
+                                    if not isinstance(d, dict): continue
+                                    d_name = str(d.get('name', ''))
+                                    if d_name and (d_name.endswith(str(file_id)) or str(file_id).endswith(d_name)):
+                                        matched_dist = d
+                                        break
+                            if not matched_dist and len(dists) == 1 and isinstance(dists[0], dict):
+                                matched_dist = dists[0]
+                                
+                        source_file_name = (matched_dist.get('name') or matched_dist.get('@id')) if matched_dist else file_id
+                        cdif_export_url = None
+                        if matched_dist and matched_dist.get('contentUrl'):
+                            curl = matched_dist.get('contentUrl')
+                            if ds_for_export:
+                                cdif_export_url = f"/export?ds={urllib.parse.quote(ds_for_export, safe='')}&file={urllib.parse.quote(curl, safe='')}"
+                            else:
+                                cdif_export_url = f"/export?file={urllib.parse.quote(curl, safe='')}"
+                        elif matched_dist and isinstance(matched_dist.get('subjectOf'), dict):
+                            cdif_export_url = matched_dist.get('subjectOf', {}).get('@id')
+                            
+                        info_line = []
+                        if source_file_name:
+                            info_line.append(f"**Source File:** `{source_file_name}`")
+                        if cdif_export_url:
+                            info_line.append(f"**CDIF:** [⚡ Download CDIF]({cdif_export_url})")
+                        if info_line:
+                            md.append(f"{' &nbsp;|&nbsp; '.join(info_line)}\n")
+
                         rs_desc = rs.get('description')
                         if rs_desc: md.append(f"{rs_desc}\n")
                         fields = rs.get('field')
