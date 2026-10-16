@@ -1900,13 +1900,40 @@ async def get_cdif_summary(url_or_id: str) -> list[types.TextContent]:
                 except Exception:
                     pass
 
-            # Fetch CDIF JSON-LD from export endpoint
+            # Fetch CDIF JSON-LD from MinIO cache or export endpoint
+            # Step 1: Check MinIO vault cache directly
             try:
-                r_exp = await client.get(export_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-                if r_exp.status_code == 200:
-                    cdif_doc = r_exp.json()
-            except Exception as cdif_err:
+                minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                minio_endpoint = minio_base.replace("http://", "").replace("https://", "")
+                vault_cache_key = f"cdif_cache_{hashlib.sha256((target_file + (target_doi or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
+                from minio import Minio
+                m_cache_client = Minio(
+                    minio_endpoint,
+                    access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                    secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                    secure=False
+                )
+                if m_cache_client.bucket_exists("vault"):
+                    try:
+                        cached_obj = m_cache_client.get_object("vault", vault_cache_key)
+                        cached_bytes = cached_obj.read()
+                        cached_obj.close()
+                        cached_obj.release_conn()
+                        cdif_doc = json.loads(cached_bytes.decode("utf-8"))
+                    except Exception:
+                        pass
+            except Exception:
                 pass
+
+            # Step 2: Fallback to HTTP GET on export_url if not in cache
+            if not cdif_doc:
+                try:
+                    r_exp = await client.get(export_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+                    if r_exp.status_code == 200:
+                        cdif_doc = r_exp.json()
+                except Exception as cdif_err:
+                    pass
+
 
         if not croissant_doc and not cdif_doc:
             return [types.TextContent(type="text", text=f"Could not retrieve Croissant or CDIF metadata for '{url_or_id}'.")]
