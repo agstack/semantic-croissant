@@ -181,6 +181,92 @@
             margin: 0;
             color: var(--text-color);
         }
+
+        /* Professional compact Files & Distributions table */
+        .markdown-body table.dist-table,
+        .markdown-body .dist-table-container table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0 25px 0;
+            font-size: 0.88rem;
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .markdown-body table.dist-table th,
+        .markdown-body .dist-table-container table th {
+            background: var(--header-bg);
+            color: var(--text-color);
+            font-weight: 600;
+            padding: 10px 14px;
+            text-align: left;
+            border-bottom: 2px solid var(--border-color);
+            white-space: nowrap;
+        }
+
+        .markdown-body table.dist-table td,
+        .markdown-body .dist-table-container table td {
+            padding: 8px 14px;
+            border-bottom: 1px solid var(--border-color);
+            vertical-align: middle;
+        }
+
+        .markdown-body table.dist-table tbody tr:hover,
+        .markdown-body .dist-table-container table tbody tr:hover {
+            background-color: rgba(0, 0, 0, 0.02);
+        }
+
+        .dist-badge-format {
+            display: inline-block;
+            padding: 2px 7px;
+            border-radius: 4px;
+            background: #eef2f6;
+            color: #334155;
+            font-size: 0.78rem;
+            font-family: monospace;
+            max-width: 280px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            vertical-align: middle;
+        }
+
+        .dist-btn-download {
+            font-size: 0.82rem;
+            color: #fff !important;
+            background: var(--accent-color, #0066cc);
+            padding: 4px 10px;
+            border-radius: 4px;
+            text-decoration: none !important;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: opacity 0.2s;
+        }
+        .dist-btn-download:hover {
+            opacity: 0.9;
+        }
+
+        .dist-btn-cdif {
+            font-size: 0.82rem;
+            color: #155724 !important;
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            padding: 3px 9px;
+            border-radius: 4px;
+            text-decoration: none !important;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: background-color 0.2s;
+        }
+        .dist-btn-cdif:hover {
+            background: #c3e6cb;
+        }
     </style>
 </head>
 <body>
@@ -1072,24 +1158,33 @@
                     const dists = data.distribution || data.fileObject || data.fileSet;
                     if (dists && Array.isArray(dists) && dists.length > 0) {
                         html += `<h3 style="border-bottom: 1px solid var(--border-color); padding-bottom: 5px; margin-top: 30px;">Files & Distributions</h3>`;
-                        html += `<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px; margin-top: 15px;">`;
+                        html += `<table class="dist-table">`;
+                        html += `<thead><tr><th>File</th><th>Format</th><th>Size</th><th>Actions</th><th>CDIF</th></tr></thead><tbody>`;
                         
                         dists.forEach(d => {
-                            html += `<div style="padding: 15px; border: 1px solid var(--border-color, #ccc); border-radius: 6px; background: #fafafa;">`;
-                            html += `<strong style="display: block; margin-bottom: 8px; color: var(--accent-color);">${d.name || 'File'}</strong>`;
-                            if (d.encodingFormat) html += `<div style="font-size: 0.85rem; color: #666; margin-bottom: 5px;"><strong>Format:</strong> ${d.encodingFormat}</div>`;
-                            if (d.contentSize) html += `<div style="font-size: 0.85rem; color: #666; margin-bottom: 5px;"><strong>Size:</strong> ${d.contentSize}</div>`;
+                            const name = d.name || 'File';
+                            const fmt = d.encodingFormat ? `<span class="dist-badge-format">${d.encodingFormat}</span>` : '-';
+                            const size = d.contentSize ? `<span style="color: #666; font-size: 0.85rem;">${d.contentSize}</span>` : '-';
+                            let actHtml = '-';
+                            let cdifHtml = '-';
                             if (d.contentUrl) {
-                                html += `<div style="margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">`;
-                                html += `<a href="${d.contentUrl}" target="_blank" style="font-size: 0.85rem; color: white; background: var(--accent-color); padding: 5px 10px; border-radius: 4px; text-decoration: none;">Download</a>`;
+                                actHtml = `<a href="${d.contentUrl}" target="_blank" class="dist-btn-download">Download</a>`;
                                 const dsParam = data.url || data.identifier || '';
                                 const cdifHref = dsParam ? `/export?ds=${encodeURIComponent(dsParam)}&file=${encodeURIComponent(d.contentUrl)}` : `/export?file=${encodeURIComponent(d.contentUrl)}`;
-                                html += `<a href="${cdifHref}" target="_blank" style="font-size: 0.85rem; color: #155724; background: #d4edda; border: 1px solid #c3e6cb; padding: 4px 10px; border-radius: 4px; text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;" title="Convert to DDI-CDI JSON-LD">⚡ Export to CDIF</a>`;
-                                html += `</div>`;
+                                cdifHtml = `<a href="${cdifHref}" target="_blank" class="dist-btn-cdif" title="Convert to DDI-CDI JSON-LD">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                                    <span>Export to CDIF</span>
+                                </a>`;
                             }
-                            html += `</div>`;
+                            html += `<tr>
+                                <td style="font-weight: 600; color: var(--accent-color);">${name}</td>
+                                <td>${fmt}</td>
+                                <td>${size}</td>
+                                <td>${actHtml}</td>
+                                <td>${cdifHtml}</td>
+                            </tr>`;
                         });
-                        html += `</div>`;
+                        html += `</tbody></table>`;
                     }
                     
                     // Record Sets
@@ -1121,6 +1216,58 @@
                     return html;
                 }
 
+                // Helper to convert legacy markdown bullet distributions into a clean markdown table
+                function transformDistributionsToTable(mdText) {
+                    if (!mdText || typeof mdText !== 'string') return mdText;
+                    const distHeaderIdx = mdText.indexOf('### Files & Distributions');
+                    if (distHeaderIdx === -1) return mdText;
+                    
+                    // If it already contains a table format, return as is
+                    const afterHeader = mdText.substring(distHeaderIdx);
+                    const nextHeaderMatch = afterHeader.search(/\n###\s+|\n##\s+/);
+                    const sectionContent = nextHeaderMatch !== -1 ? afterHeader.substring(0, nextHeaderMatch) : afterHeader;
+                    if (sectionContent.includes('| File |') || sectionContent.includes('| **File** |')) {
+                        return mdText;
+                    }
+
+                    return mdText.replace(/(### Files & Distributions\s*\n)([\s\S]*?)(?=\n###|\n##|\Z)/, (match, header, body) => {
+                        const items = body.trim().split(/\n\s*\n/);
+                        const rows = [];
+                        items.forEach(item => {
+                            const trimmed = item.trim();
+                            if (!trimmed || !trimmed.startsWith('**')) return;
+                            const lines = trimmed.split('\n').map(l => l.trim()).filter(Boolean);
+                            const nameMatch = lines[0].match(/^\*\*(.*?)\*\*/);
+                            const fileName = nameMatch ? nameMatch[1].trim() : lines[0];
+                            let fmt = '-';
+                            let size = '-';
+                            let downloadAct = '-';
+                            let cdifAct = '-';
+                            
+                            for (let i = 1; i < lines.length; i++) {
+                                const l = lines[i];
+                                const fmtMatch = l.match(/^-\s*\*\*Format:\*\*\s*(.*)$/);
+                                if (fmtMatch) { fmt = fmtMatch[1].trim(); continue; }
+                                const sizeMatch = l.match(/^-\s*\*\*Size:\*\*\s*(.*)$/);
+                                if (sizeMatch) { size = sizeMatch[1].trim(); continue; }
+                                
+                                const dlMatch = l.match(/\[Download\]\((.*?)\)/i);
+                                if (dlMatch) {
+                                    downloadAct = `[Download](${dlMatch[1]})`;
+                                }
+                                const cdifMatch = l.match(/\[(?:⚡\s*)?Export to CDIF\]\((.*?)\)/i);
+                                if (cdifMatch) {
+                                    cdifAct = `[⚡ Export to CDIF](${cdifMatch[1]})`;
+                                }
+                            }
+                            rows.push(`| **${fileName.replace(/\|/g, '\\|')}** | ${fmt.replace(/\|/g, '\\|')} | ${size.replace(/\|/g, '\\|')} | ${downloadAct} | ${cdifAct} |`);
+                        });
+                        
+                        if (rows.length === 0) return match;
+                        return header + '\n| File | Format | Size | Actions | CDIF |\n|---|---|---|---|---|\n' + rows.join('\n') + '\n\n';
+                    });
+                }
+
                 // Try to pretty-print if it's raw JSON
                 try {
                     const parsedJson = JSON.parse(markdown);
@@ -1128,12 +1275,42 @@
                 } catch (e) {
                     // Not JSON, strip internal metadata rows if present in markdown table
                     markdown = markdown.replace(/\|\s*\*\*_(?:source_url|markdown_text|full_text)\*\*\s*\|[^\n]*\n?/g, '');
+                    // Transform legacy Files & Distributions bullet list into a clean table
+                    markdown = transformDistributionsToTable(markdown);
                 }
                 
                 const htmlContent = marked.parse(markdown);
                 
                 const contentDiv = document.getElementById('md-content');
                 contentDiv.innerHTML = htmlContent;
+
+                // Post-process table to style action and CDIF links nicely
+                contentDiv.querySelectorAll('table').forEach(tbl => {
+                    const ths = Array.from(tbl.querySelectorAll('th')).map(th => th.textContent.trim().toLowerCase());
+                    if (ths.includes('cdif') || (ths.includes('actions') && ths.includes('file'))) {
+                        tbl.classList.add('dist-table');
+                        tbl.querySelectorAll('a').forEach(a => {
+                            const txt = a.textContent.trim();
+                            if (txt === 'Download') {
+                                a.className = 'dist-btn-download';
+                            } else if (txt.includes('Export to CDIF') || a.href.includes('/export?')) {
+                                a.className = 'dist-btn-cdif';
+                                a.title = 'Convert to DDI-CDI JSON-LD';
+                                a.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> <span>Export to CDIF</span>`;
+                            }
+                        });
+                        // Format badges
+                        const fmtColIdx = ths.indexOf('format');
+                        if (fmtColIdx !== -1) {
+                            tbl.querySelectorAll('tbody tr').forEach(tr => {
+                                const td = tr.children[fmtColIdx];
+                                if (td && td.textContent.trim() !== '-') {
+                                    td.innerHTML = `<span class="dist-badge-format">${td.textContent.trim()}</span>`;
+                                }
+                            });
+                        }
+                    }
+                });
 
                 // Make the top blockquote (dataset description) look like a structured summary box
                 const firstBq = contentDiv.querySelector('blockquote');

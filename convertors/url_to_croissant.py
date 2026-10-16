@@ -1005,16 +1005,25 @@ def generate_markdown_from_jsonld(data):
     dists = data.get('distribution') or data.get('fileObject') or data.get('fileSet')
     if dists and isinstance(dists, list) and len(dists) > 0:
         md.append("### Files & Distributions\n")
+        md.append("| File | Format | Size | Actions | CDIF |")
+        md.append("|---|---|---|---|---|")
         for d in dists:
             d_name = d.get('name', 'File')
-            md.append(f"**{d_name}**")
-            fmt = d.get('encodingFormat')
-            if fmt: md.append(f"- **Format:** {fmt}")
-            size = d.get('contentSize')
-            if size: md.append(f"- **Size:** {size}")
+            fmt = d.get('encodingFormat') or '-'
+            size = d.get('contentSize') or '-'
             curl = d.get('contentUrl')
-            if curl: md.append(f"- **[Download]({curl})**")
-            md.append("")
+            action_str = f"[Download]({curl})" if curl else "-"
+            cdif_str = "-"
+            if curl:
+                ds_for_export = data.get('url') or data.get('identifier')
+                if ds_for_export:
+                    import urllib.parse
+                    export_url = f"/export?ds={urllib.parse.quote(ds_for_export, safe='')}&file={urllib.parse.quote(curl, safe='')}"
+                    cdif_str = f"[⚡ Export to CDIF]({export_url})"
+            clean_name = str(d_name).replace('|', '\\|')
+            clean_fmt = str(fmt).replace('|', '\\|')
+            clean_size = str(size).replace('|', '\\|')
+            md.append(f"| **{clean_name}** | {clean_fmt} | {clean_size} | {action_str} | {cdif_str} |")
         md.append("\n")
         
     record_sets = data.get('recordSet')
