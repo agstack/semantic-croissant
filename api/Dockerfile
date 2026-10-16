@@ -2,8 +2,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies, including docker cli so qlever script can control containers, poppler-utils for pdftotext, and netcdf-bin
-RUN apt-get update && apt-get install -y docker.io curl jq poppler-utils netcdf-bin
+# Install dependencies, including docker cli so qlever script can control containers, poppler-utils for pdftotext, netcdf-bin, and archive utilities (unar, p7zip-full) for RAR/ZIP extraction
+RUN apt-get update && apt-get install -y docker.io curl jq poppler-utils netcdf-bin unar p7zip-full
 
 
 
