@@ -2,8 +2,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies, including docker cli so qlever script can control containers
-RUN apt-get update && apt-get install -y docker.io curl jq
+# Install dependencies, including docker cli so qlever script can control containers and poppler-utils for pdftotext
+RUN apt-get update && apt-get install -y docker.io curl jq poppler-utils
+
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
