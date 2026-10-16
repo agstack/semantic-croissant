@@ -4645,7 +4645,7 @@ Please answer the question based ONLY on the context provided above, or by using
                 md.append("### Core Metadata\n")
                 md.append("| Field | Value |")
                 md.append("|---|---|")
-                skip_keys = ['@context', '@type', 'name', 'url', 'description', 'distribution', 'recordSet', 'fileObject', 'fileSet']
+                skip_keys = ['@context', '@type', 'name', 'url', 'description', 'distribution', 'recordSet', 'fileObject', 'fileSet', '_source_url', '_markdown_text', '_full_text']
                 for key, value in data.items():
                     if key in skip_keys:
                         continue
@@ -4846,6 +4846,10 @@ Please answer the question based ONLY on the context provided above, or by using
                         import sys
                         print(f"Error fetching annotations for raw print: {e}", file=sys.stderr)
                         
+                if media_type == "text/markdown" and isinstance(md_text, str):
+                    import re
+                    md_text = re.sub(r'\|\s*\*\*_(?:source_url|markdown_text|full_text)\*\*\s*\|[^\n]*\n?', '', md_text)
+
                 from starlette.responses import Response
                 return Response(content=md_text, media_type=media_type)
                     

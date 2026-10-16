@@ -986,7 +986,7 @@ def generate_markdown_from_jsonld(data):
     md.append("### Core Metadata\n")
     md.append("| Field | Value |")
     md.append("|---|---|")
-    skip_keys = ['@context', '@type', 'name', 'url', 'description', 'distribution', 'recordSet', 'fileObject', 'fileSet', '_markdown_text']
+    skip_keys = ['@context', '@type', 'name', 'url', 'description', 'distribution', 'recordSet', 'fileObject', 'fileSet', '_source_url', '_markdown_text', '_full_text']
     for key, value in data.items():
         if key in skip_keys:
             continue
