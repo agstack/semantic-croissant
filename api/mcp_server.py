@@ -4350,12 +4350,19 @@ Please answer the question based ONLY on the context provided above (including t
                             try:
                                 ds = xr.open_dataset(tmp_nc_path)
                                 
-                                # Extract global attributes
+                                # Extract global attributes (ignoring placeholder values like 'UNSET')
                                 if ds.attrs:
-                                    extracted_file_meta["title"] = ds.attrs.get("title") or ds.attrs.get("institution")
-                                    extracted_file_meta["description"] = ds.attrs.get("summary") or ds.attrs.get("comment") or ds.attrs.get("history")
-                                    if "Conventions" in ds.attrs:
-                                        extracted_file_meta["unit"] = ds.attrs.get("Conventions")
+                                    nc_title = ds.attrs.get("title") or ds.attrs.get("institution")
+                                    if nc_title and str(nc_title).strip().upper() not in ["UNSET", "NONE", "NULL", ""]:
+                                        extracted_file_meta["title"] = str(nc_title).strip()
+                                    
+                                    nc_desc = ds.attrs.get("summary") or ds.attrs.get("comment")
+                                    if nc_desc and str(nc_desc).strip().upper() not in ["UNSET", "NONE", "NULL", ""]:
+                                        extracted_file_meta["description"] = str(nc_desc).strip()
+                                        
+                                    if "Conventions" in ds.attrs and str(ds.attrs["Conventions"]).strip().upper() not in ["UNSET", "NONE", "NULL", ""]:
+                                        extracted_file_meta["unit"] = str(ds.attrs["Conventions"]).strip()
+
 
                                 # Extract variable attributes and metadata
                                 for v_name, var in ds.variables.items():
@@ -4568,16 +4575,24 @@ Please answer the question based ONLY on the context provided above (including t
                                         if f_name and f_desc:
                                             field_definitions[f_name.lower()] = f_desc
 
-                                # Resolve metadata values
-                                ds_title = extracted_file_meta.get("title") or matched_dist.get("name") or es_doc_src.get("name") or filename
-                                ds_desc = extracted_file_meta.get("description") or matched_dist.get("description") or es_doc_src.get("description") or ""
+                                # Resolve metadata values:
+                                # For a specific file distribution, use matched_dist name/description or fall back to dataset title
+                                dist_name = matched_dist.get("name")
+                                dist_desc = matched_dist.get("description")
+                                file_title = extracted_file_meta.get("title")
+                                if file_title and file_title.upper() in ["UNSET", "NONE", "NULL", ""]:
+                                    file_title = None
+
+                                ds_title = file_title or dist_name or es_doc_src.get("name") or filename
+                                ds_desc = dist_desc or extracted_file_meta.get("description") or es_doc_src.get("description") or ""
                                 ds_temporal = extracted_file_meta.get("temporal") or es_doc_src.get("temporalCoverage") or ""
                                 ds_spatial = extracted_file_meta.get("spatial") or es_doc_src.get("spatialCoverage") or ""
                                 ds_license = es_doc_src.get("license") or "https://creativecommons.org/publicdomain/zero/1.0/"
-                                ds_language = es_doc_src.get("inLanguage") or "de"
+                                ds_language = es_doc_src.get("inLanguage") or "en"
                                 ds_unit = extracted_file_meta.get("unit") or ""
                                 final_file_size = matched_dist.get("contentSize") or extracted_file_meta.get("file_size")
                                 final_md5 = matched_dist.get("md5") or extracted_file_meta.get("file_md5")
+
 
                                 # Build context
                                 orig_context = cdif_json.get("@context")
