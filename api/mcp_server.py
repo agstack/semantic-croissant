@@ -3537,15 +3537,59 @@ def main(port: int, transport: str) -> int:
                         async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
                             resp = await client.get(file_url, headers={"User-Agent": "SemanticCroissant/1.0"})
                             if resp.status_code == 200:
-                                raw_bytes = resp.content.replace(b"\x00", b"")
-                                # Try decoding as text
+                                raw_bytes = resp.content
                                 text_sample = ""
-                                try:
-                                    text_sample = raw_bytes.decode('utf-8', errors='replace')
-                                except Exception:
-                                    text_sample = raw_bytes.decode('latin-1', errors='replace')
+
+                                # Check if file is PDF (by magic bytes %PDF or filename / URL / Content-Type)
+                                is_pdf = raw_bytes.startswith(b"%PDF") or file_name.lower().endswith(".pdf") or file_url.lower().endswith(".pdf") or "application/pdf" in resp.headers.get("Content-Type", "").lower()
+
+                                if is_pdf:
+                                    # Use pdftotext (or PyMuPDF/fitz fallback) to extract text
+                                    import tempfile, subprocess
+                                    try:
+                                        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+                                            tmp_pdf.write(raw_bytes)
+                                            tmp_pdf_path = tmp_pdf.name
+                                        
+                                        # Run pdftotext (poppler-utils)
+                                        pdf_proc = subprocess.run(
+                                            ["pdftotext", "-layout", "-l", "20", tmp_pdf_path, "-"],
+                                            capture_output=True,
+                                            text=True,
+                                            timeout=15
+                                        )
+                                        if pdf_proc.returncode == 0 and pdf_proc.stdout.strip():
+                                            text_sample = pdf_proc.stdout
+                                        else:
+                                            # Fallback to pymupdf / fitz
+                                            try:
+                                                import fitz
+                                                doc = fitz.open(tmp_pdf_path)
+                                                pages_text = []
+                                                for p_idx in range(min(20, len(doc))):
+                                                    pages_text.append(doc[p_idx].get_text())
+                                                text_sample = "\n".join(pages_text)
+                                                doc.close()
+                                            except Exception:
+                                                pass
+                                    except Exception as pdf_err:
+                                        text_sample = f"(PDF extraction note: {str(pdf_err)})"
+                                    finally:
+                                        import os
+                                        if 'tmp_pdf_path' in locals() and os.path.exists(tmp_pdf_path):
+                                            try:
+                                                os.remove(tmp_pdf_path)
+                                            except Exception:
+                                                pass
+                                else:
+                                    clean_bytes = raw_bytes.replace(b"\x00", b"")
+                                    # Try decoding as text
+                                    try:
+                                        text_sample = clean_bytes.decode('utf-8', errors='replace')
+                                    except Exception:
+                                        text_sample = clean_bytes.decode('latin-1', errors='replace')
                                 
-                                # Sanitize any remaining null or control characters
+                                # Sanitize any remaining null characters
                                 text_sample = text_sample.replace("\x00", "")
 
                                 # If tabular or text, take up to first 250 lines / 12,000 characters
@@ -3563,6 +3607,7 @@ def main(port: int, transport: str) -> int:
                                 file_content_snippet = f"\n\n(Note: Attempted to download file {file_url}, status code: {resp.status_code})"
                     except Exception as dl_err:
                         file_content_snippet = f"\n\n(Note: Could not download remote file content: {str(dl_err)})"
+
 
 
                 if file_content_snippet:
