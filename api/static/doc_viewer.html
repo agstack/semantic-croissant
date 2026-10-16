@@ -234,38 +234,47 @@
         }
 
         .dist-btn-download {
-            font-size: 0.82rem;
-            color: #fff !important;
-            background: var(--accent-color, #0066cc);
-            padding: 4px 10px;
-            border-radius: 4px;
-            text-decoration: none !important;
-            font-weight: 500;
+            width: 32px;
+            height: 32px;
             display: inline-flex;
             align-items: center;
-            gap: 4px;
-            transition: opacity 0.2s;
+            justify-content: center;
+            border-radius: 6px;
+            background: #eef2f6;
+            color: #1e293b !important;
+            border: 1px solid #cbd5e1;
+            text-decoration: none !important;
+            transition: all 0.2s ease;
+            cursor: pointer;
         }
         .dist-btn-download:hover {
-            opacity: 0.9;
+            background: #0066cc;
+            color: #ffffff !important;
+            border-color: #0066cc;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
 
         .dist-btn-cdif {
-            font-size: 0.82rem;
-            color: #155724 !important;
-            background: #d4edda;
-            border: 1px solid #c3e6cb;
-            padding: 3px 9px;
-            border-radius: 4px;
-            text-decoration: none !important;
-            font-weight: 500;
+            width: 32px;
+            height: 32px;
             display: inline-flex;
             align-items: center;
-            gap: 4px;
-            transition: background-color 0.2s;
+            justify-content: center;
+            border-radius: 6px;
+            background: #f0fdf4;
+            color: #15803d !important;
+            border: 1px solid #bbf7d0;
+            text-decoration: none !important;
+            transition: all 0.2s ease;
+            cursor: pointer;
         }
         .dist-btn-cdif:hover {
-            background: #c3e6cb;
+            background: #16a34a;
+            color: #ffffff !important;
+            border-color: #16a34a;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
     </style>
 </head>
@@ -1159,29 +1168,32 @@
                     if (dists && Array.isArray(dists) && dists.length > 0) {
                         html += `<h3 style="border-bottom: 1px solid var(--border-color); padding-bottom: 5px; margin-top: 30px;">Files & Distributions</h3>`;
                         html += `<table class="dist-table">`;
-                        html += `<thead><tr><th>File</th><th>Format</th><th>Size</th><th>Actions</th><th>CDIF</th></tr></thead><tbody>`;
+                        html += `<thead><tr><th>File</th><th>Title</th><th>Format</th><th>Size</th><th style="text-align: center;">Actions</th><th style="text-align: center;">CDIF</th></tr></thead><tbody>`;
                         
                         dists.forEach(d => {
-                            const name = d.name || 'File';
+                            const name = d.name || d['@id'] || 'File';
+                            const title = d.title || d.description || d.headline || d.alternateName || '-';
                             const fmt = d.encodingFormat ? `<span class="dist-badge-format">${d.encodingFormat}</span>` : '-';
                             const size = d.contentSize ? `<span style="color: #666; font-size: 0.85rem;">${d.contentSize}</span>` : '-';
                             let actHtml = '-';
                             let cdifHtml = '-';
                             if (d.contentUrl) {
-                                actHtml = `<a href="${d.contentUrl}" target="_blank" class="dist-btn-download">Download</a>`;
+                                actHtml = `<a href="${d.contentUrl}" target="_blank" class="dist-btn-download" title="Download ${name}">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                </a>`;
                                 const dsParam = data.url || data.identifier || '';
                                 const cdifHref = dsParam ? `/export?ds=${encodeURIComponent(dsParam)}&file=${encodeURIComponent(d.contentUrl)}` : `/export?file=${encodeURIComponent(d.contentUrl)}`;
-                                cdifHtml = `<a href="${cdifHref}" target="_blank" class="dist-btn-cdif" title="Convert to DDI-CDI JSON-LD">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                                    <span>Export to CDIF</span>
+                                cdifHtml = `<a href="${cdifHref}" target="_blank" class="dist-btn-cdif" title="Export to CDIF (DDI-CDI JSON-LD)">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
                                 </a>`;
                             }
                             html += `<tr>
                                 <td style="font-weight: 600; color: var(--accent-color);">${name}</td>
+                                <td style="color: #4b5563; font-size: 0.85rem;">${title}</td>
                                 <td>${fmt}</td>
                                 <td>${size}</td>
-                                <td>${actHtml}</td>
-                                <td>${cdifHtml}</td>
+                                <td style="text-align: center;">${actHtml}</td>
+                                <td style="text-align: center;">${cdifHtml}</td>
                             </tr>`;
                         });
                         html += `</tbody></table>`;
@@ -1239,6 +1251,7 @@
                             const lines = trimmed.split('\n').map(l => l.trim()).filter(Boolean);
                             const nameMatch = lines[0].match(/^\*\*(.*?)\*\*/);
                             const fileName = nameMatch ? nameMatch[1].trim() : lines[0];
+                            let title = '-';
                             let fmt = '-';
                             let size = '-';
                             let downloadAct = '-';
@@ -1246,25 +1259,27 @@
                             
                             for (let i = 1; i < lines.length; i++) {
                                 const l = lines[i];
-                                const fmtMatch = l.match(/^-\s*\*\*Format:\*\*\s*(.*)$/);
+                                const titleMatch = l.match(/^-\s*\*\*(?:Title|Description):\*\*\s*(.*)$/i);
+                                if (titleMatch) { title = titleMatch[1].trim(); continue; }
+                                const fmtMatch = l.match(/^-\s*\*\*Format:\*\*\s*(.*)$/i);
                                 if (fmtMatch) { fmt = fmtMatch[1].trim(); continue; }
-                                const sizeMatch = l.match(/^-\s*\*\*Size:\*\*\s*(.*)$/);
+                                const sizeMatch = l.match(/^-\s*\*\*Size:\*\*\s*(.*)$/i);
                                 if (sizeMatch) { size = sizeMatch[1].trim(); continue; }
                                 
-                                const dlMatch = l.match(/\[Download\]\((.*?)\)/i);
+                                const dlMatch = l.match(/\[(?:Download|📥)\]\((.*?)\)/i);
                                 if (dlMatch) {
-                                    downloadAct = `[Download](${dlMatch[1]})`;
+                                    downloadAct = `[📥](${dlMatch[1]})`;
                                 }
-                                const cdifMatch = l.match(/\[(?:⚡\s*)?Export to CDIF\]\((.*?)\)/i);
+                                const cdifMatch = l.match(/\[(?:⚡\s*Export to CDIF|⚡)\]\((.*?)\)/i);
                                 if (cdifMatch) {
-                                    cdifAct = `[⚡ Export to CDIF](${cdifMatch[1]})`;
+                                    cdifAct = `[⚡](${cdifMatch[1]})`;
                                 }
                             }
-                            rows.push(`| **${fileName.replace(/\|/g, '\\|')}** | ${fmt.replace(/\|/g, '\\|')} | ${size.replace(/\|/g, '\\|')} | ${downloadAct} | ${cdifAct} |`);
+                            rows.push(`| **${fileName.replace(/\|/g, '\\|')}** | ${title.replace(/\|/g, '\\|')} | ${fmt.replace(/\|/g, '\\|')} | ${size.replace(/\|/g, '\\|')} | ${downloadAct} | ${cdifAct} |`);
                         });
                         
                         if (rows.length === 0) return match;
-                        return header + '\n| File | Format | Size | Actions | CDIF |\n|---|---|---|---|---|\n' + rows.join('\n') + '\n\n';
+                        return header + '\n| File | Title | Format | Size | Actions | CDIF |\n|---|---|---|---|:---:|:---:|\n' + rows.join('\n') + '\n\n';
                     });
                 }
 
@@ -1284,19 +1299,21 @@
                 const contentDiv = document.getElementById('md-content');
                 contentDiv.innerHTML = htmlContent;
 
-                // Post-process table to style action and CDIF links nicely
+                // Post-process table to style action and CDIF links nicely with pictograms
                 contentDiv.querySelectorAll('table').forEach(tbl => {
                     const ths = Array.from(tbl.querySelectorAll('th')).map(th => th.textContent.trim().toLowerCase());
                     if (ths.includes('cdif') || (ths.includes('actions') && ths.includes('file'))) {
                         tbl.classList.add('dist-table');
                         tbl.querySelectorAll('a').forEach(a => {
                             const txt = a.textContent.trim();
-                            if (txt === 'Download') {
+                            if (txt === 'Download' || txt === '📥') {
                                 a.className = 'dist-btn-download';
-                            } else if (txt.includes('Export to CDIF') || a.href.includes('/export?')) {
+                                a.title = 'Download file';
+                                a.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`;
+                            } else if (txt.includes('Export to CDIF') || txt === '⚡' || a.href.includes('/export?')) {
                                 a.className = 'dist-btn-cdif';
-                                a.title = 'Convert to DDI-CDI JSON-LD';
-                                a.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg> <span>Export to CDIF</span>`;
+                                a.title = 'Export to CDIF (DDI-CDI JSON-LD)';
+                                a.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>`;
                             }
                         });
                         // Format badges
