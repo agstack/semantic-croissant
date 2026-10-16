@@ -3814,10 +3814,8 @@ Please answer the question based ONLY on the context provided above, or by using
                         d['subjectOf'] = {
                             "@type": "Dataset",
                             "@id": export_url,
-                            "name": f"DDI-CDI description of {fn}",
                             "encodingFormat": "application/ld+json",
-                            "conformsTo": "https://ddialliance.org/Specification/DDI-CDI/1.1/",
-                            "url": export_url
+                            "conformsTo": "https://ddialliance.org/Specification/DDI-CDI/1.0/"
                         }
             except Exception as e:
                 print(f"Failed to align Dataverse distributions: {e}")
@@ -3879,10 +3877,8 @@ Please answer the question based ONLY on the context provided above, or by using
                                     d['subjectOf'] = {
                                         "@type": "Dataset",
                                         "@id": export_url,
-                                        "name": f"DDI-CDI description of {fn}",
                                         "encodingFormat": "application/ld+json",
-                                        "conformsTo": "https://ddialliance.org/Specification/DDI-CDI/1.1/",
-                                        "url": export_url
+                                        "conformsTo": "https://ddialliance.org/Specification/DDI-CDI/1.0/"
                                     }
                         data = json.dumps(jdata, indent=2).encode("utf-8")
                     except Exception as e:
