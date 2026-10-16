@@ -880,7 +880,81 @@ def check_dataverse_direct_export(url):
         print(f"Direct export check failed: {e}")
     return None
 
+def fix_croissant_dataverse_distributions(data):
+    if not isinstance(data, dict):
+        return data
+    dataset_url = data.get('url', '')
+    dists = data.get('distribution') or data.get('fileObject') or data.get('fileSet') or []
+    if not dists or not isinstance(dists, list):
+        return data
+    has_dataverse_dists = any(isinstance(d, dict) and 'dataverse' in d.get('contentUrl', '') for d in dists)
+    if not ('dataverse' in dataset_url or 'doi.org' in dataset_url or has_dataverse_dists):
+        return data
+
+    dv_base = None
+    pid = None
+    for d in dists:
+        if isinstance(d, dict) and 'contentUrl' in d and 'dataverse' in d['contentUrl']:
+            p = urllib.parse.urlparse(d['contentUrl'])
+            dv_base = f"{p.scheme}://{p.netloc}"
+            break
+    if not dv_base:
+        return data
+
+    if 'persistentId=' in dataset_url:
+        pid = urllib.parse.parse_qs(urllib.parse.urlparse(dataset_url).query).get('persistentId', [None])[0]
+    elif 'doi.org/' in dataset_url:
+        doi = dataset_url.split('doi.org/')[-1]
+        pid = f"doi:{doi}"
+    elif isinstance(data.get('identifier'), str) and 'doi:' in data.get('identifier'):
+        pid = data.get('identifier')
+
+    if not pid:
+        return data
+
+    api_url = f"{dv_base}/api/datasets/:persistentId/?persistentId={urllib.parse.quote(pid, safe='/')}"
+    headers = {'User-Agent': 'SemanticCroissant/1.0'}
+    try:
+        r_api = requests.get(api_url, headers=headers, timeout=10)
+        if r_api.status_code != 200:
+            return data
+        raw_files = r_api.json().get('data', {}).get('latestVersion', {}).get('files', [])
+        api_by_name = {}
+        api_by_id = {}
+        for f in raw_files:
+            df = f.get('dataFile', {})
+            fid = df.get('id')
+            fn = df.get('filename')
+            orig_fn = df.get('originalFileName') or fn
+            lbl = f.get('label') or fn
+            api_by_id[fid] = df
+            if fn: api_by_name[fn] = df
+            if orig_fn: api_by_name[orig_fn] = df
+            if lbl: api_by_name[lbl] = df
+
+        for d in dists:
+            if not isinstance(d, dict): continue
+            name = d.get('name')
+            md5 = d.get('md5')
+            matched_df = api_by_name.get(name)
+            if not matched_df and md5:
+                for df in api_by_id.values():
+                    if df.get('md5') == md5 or df.get('checksum', {}).get('value') == md5:
+                        matched_df = df
+                        break
+            if matched_df:
+                d['contentUrl'] = f"{dv_base}/api/access/datafile/{matched_df.get('id')}"
+                if matched_df.get('contentType'):
+                    d['encodingFormat'] = matched_df.get('contentType')
+                if matched_df.get('filesize'):
+                    d['contentSize'] = str(matched_df.get('filesize'))
+    except Exception as e:
+        print(f"Failed to align Dataverse distributions: {e}")
+    return data
+
+
 def generate_markdown_from_jsonld(data):
+    data = fix_croissant_dataverse_distributions(data)
     md = []
     name = data.get('name', 'Dataset')
     md.append(f"# 🥐 {name}\n")
@@ -960,6 +1034,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
 
     if direct_jsonld:
         print("✓ Successfully retrieved Croissant JSON-LD directly from API!")
+        direct_jsonld = fix_croissant_dataverse_distributions(direct_jsonld)
         markdown_data = generate_markdown_from_jsonld(direct_jsonld)
         dataverse_original_jsonld = direct_jsonld
         print("Generated Markdown representation of the JSON-LD.")
