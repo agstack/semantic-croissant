@@ -4682,8 +4682,8 @@ Please answer the question based ONLY on the context provided above, or by using
                 dists = data.get('distribution') or data.get('fileObject') or data.get('fileSet')
                 if dists and isinstance(dists, list) and len(dists) > 0:
                     md.append("### Files & Distributions\n")
-                    md.append("| File | Title | Format | Size | Actions | CDIF |")
-                    md.append("|---|---|---|---|:---:|:---:|")
+                    md.append("| File | Title | Format | Size | Download | CDIF | Tools |")
+                    md.append("|---|---|---|---|:---:|:---:|:---:|")
                     import urllib.parse
                     ds_for_export = data.get('url') or data.get('identifier')
                     for d in dists:
@@ -4692,8 +4692,9 @@ Please answer the question based ONLY on the context provided above, or by using
                         fmt = d.get('encodingFormat') or '-'
                         size = d.get('contentSize') or '-'
                         curl = d.get('contentUrl')
-                        action_str = f"[📥]({curl})" if curl else "-"
+                        dl_str = f"[📥]({curl})" if curl else "-"
                         cdif_str = "-"
+                        tools_str = "[⚙️](#tools)" if curl else "-"
                         if curl:
                             if ds_for_export:
                                 export_url = f"/export?ds={urllib.parse.quote(ds_for_export, safe='')}&file={urllib.parse.quote(curl, safe='')}"
@@ -4704,7 +4705,7 @@ Please answer the question based ONLY on the context provided above, or by using
                         clean_title = str(d_title).replace('|', '\\|').replace('\n', ' ')
                         clean_fmt = str(fmt).replace('|', '\\|')
                         clean_size = str(size).replace('|', '\\|')
-                        md.append(f"| **{clean_name}** | {clean_title} | {clean_fmt} | {clean_size} | {action_str} | {cdif_str} |")
+                        md.append(f"| **{clean_name}** | {clean_title} | {clean_fmt} | {clean_size} | {dl_str} | {cdif_str} | {tools_str} |")
                     md.append("\n")
                     
                 record_sets = data.get('recordSet')
