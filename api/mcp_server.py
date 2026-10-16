@@ -4928,14 +4928,76 @@ Please answer the question based ONLY on the context provided above (including t
                             print(f"Failed to auto-convert NetCDF file with xarray: {nc_err}")
 
 
+                    # If file is a NumPy .npz or .npy archive
+                    is_npz = filename.lower().endswith(".npz") or (file_content.startswith(b"PK\x03\x04") and ".npz" in target_url.lower())
+                    is_npy = filename.lower().endswith(".npy") or file_content.startswith(b"\x93NUMPY")
+
+                    if is_npz:
+                        try:
+                            import numpy as np, pandas as pd
+                            npz = np.load(io.BytesIO(file_content))
+                            df_dict = {}
+                            shape_notes = []
+                            # First find the primary record length from 1D/column vectors
+                            primary_len = 0
+                            for k in npz.files:
+                                arr = npz[k]
+                                if arr.ndim == 1:
+                                    primary_len = max(primary_len, min(len(arr), 500))
+                                elif arr.ndim == 2 and (arr.shape[1] == 1 or arr.shape[0] == 1):
+                                    primary_len = max(primary_len, min(arr.size, 500))
+
+                            target_rows = primary_len if primary_len > 0 else 1
+
+                            for k in npz.files:
+                                arr = npz[k]
+                                if arr.ndim == 1:
+                                    vals = list(arr.flatten()[:target_rows])
+                                    if len(vals) < target_rows:
+                                        vals.extend([None] * (target_rows - len(vals)))
+                                    df_dict[k] = vals
+                                elif arr.ndim == 2 and (arr.shape[1] == 1 or arr.shape[0] == 1):
+                                    vals = list(arr.flatten()[:target_rows])
+                                    if len(vals) < target_rows:
+                                        vals.extend([None] * (target_rows - len(vals)))
+                                    df_dict[k] = vals
+                                else:
+                                    # Multidimensional array (e.g. 4D image tensor) - broadcast its shape metadata across the rows
+                                    df_dict[f"{k}_shape"] = [str(arr.shape)] * target_rows
+                                    df_dict[f"{k}_dtype"] = [str(arr.dtype)] * target_rows
+                                    shape_notes.append(f"{k}: shape={arr.shape}, dtype={arr.dtype}")
+
+                            if df_dict:
+                                df_npz = pd.DataFrame(df_dict)
+                                file_content = df_npz.to_csv(index=False).encode("utf-8")
+                                filename = filename.rsplit(".", 1)[0] + ".csv"
+                                if shape_notes and not extracted_file_meta.get("description"):
+                                    extracted_file_meta["description"] = "NumPy NPZ archive containing: " + "; ".join(shape_notes)
+                        except Exception as npz_err:
+                            print(f"Failed to auto-convert .npz with numpy: {npz_err}")
+                    elif is_npy:
+                        try:
+                            import numpy as np, pandas as pd
+                            arr = np.load(io.BytesIO(file_content))
+                            if arr.ndim == 1:
+                                df_npy = pd.DataFrame({"value": arr[:500]})
+                            elif arr.ndim == 2:
+                                df_npy = pd.DataFrame(arr[:500])
+                            else:
+                                df_npy = pd.DataFrame({"shape": [str(arr.shape)], "dtype": [str(arr.dtype)]})
+                            file_content = df_npy.to_csv(index=False).encode("utf-8")
+                            filename = filename.rsplit(".", 1)[0] + ".csv"
+                        except Exception as npy_err:
+                            print(f"Failed to auto-convert .npy with numpy: {npy_err}")
+
                     # If file is a ZIP archive, inspect and extract the first tabular/data file
-                    if filename.lower().endswith(".zip") or "zip" in file_resp.headers.get("content-type", "").lower():
+                    if not is_npz and (filename.lower().endswith(".zip") or "zip" in file_resp.headers.get("content-type", "").lower() or file_content.startswith(b"PK\x03\x04")):
                         try:
                             import zipfile, struct
                             with zipfile.ZipFile(io.BytesIO(file_content)) as z:
                                 namelist = z.namelist()
                                 # Prioritize tabular / data formats inside the zip
-                                priority_exts = [".csv", ".tsv", ".tab", ".dbf", ".por", ".sav", ".zsav", ".dta", ".parquet", ".xlsx", ".txt"]
+                                priority_exts = [".csv", ".tsv", ".tab", ".dbf", ".por", ".sav", ".zsav", ".dta", ".parquet", ".xlsx", ".txt", ".npy"]
                                 chosen_name = None
                                 for p_ext in priority_exts:
                                     for z_name in namelist:
@@ -4981,6 +5043,21 @@ Please answer the question based ONLY on the context provided above (including t
                                             filename = chosen_name.rsplit('/', 1)[-1].rsplit('.', 1)[0] + '.csv'
                                         except Exception as dbf_err:
                                             print(f"Error converting extracted dbf: {dbf_err}")
+                                            file_content = extracted_bytes
+                                            filename = chosen_name.rsplit('/', 1)[-1]
+                                    elif extracted_lower.endswith(".npy"):
+                                        try:
+                                            import numpy as np, pandas as pd
+                                            arr = np.load(io.BytesIO(extracted_bytes))
+                                            if arr.ndim == 1:
+                                                df_npy = pd.DataFrame({"value": arr[:500]})
+                                            elif arr.ndim == 2:
+                                                df_npy = pd.DataFrame(arr[:500])
+                                            else:
+                                                df_npy = pd.DataFrame({"shape": [str(arr.shape)]})
+                                            file_content = df_npy.to_csv(index=False).encode("utf-8")
+                                            filename = chosen_name.rsplit('/', 1)[-1].rsplit('.', 1)[0] + '.csv'
+                                        except Exception as npy_err:
                                             file_content = extracted_bytes
                                             filename = chosen_name.rsplit('/', 1)[-1]
                                     else:
