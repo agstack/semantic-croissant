@@ -3801,7 +3801,9 @@ Please answer the question based ONLY on the context provided above, or by using
             from starlette.responses import Response, JSONResponse
             import os, httpx, io, re, urllib.parse, csv, struct, zipfile, tempfile, hashlib, json
 
-            target_url = request.query_params.get("file") or request.query_params.get("url")
+            raw_file_param = request.query_params.get("file")
+            raw_url_param = request.query_params.get("url")
+            target_url = raw_file_param or raw_url_param
             if not target_url:
                 return JSONResponse({"error": "Missing 'file' or 'url' query parameter, e.g. /export?file=<file_url>"}, status_code=400)
 
@@ -3818,6 +3820,17 @@ Please answer the question based ONLY on the context provided above, or by using
                         ds_url = m_ds2.group(0).strip()
                     else:
                         ds_url = ds_param.strip()
+
+            base_host = f"https://{MCP_DOMAIN}"
+
+            # Canonical redirect: If called with legacy ?url= without ?file=, redirect (301) to canonical URL
+            if not raw_file_param and raw_url_param:
+                from starlette.responses import RedirectResponse
+                canon_params = {"file": target_url}
+                if ds_url:
+                    canon_params["ds"] = ds_url
+                canon_redir_url = f"/export?{urllib.parse.urlencode(canon_params)}"
+                return RedirectResponse(url=canon_redir_url, status_code=301)
 
             ddi_cdi_base = os.environ.get("DDI_CDI_BASE_URL", "http://10.147.18.186:8088").rstrip("/")
             api_key = os.environ.get("DDI_CDI_API_KEY", "")
@@ -4154,21 +4167,29 @@ Please answer the question based ONLY on the context provided above, or by using
                                     new_context.append(orig_context)
 
                                 base_host = f"https://{MCP_DOMAIN}"
-                                export_id = f"{base_host}/export?file={target_url}"
+                                
+                                # Canonical @id with percent-encoded query parameters
                                 if matched_ds_url:
-                                    export_id = f"{base_host}/export?ds={matched_ds_url}&file={target_url}"
+                                    query_string = urllib.parse.urlencode([("ds", matched_ds_url), ("file", target_url)])
+                                else:
+                                    query_string = urllib.parse.urlencode([("file", target_url)])
+                                export_id = f"{base_host}/export?{query_string}"
+
+                                # Construct dct:isPartOf targets: deposit DOI and vault Croissant export
+                                is_part_of = []
+                                if matched_ds_url:
+                                    is_part_of.append({"@id": matched_ds_url})
+                                if matched_doc_id:
+                                    is_part_of.append({"@id": f"{base_host}/vault/{matched_doc_id}.jsonld"})
 
                                 # Construct enriched dictionary
                                 enriched_json = {
                                     "@context": new_context,
                                     "@id": export_id
                                 }
-                                if matched_doc_id:
-                                    enriched_json["dct:isPartOf"] = {
-                                        "@id": f"{base_host}/vault/{matched_doc_id}.jsonld"
-                                    }
-                                if matched_ds_url:
-                                    enriched_json["dct:identifier"] = matched_ds_url
+                                if is_part_of:
+                                    enriched_json["dct:isPartOf"] = is_part_of if len(is_part_of) > 1 else is_part_of[0]
+                                enriched_json["dct:identifier"] = export_id
                                 enriched_json["prov:wasDerivedFrom"] = {
                                     "@id": target_url
                                 }
@@ -4176,6 +4197,19 @@ Please answer the question based ONLY on the context provided above, or by using
                                 for k, v in cdif_json.items():
                                     if k not in ["@context", "@id"]:
                                         enriched_json[k] = v
+
+                                # Also repeat prov:wasDerivedFrom on dataset nodes in DDICDIModels (e.g. #wideDataSet, #tabularTextDataSet)
+                                if "DDICDIModels" in enriched_json and isinstance(enriched_json["DDICDIModels"], list):
+                                    for model_elem in enriched_json["DDICDIModels"]:
+                                        if isinstance(model_elem, dict):
+                                            elem_id = model_elem.get("@id", "")
+                                            elem_type = model_elem.get("@type", "")
+                                            if elem_id in ["#wideDataSet", "#tabularTextDataSet"] or "DataSet" in elem_type:
+                                                model_elem["prov:wasDerivedFrom"] = {
+                                                    "@id": target_url
+                                                }
+                                                if is_part_of:
+                                                    model_elem["dct:isPartOf"] = is_part_of if len(is_part_of) > 1 else is_part_of[0]
 
                                 resp_content = json.dumps(enriched_json, indent=4).encode("utf-8")
                         except Exception as enrich_err:
