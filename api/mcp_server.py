@@ -1858,6 +1858,13 @@ async def get_cdif_summary(url_or_id: str) -> list[types.TextContent]:
         else:
             export_url = f"{base_internal}/export?{raw_str}"
 
+        # Determine public base host for external links
+        base_public = "https://ai.mediaquantum.eu"
+        if raw_str.startswith("http://") or raw_str.startswith("https://"):
+            parsed_u = urllib.parse.urlparse(raw_str)
+            if parsed_u.netloc and "localhost" not in parsed_u.netloc and "127.0.0.1" not in parsed_u.netloc:
+                base_public = f"{parsed_u.scheme}://{parsed_u.netloc}"
+
         es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
         croissant_doc = None
         cdif_doc = None
@@ -2048,15 +2055,41 @@ async def get_cdif_summary(url_or_id: str) -> list[types.TextContent]:
         else:
             md_lines.append("No explicit variable schema definitions found in CDIF or Croissant.")
 
-        # Distribution Files
-        if croissant_summary.get("distributions"):
-            md_lines.append(f"\n## 📦 Associated Files ({len(croissant_summary['distributions'])})")
-            md_lines.append("| File Name | Format | Size | Description |")
-            md_lines.append("| --- | --- | --- | --- |")
-            for d in croissant_summary["distributions"][:15]:
-                md_lines.append(f"| [{d.get('name')}]({d.get('contentUrl')}) | `{d.get('encodingFormat') or '-'}` | {d.get('contentSize') or '-'} | {d.get('description') or '-'} |")
-            if len(croissant_summary["distributions"]) > 15:
-                md_lines.append(f"*... and {len(croissant_summary['distributions']) - 15} more files.*")
+        # Distribution Files - Retrieve and list ALL available files from Croissant
+        distributions = croissant_summary.get("distributions", [])
+        if distributions:
+            md_lines.append(f"\n## 📦 All Available Files in Dataset ({len(distributions)} files)")
+            md_lines.append("| # | File Name | Format | Size | Description | CDIF Export Link |")
+            md_lines.append("| --- | --- | --- | --- | --- | --- |")
+            for idx, d in enumerate(distributions, 1):
+                name = d.get("name") or f"file_{idx}"
+                c_url = d.get("contentUrl") or ""
+                fmt = d.get("encodingFormat") or "-"
+                size = d.get("contentSize") or "-"
+                desc = d.get("description") or "-"
+                
+                # Check if this file is the currently analyzed file
+                is_current = False
+                if target_file and c_url:
+                    if target_file.rstrip("/") == c_url.rstrip("/") or (name and target_file.endswith(name)):
+                        is_current = True
+                
+                file_display = f"[{name}]({c_url})" if c_url else name
+                if is_current:
+                    file_display = f"🎯 **{name}** *(Current)*<br>[Direct Download]({c_url})" if c_url else f"🎯 **{name}** *(Current)*"
+
+                # Generate CDIF export link for this file
+                cdif_link = "-"
+                eff_doi = target_doi or croissant_summary.get("doi_or_url")
+                if c_url:
+                    if eff_doi:
+                        qs = urllib.parse.urlencode([("ds", eff_doi), ("file", c_url)])
+                    else:
+                        qs = urllib.parse.urlencode([("file", c_url)])
+                    export_href = f"{base_public}/export?{qs}"
+                    cdif_link = f"[CDIF Export]({export_href})"
+
+                md_lines.append(f"| {idx} | {file_display} | `{fmt}` | {size} | {desc} | {cdif_link} |")
 
         final_md = "\n".join(md_lines)
         return [types.TextContent(type="text", text=final_md)]
