@@ -271,10 +271,14 @@ async def get_collection_documents(collection_id: str, limit: int = 50) -> list[
                             md_resp.close()
                             md_resp.release_conn()
                             # Find first h1
-                            h1_match = re.search(r'^#\s+(.+)$', md_data, flags=re.MULTILINE)
+                            h1_match = re.search(r'^#\s+(?:🥐\s*)?(.+)$', md_data, flags=re.MULTILINE)
                             if h1_match:
                                 name = h1_match.group(1).strip()
-                            desc = "Fetched from Vault (Markdown document)."
+                            desc_match = re.search(r'^>\s*(.+)$', md_data, flags=re.MULTILINE)
+                            if desc_match:
+                                desc = desc_match.group(1).strip()
+                            else:
+                                desc = "Fetched from Vault (Markdown document)."
                             
                         if len(desc) > 200:
                             desc = desc[:197] + "..."
@@ -4764,8 +4768,9 @@ Please answer the question based ONLY on the context provided above, or by using
                 if items:
                     es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
                     async with httpx.AsyncClient() as client:
-                        payload = {"query": {"terms": {"_id": items}}, "size": len(items), "_source": ["name", "description", "url", "_source_url", "datePublished", "dateCreated", "dateModified", "unmappedFields", "_full_text", "keywords"]}
-                        docs_resp = await client.post(f"{es_url}/trump,croissant/_search", json=payload)
+                        # 1. First attempt bulk lookup across trump,croissant,_all
+                        payload = {"query": {"ids": {"values": items}}, "size": len(items), "_source": ["name", "description", "url", "_source_url", "datePublished", "dateCreated", "dateModified", "unmappedFields", "_full_text", "keywords"]}
+                        docs_resp = await client.post(f"{es_url}/_all/_search", json=payload)
                         hits = docs_resp.json().get("hits", {}).get("hits", []) if docs_resp.status_code == 200 else []
                         es_docs = {h.get("_id"): h for h in hits}
                         
@@ -4774,6 +4779,18 @@ Please answer the question based ONLY on the context provided above, or by using
                             desc = "Metadata not available in search index."
                             item_date = None
                             item_keywords = []
+
+                            # If not in bulk search, try direct get across candidate indices
+                            if doc_id not in es_docs:
+                                for cand_idx in ["croissant", "trump"]:
+                                    try:
+                                        r_doc = await client.get(f"{es_url}/{cand_idx}/_doc/{doc_id}")
+                                        if r_doc.status_code == 200:
+                                            es_docs[doc_id] = r_doc.json()
+                                            break
+                                    except Exception:
+                                        pass
+
                             if doc_id in es_docs:
                                 s = es_docs[doc_id].get("_source", {})
                                 name = s.get("name", "Unknown Title")
@@ -4826,10 +4843,14 @@ Please answer the question based ONLY on the context provided above, or by using
                                         md_data = md_resp.read().decode("utf-8")
                                         md_resp.close()
                                         md_resp.release_conn()
-                                        h1_match = re.search(r'^#\s+(.+)$', md_data, flags=re.MULTILINE)
+                                        h1_match = re.search(r'^#\s+(?:🥐\s*)?(.+)$', md_data, flags=re.MULTILINE)
                                         if h1_match:
                                             name = h1_match.group(1).strip()
-                                        desc = "Fetched from Vault (Markdown document)."
+                                        desc_match = re.search(r'^>\s*(.+)$', md_data, flags=re.MULTILINE)
+                                        if desc_match:
+                                            desc = desc_match.group(1).strip()
+                                        else:
+                                            desc = "Fetched from Vault (Markdown document)."
                                         m_d = re.search(r'(20\d{2}-\d{2}-\d{2})', md_data)
                                         if m_d:
                                             item_date = m_d.group(1)

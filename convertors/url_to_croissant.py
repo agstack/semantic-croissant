@@ -23,11 +23,11 @@ from rdflib import Graph
 from youtube_transcript_api import YouTubeTranscriptApi
 from playwright.sync_api import sync_playwright
 
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444")
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
 OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "")
 OLLAMA_HEADERS = {"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {}
 ELASTICSEARCH_URL = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200")
-MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "mcp.dev.codata.org")
+MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "ai.mediaquantum.eu")
 MODEL_NAME = os.environ.get("MODEL_NAME", "gemma4:e4b")
 
 def fetch_with_playwright(url):
@@ -241,7 +241,21 @@ def fetch_github_repo(url, traverse=False):
             
     return None
 
+def resolve_direct_url(url):
+    """If url is a Google redirect (e.g. google.com/goto?url=...), resolve to canonical direct destination URL."""
+    if url and "google.com/goto" in url:
+        try:
+            r = scraper.get(url, allow_redirects=False, timeout=10)
+            if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("Location"):
+                resolved = r.headers["Location"].strip()
+                print(f"  -> Resolved Google redirect to direct URL: {resolved}")
+                return resolved
+        except Exception as e:
+            print(f"  -> Could not resolve Google redirect for {url}: {e}")
+    return url
+
 def fetch_url_markdown(url, traverse=False):
+    url = resolve_direct_url(url)
     if "github.com" in url and "api.github.com" not in url:
         parsed = urllib.parse.urlparse(url)
         path_parts = parsed.path.strip('/').split('/')
@@ -478,7 +492,7 @@ def fetch_url_markdown(url, traverse=False):
 def translate_to_english(text):
     print("Translating content to English using Ollama...")
     prompt = f"Translate the ENTIRE following text to English. Do not summarize. Translate every single word until the end of the text:\n\n{text}"
-    ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444")
+    ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
     model_name = os.environ.get("MODEL", "gemma4:e4b")
     payload = {
         "model": model_name,
@@ -935,6 +949,7 @@ def generate_markdown_from_jsonld(data):
 
 
 def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, user_name=None, user_email=None, index=False, elastic=False, expert="/expert/croissant", upload_gdrive=False, upload_gdrive_folder=None, translate=False):
+    url = resolve_direct_url(url)
     direct_jsonld = check_dataverse_direct_export(url)
     if not direct_jsonld:
         direct_jsonld = check_dspace_direct_export(url)
@@ -1395,6 +1410,11 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                         json_data["isBasedOn"] = [json_data["isBasedOn"]] + doc_links
                 else:
                     json_data["isBasedOn"] = doc_links
+                    
+                # Always ensure canonical direct URL
+                canonical_direct = (page_meta or {}).get("canonicalUrl") or url
+                json_data["url"] = canonical_direct
+                json_data["contentUrl"] = canonical_direct
                     
                 if dataverse_original_jsonld:
                     json_data["isBasedOn"].append({
