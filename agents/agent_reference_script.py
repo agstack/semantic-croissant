@@ -201,9 +201,13 @@ if __name__ == "__main__":
         sys.exit(1)
         
     args = parser.parse_args()
-    if not args.query:
-        print("Error: The -q/--query argument is required.")
+    query_text = args.query
+    if query_text == "-" or (not query_text and not sys.stdin.isatty()):
+        query_text = sys.stdin.read()
+    if not query_text:
+        print("Error: The -q/--query argument or stdin is required.")
         parser.print_help()
         sys.exit(1)
         
-    asyncio.run(run_agent(args.query, args.expert, args.limit, args.save_vault))
+    asyncio.run(run_agent(query_text, args.expert, args.limit, args.save_vault))
+

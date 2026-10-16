@@ -3537,7 +3537,7 @@ def main(port: int, transport: str) -> int:
                         async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
                             resp = await client.get(file_url, headers={"User-Agent": "SemanticCroissant/1.0"})
                             if resp.status_code == 200:
-                                raw_bytes = resp.content
+                                raw_bytes = resp.content.replace(b"\x00", b"")
                                 # Try decoding as text
                                 text_sample = ""
                                 try:
@@ -3545,6 +3545,9 @@ def main(port: int, transport: str) -> int:
                                 except Exception:
                                     text_sample = raw_bytes.decode('latin-1', errors='replace')
                                 
+                                # Sanitize any remaining null or control characters
+                                text_sample = text_sample.replace("\x00", "")
+
                                 # If tabular or text, take up to first 250 lines / 12,000 characters
                                 lines = text_sample.splitlines()
                                 if len(lines) > 250:
@@ -3561,6 +3564,7 @@ def main(port: int, transport: str) -> int:
                     except Exception as dl_err:
                         file_content_snippet = f"\n\n(Note: Could not download remote file content: {str(dl_err)})"
 
+
                 if file_content_snippet:
                     context_text = context_text + file_content_snippet
                     
@@ -3571,7 +3575,9 @@ Question: {question}
 
 Please answer the question based ONLY on the context provided above (including the downloaded file content if available), or by using your tools if you need to fetch additional files or data."""
 
-                
+                # Clean any null characters or control characters that could break C/POSIX subprocess or shells
+                prompt = prompt.replace("\x00", "").replace("\r", "")
+
                 import asyncio
                 import subprocess
                 import os
@@ -3583,7 +3589,8 @@ Please answer the question based ONLY on the context provided above (including t
                     env["MODEL"] = model_name
                     
                     proc = subprocess.run(
-                        ["python3", "/app/agents/agent_reference_script.py", "-q", prompt],
+                        ["python3", "/app/agents/agent_reference_script.py", "-q", "-"],
+                        input=prompt,
                         env=env,
                         capture_output=True,
                         text=True
@@ -3592,6 +3599,7 @@ Please answer the question based ONLY on the context provided above (including t
                 
                 # Run the subprocess in a background thread to avoid blocking the async event loop
                 proc = await asyncio.to_thread(run_agent)
+
                 
                 if proc.returncode != 0:
                     from starlette.responses import JSONResponse
