@@ -3823,6 +3823,36 @@ Please answer the question based ONLY on the context provided above, or by using
                         except Exception as excel_err:
                             print(f"Failed to auto-convert xlsx to csv: {excel_err}")
 
+                    # If file is an SPSS file (.por, .sav, .zsav) or Stata (.dta) / SAS (.sas7bdat), convert using pyreadstat
+                    spss_exts = [".por", ".sav", ".zsav", ".dta", ".sas7bdat", ".xpt"]
+                    content_type_header = file_resp.headers.get("content-type", "").lower()
+                    is_spss_or_stat = any(filename.lower().endswith(ext) for ext in spss_exts) or "spss" in content_type_header or "stata" in content_type_header
+                    if is_spss_or_stat:
+                        try:
+                            import pyreadstat, tempfile
+                            ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ".por"
+                            if ext not in spss_exts:
+                                ext = ".por" if "por" in content_type_header else ".sav"
+
+                            with tempfile.NamedTemporaryFile(suffix=ext, delete=True) as tmp_stat:
+                                tmp_stat.write(file_content)
+                                tmp_stat.flush()
+                                if ext == ".por":
+                                    df, meta = pyreadstat.read_por(tmp_stat.name)
+                                elif ext in [".sav", ".zsav"]:
+                                    df, meta = pyreadstat.read_sav(tmp_stat.name)
+                                elif ext == ".dta":
+                                    df, meta = pyreadstat.read_dta(tmp_stat.name)
+                                elif ext in [".xpt", ".sas7bdat"]:
+                                    df, meta = pyreadstat.read_xport(tmp_stat.name) if ext == ".xpt" else pyreadstat.read_sas7bdat(tmp_stat.name)
+                                else:
+                                    df, meta = pyreadstat.read_por(tmp_stat.name)
+
+                                file_content = df.to_csv(index=False).encode("utf-8")
+                                filename = filename.rsplit(".", 1)[0] + ".csv"
+                        except Exception as spss_err:
+                            print(f"Failed to auto-convert SPSS/statistical file with pyreadstat: {spss_err}")
+
                     # If no valid tabular extension, fallback to .csv
                     known_exts = [".csv", ".tsv", ".txt", ".sav", ".dta", ".parquet", ".por", ".zsav", ".xpt"]
                     if not any(filename.lower().endswith(ext) for ext in known_exts):

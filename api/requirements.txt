@@ -22,3 +22,5 @@ google-auth-oauthlib
 markdown
 pyshacl
 httpx
+pyreadstat
+pandas
