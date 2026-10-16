@@ -24,3 +24,6 @@ pyshacl
 httpx
 pyreadstat
 pandas
+openpyxl
+xlrd
+odfpy

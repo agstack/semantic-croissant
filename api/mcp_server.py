@@ -3761,67 +3761,86 @@ Please answer the question based ONLY on the context provided above, or by using
 
                     file_content = file_resp.content
 
-                    # If file is an Excel spreadsheet (.xlsx), convert to CSV so DDI-CDI studio can process it
-                    if filename.lower().endswith(".xlsx") or file_resp.headers.get("content-type", "").startswith("application/vnd.openxmlformats"):
+                    # If file is a spreadsheet (.xlsx, .xls, .xlsm, .ods), convert to CSV so DDI-CDI studio can process it
+                    spreadsheet_exts = [".xlsx", ".xls", ".xlsm", ".ods"]
+                    content_type_header = file_resp.headers.get("content-type", "").lower()
+                    is_spreadsheet = any(filename.lower().endswith(ext) for ext in spreadsheet_exts) or "excel" in content_type_header or "spreadsheet" in content_type_header
+                    if is_spreadsheet:
+                        converted = False
                         try:
-                            import zipfile, csv, xml.etree.ElementTree as ET
-                            with zipfile.ZipFile(io.BytesIO(file_content)) as z:
-                                strings = []
-                                if "xl/sharedStrings.xml" in z.namelist():
-                                    stree = ET.fromstring(z.read("xl/sharedStrings.xml"))
-                                    for elem in stree.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}si"):
-                                        t_parts = [t.text for t in elem.iter("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t") if t.text]
-                                        strings.append("".join(t_parts))
+                            import pandas as pd
+                            xls = pd.ExcelFile(io.BytesIO(file_content))
+                            best_df = None
+                            for s in xls.sheet_names:
+                                df = pd.read_excel(xls, sheet_name=s)
+                                if not df.empty and (best_df is None or len(df) > len(best_df)):
+                                    best_df = df
+                            if best_df is not None and not best_df.empty:
+                                file_content = best_df.to_csv(index=False).encode("utf-8")
+                                filename = filename.rsplit(".", 1)[0] + ".csv"
+                                converted = True
+                        except Exception as pd_err:
+                            print(f"pandas Excel reading failed, trying fallback: {pd_err}")
 
-                                # Search for the first worksheet that has rows
-                                sheet_names = [n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
-                                sheet_names.sort()
-                                best_sheet_data = None
-                                for sname in sheet_names:
-                                    sheet = ET.fromstring(z.read(sname))
-                                    sd = sheet.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheetData")
-                                    if sd is not None and len(sd.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row")) > 0:
-                                        best_sheet_data = sd
-                                        break
+                        if not converted and (filename.lower().endswith(".xlsx") or "openxmlformats" in content_type_header):
+                            try:
+                                import zipfile, xml.etree.ElementTree as ET
+                                with zipfile.ZipFile(io.BytesIO(file_content)) as z:
+                                    strings = []
+                                    if "xl/sharedStrings.xml" in z.namelist():
+                                        stree = ET.fromstring(z.read("xl/sharedStrings.xml"))
+                                        for elem in stree.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}si"):
+                                            t_parts = [t.text for t in elem.iter("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t") if t.text]
+                                            strings.append("".join(t_parts))
 
-                                if best_sheet_data is not None:
-                                    out_buf = io.StringIO()
-                                    csv_writer = csv.writer(out_buf)
-                                    for row in best_sheet_data.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row"):
-                                        row_dict = {}
-                                        max_col = 0
-                                        for c in row.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"):
-                                            r_ref = c.get("r", "")
-                                            col_match = re.match(r"([A-Z]+)", r_ref)
-                                            if col_match:
-                                                col_str = col_match.group(1)
-                                                col_idx = 0
-                                                for ch in col_str:
-                                                    col_idx = col_idx * 26 + (ord(ch) - ord("A") + 1)
-                                                col_idx -= 1
-                                            else:
-                                                col_idx = max_col
+                                    sheet_names = [n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
+                                    sheet_names.sort()
+                                    best_sheet_data = None
+                                    for sname in sheet_names:
+                                        sheet = ET.fromstring(z.read(sname))
+                                        sd = sheet.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheetData")
+                                        if sd is not None and len(sd.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row")) > 0:
+                                            best_sheet_data = sd
+                                            break
 
-                                            t = c.get("t")
-                                            v = c.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v")
-                                            val = v.text if v is not None and v.text else ""
-                                            if t == "s" and val.isdigit():
-                                                idx = int(val)
-                                                val = strings[idx] if idx < len(strings) else ""
-                                            elif t == "inlineStr":
-                                                is_el = c.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}is")
-                                                if is_el is not None:
-                                                    t_el = is_el.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t")
-                                                    val = t_el.text if t_el is not None and t_el.text else ""
-                                            row_dict[col_idx] = val
-                                            if col_idx >= max_col:
-                                                max_col = col_idx + 1
-                                        csv_writer.writerow([row_dict.get(i, "") for i in range(max_col)])
+                                    if best_sheet_data is not None:
+                                        out_buf = io.StringIO()
+                                        csv_writer = csv.writer(out_buf)
+                                        for row in best_sheet_data.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row"):
+                                            row_dict = {}
+                                            max_col = 0
+                                            for c in row.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"):
+                                                r_ref = c.get("r", "")
+                                                col_match = re.match(r"([A-Z]+)", r_ref)
+                                                if col_match:
+                                                    col_str = col_match.group(1)
+                                                    col_idx = 0
+                                                    for ch in col_str:
+                                                        col_idx = col_idx * 26 + (ord(ch) - ord("A") + 1)
+                                                    col_idx -= 1
+                                                else:
+                                                    col_idx = max_col
 
-                                    file_content = out_buf.getvalue().encode("utf-8")
-                                    filename = filename.rsplit(".", 1)[0] + ".csv"
-                        except Exception as excel_err:
-                            print(f"Failed to auto-convert xlsx to csv: {excel_err}")
+                                                t = c.get("t")
+                                                v = c.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v")
+                                                val = v.text if v is not None and v.text else ""
+                                                if t == "s" and val.isdigit():
+                                                    idx = int(val)
+                                                    val = strings[idx] if idx < len(strings) else ""
+                                                elif t == "inlineStr":
+                                                    is_el = c.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}is")
+                                                    if is_el is not None:
+                                                        t_el = is_el.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t")
+                                                        val = t_el.text if t_el is not None and t_el.text else ""
+                                                row_dict[col_idx] = val
+                                                if col_idx >= max_col:
+                                                    max_col = col_idx + 1
+                                            csv_writer.writerow([row_dict.get(i, "") for i in range(max_col)])
+
+                                        file_content = out_buf.getvalue().encode("utf-8")
+                                        filename = filename.rsplit(".", 1)[0] + ".csv"
+                            except Exception as excel_err:
+                                print(f"Failed to auto-convert xlsx to csv: {excel_err}")
 
                     # If file is an SPSS file (.por, .sav, .zsav) or Stata (.dta) / SAS (.sas7bdat), convert using pyreadstat
                     spss_exts = [".por", ".sav", ".zsav", ".dta", ".sas7bdat", ".xpt"]
