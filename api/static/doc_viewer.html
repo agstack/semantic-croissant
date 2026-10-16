@@ -140,6 +140,47 @@
             font-size: 1.2rem;
             color: #888;
         }
+
+        .markdown-body .dataset-summary {
+            font-size: 1rem;
+            line-height: 1.65;
+            margin: 20px 0;
+            padding: 16px 20px;
+            background: var(--header-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-color);
+        }
+
+        .markdown-body .dataset-summary-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 700;
+            color: var(--accent-color);
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        /* Style the top blockquote rendered by marked.js as a summary box instead of italicized quote */
+        .markdown-body > blockquote:first-of-type {
+            padding: 16px 20px;
+            color: var(--text-color);
+            background: var(--header-bg);
+            border: 1px solid var(--border-color);
+            border-left: 3px solid var(--accent-color);
+            border-radius: 6px;
+            font-style: normal;
+            font-size: 0.95rem;
+            line-height: 1.65;
+            margin: 18px 0 24px 0;
+        }
+        .markdown-body > blockquote:first-of-type p {
+            margin: 0;
+            color: var(--text-color);
+        }
     </style>
 </head>
 <body>
@@ -988,7 +1029,10 @@
                         html += `<p><a href="${data.url}" target="_blank" style="color: var(--accent-color); text-decoration: none;"><strong>Original URL &rarr;</strong></a></p>`;
                     }
                     if (data.description) {
-                        html += `<div style="font-size: 1.1rem; line-height: 1.6; margin: 20px 0; padding: 15px; background: var(--button-bg, #f1f3f4); border-left: 4px solid var(--accent-color); border-radius: 4px;">${data.description}</div>`;
+                        html += `<div class="dataset-summary">
+                            <div class="dataset-summary-label">Summary</div>
+                            <div>${data.description}</div>
+                        </div>`;
                     }
                     
                     // Metadata Table
@@ -1090,6 +1134,15 @@
                 
                 const contentDiv = document.getElementById('md-content');
                 contentDiv.innerHTML = htmlContent;
+
+                // Make the top blockquote (dataset description) look like a structured summary box
+                const firstBq = contentDiv.querySelector('blockquote');
+                if (firstBq && (!firstBq.previousElementSibling || firstBq.previousElementSibling.tagName.match(/^H[1-6]|P$/i))) {
+                    const label = document.createElement('div');
+                    label.className = 'dataset-summary-label';
+                    label.textContent = 'Summary';
+                    firstBq.insertBefore(label, firstBq.firstChild);
+                }
                 
                 // Inject unified action toolbar
                 const actionToolbar = document.createElement('div');
