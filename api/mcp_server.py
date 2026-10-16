@@ -4444,6 +4444,26 @@ Please answer the question based ONLY on the context provided above (including t
                                             item["annotationText"] = s_text.strip()
                                         except Exception as e:
                                             item["annotationTextError"] = str(e)
+                        # If the vault JSON-LD lacks distributions or conformsTo, enrich from Elasticsearch
+                        if not jdata.get("distribution") or not jdata.get("conformsTo"):
+                            try:
+                                es_id = filename[:-7]
+                                es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+                                import httpx
+                                async with httpx.AsyncClient(timeout=5.0) as es_merge_client:
+                                    r_es = await es_merge_client.get(f"{es_url}/croissant/_doc/{es_id}")
+                                    if r_es.status_code == 200:
+                                        es_src = r_es.json().get("_source", {})
+                                        for key in ["conformsTo", "distribution", "creator", "keywords", "license", "datePublished", "dateModified", "includedInDataCatalog", "publisher", "version", "citeAs", "recordSet"]:
+                                            if key not in jdata and key in es_src:
+                                                jdata[key] = es_src[key]
+                                        if "@context" in es_src and isinstance(jdata.get("@context"), dict) and isinstance(es_src["@context"], dict):
+                                            for ck, cv in es_src["@context"].items():
+                                                if ck not in jdata["@context"]:
+                                                    jdata["@context"][ck] = cv
+                            except Exception as es_e:
+                                print(f"Error merging from ES: {es_e}", file=sys.stderr)
+
                         jdata = fix_croissant_dataverse_distributions(jdata)
                         base_host = f"https://{MCP_DOMAIN}"
                         ds_for_export = jdata.get('url') or jdata.get('identifier')
@@ -4615,6 +4635,17 @@ Please answer the question based ONLY on the context provided above (including t
                         cached_bytes = cached_obj.read()
                         cached_obj.close()
                         cached_obj.release_conn()
+                        try:
+                            cached_json = json.loads(cached_bytes.decode("utf-8"))
+                            cdif_spec_uri = "https://ddialliance.org/Specification/DDI-CDI/1.0/"
+                            if "dct:conformsTo" not in cached_json and "conformsTo" not in cached_json:
+                                cached_json["dct:conformsTo"] = cdif_spec_uri
+                                for m in cached_json.get("DDICDIModels", []):
+                                    if isinstance(m, dict) and (m.get("@id") in ["#wideDataSet", "#tabularTextDataSet"] or "DataSet" in m.get("@type", "")):
+                                        m["dct:conformsTo"] = cdif_spec_uri
+                                cached_bytes = json.dumps(cached_json, indent=2).encode("utf-8")
+                        except Exception:
+                            pass
                         return Response(
                             content=cached_bytes,
                             status_code=200,
@@ -5124,7 +5155,8 @@ Please answer the question based ONLY on the context provided above (including t
                                 enriched_json = {
                                     "@context": new_context,
                                     "@id": export_id,
-                                    "@type": ["schema:Dataset", "prov:Entity"]
+                                    "@type": ["schema:Dataset", "prov:Entity"],
+                                    "dct:conformsTo": "https://ddialliance.org/Specification/DDI-CDI/1.0/"
                                 }
                                 if is_part_of:
                                     enriched_json["dct:isPartOf"] = is_part_of if len(is_part_of) > 1 else is_part_of[0]
@@ -5168,6 +5200,7 @@ Please answer the question based ONLY on the context provided above (including t
                                                 model_elem["prov:wasDerivedFrom"] = {
                                                     "@id": target_url
                                                 }
+                                                model_elem["dct:conformsTo"] = "https://ddialliance.org/Specification/DDI-CDI/1.0/"
                                                 if is_part_of:
                                                     model_elem["dct:isPartOf"] = is_part_of if len(is_part_of) > 1 else is_part_of[0]
                                                 model_elem["dct:title"] = ds_title
