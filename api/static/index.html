@@ -892,24 +892,40 @@
             try {
                 const res = await fetch('/gateway/v1/models');
                 const data = await res.json();
-                
                 modelSelect.innerHTML = '';
                 if (data.data && data.data.length > 0) {
+                    // Sort models: prioritize gemma4:31b-cloud first, then other -cloud models, then alphabetical
                     data.data.sort((a, b) => {
+                        const aId = (a.id || '').toLowerCase();
+                        const bId = (b.id || '').toLowerCase();
                         const aName = (a.display_name || a.id).toLowerCase();
                         const bName = (b.display_name || b.id).toLowerCase();
-                        const aCloud = aName.includes('-cloud');
-                        const bCloud = bName.includes('-cloud');
+
+                        if (aId.includes('gemma4:31b-cloud') || aId.includes('gemma4-31b-cloud') || aId.includes('gemma4-31b:cloud')) return -1;
+                        if (bId.includes('gemma4:31b-cloud') || bId.includes('gemma4-31b-cloud') || bId.includes('gemma4-31b:cloud')) return 1;
+
+                        const aCloud = aId.includes('-cloud') || aName.includes('-cloud');
+                        const bCloud = bId.includes('-cloud') || bName.includes('-cloud');
                         if (aCloud && !bCloud) return -1;
                         if (!aCloud && bCloud) return 1;
                         return aName.localeCompare(bName);
                     });
-                    
+
+                    // Determine the default model ID
+                    const defaultModel = data.data.find(m => {
+                        const id = (m.id || '').toLowerCase();
+                        return id.includes('gemma4:31b-cloud') || id.includes('gemma4-31b-cloud') || id.includes('gemma4-31b:cloud');
+                    }) || data.data.find(m => {
+                        const id = (m.id || '').toLowerCase();
+                        const name = (m.display_name || '').toLowerCase();
+                        return id.includes('-cloud') || name.includes('-cloud');
+                    }) || data.data[0];
+
                     data.data.forEach(model => {
                         const opt = document.createElement('option');
                         opt.value = model.id;
                         opt.textContent = model.display_name || model.id;
-                        if (model.id === 'gemma4:31b' || model.id === 'gemma4-31b' || model.id === 'gemma4:31b-cloud' || model.id === 'gemma4-31b:cloud') {
+                        if (defaultModel && model.id === defaultModel.id) {
                             opt.selected = true;
                         }
                         modelSelect.appendChild(opt);

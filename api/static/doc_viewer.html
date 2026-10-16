@@ -1157,21 +1157,32 @@
                     .then(res => res.json())
                     .then(data => {
                         if (data.data && data.data.length > 0) {
-                            // Sort models: those with '-cloud' first, then others
                             let models = data.data;
+                            // Prioritize gemma4:31b-cloud first, then other -cloud models, then alphabetical
                             models.sort((a, b) => {
-                                const aCloud = a.id.includes('-cloud');
-                                const bCloud = b.id.includes('-cloud');
+                                const aId = (a.id || '').toLowerCase();
+                                const bId = (b.id || '').toLowerCase();
+                                if (aId.includes('gemma4:31b-cloud') || aId.includes('gemma4-31b-cloud') || aId.includes('gemma4-31b:cloud')) return -1;
+                                if (bId.includes('gemma4:31b-cloud') || bId.includes('gemma4-31b-cloud') || bId.includes('gemma4-31b:cloud')) return 1;
+
+                                const aCloud = aId.includes('-cloud');
+                                const bCloud = bId.includes('-cloud');
                                 if (aCloud && !bCloud) return -1;
                                 if (!aCloud && bCloud) return 1;
                                 return a.id.localeCompare(b.id);
                             });
+
+                            // Determine default model
+                            const defaultModel = models.find(m => {
+                                const id = (m.id || '').toLowerCase();
+                                return id.includes('gemma4:31b-cloud') || id.includes('gemma4-31b-cloud') || id.includes('gemma4-31b:cloud');
+                            }) || models.find(m => (m.id || '').toLowerCase().includes('-cloud')) || models[0];
                             
                             models.forEach(m => {
                                 const opt = document.createElement('option');
                                 opt.value = m.id;
                                 opt.innerText = m.id;
-                                if (m.id === 'gemma4:31b' || m.id === 'gemma4-31b' || m.id === 'gemma4:31b-cloud' || m.id === 'gemma4-31b:cloud') {
+                                if (defaultModel && m.id === defaultModel.id) {
                                     opt.selected = true;
                                 }
                                 askDocModelSelect.appendChild(opt);
