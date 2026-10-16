@@ -1807,7 +1807,238 @@ async def read_direct_file(url: str) -> list[types.TextContent]:
     except Exception as e:
         return [types.TextContent(type="text", text=f"Failed to read direct file: {str(e)}")]
 
+async def get_cdif_summary(url_or_id: str) -> list[types.TextContent]:
+    """
+    Read both Croissant and CDIF (DDI-CDI) representations for a given dataset/file export URL or ID,
+    and return structured information about the dataset and its variables.
+    Recognizes URLs like:
+    - https://ai.mediaquantum.eu/export?ds=https%3A%2F%2Fdoi.org%2F10.7910%2FDVN%2F3H1E4X&file=https%3A%2F%2Fdataverse.harvard.edu%2Fapi%2Faccess%2Fdatafile%2F5373735
+    - export?ds=...&file=...
+    - Raw DOI or Vault ID
+    """
+    import os, json, re, hashlib, urllib.parse, httpx
+    try:
+        raw_str = url_or_id.strip()
+        target_doi = None
+        target_file = None
+        export_url = None
+
+        # 1. Parse export URL query parameters
+        if "export" in raw_str and ("?" in raw_str or "&" in raw_str):
+            query_part = raw_str.split("?", 1)[-1] if "?" in raw_str else raw_str
+            qs = urllib.parse.parse_qs(query_part)
+            if "ds" in qs and qs["ds"]:
+                target_doi = qs["ds"][0]
+            if "file" in qs and qs["file"]:
+                target_file = qs["file"][0]
+            elif "url" in qs and qs["url"]:
+                target_file = qs["url"][0]
+
+        # 2. Extract DOI if present
+        if not target_doi:
+            m_doi = re.search(r'(?:https?://(?:dx\.)?doi\.org/|doi:)?(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)', raw_str)
+            if m_doi:
+                clean_doi_suffix = m_doi.group(1).rstrip(")>]\"'.,;")
+                target_doi = f"https://doi.org/{clean_doi_suffix}"
+
+        # 3. Extract datafile URL if present
+        if not target_file and "datafile" in raw_str:
+            m_df = re.search(r'https?://[^\s\"\'<>]+datafile/\d+', raw_str)
+            if m_df:
+                target_file = m_df.group(0)
+
+        # Build canonical internal export URL
+        base_internal = "http://localhost:7070"
+        if target_file and target_doi:
+            export_url = f"{base_internal}/export?{urllib.parse.urlencode([('ds', target_doi), ('file', target_file)])}"
+        elif target_file:
+            export_url = f"{base_internal}/export?{urllib.parse.urlencode([('file', target_file)])}"
+        elif raw_str.startswith("http"):
+            export_url = raw_str if "/export" in raw_str else f"{base_internal}/export?{urllib.parse.urlencode([('file', raw_str)])}"
+        else:
+            export_url = f"{base_internal}/export?{raw_str}"
+
+        es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+        croissant_doc = None
+        cdif_doc = None
+        matched_doc_id = None
+
+        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+            # Fetch Croissant JSON-LD
+            # A: Try DOI hash
+            if target_doi:
+                norm_doi = target_doi
+                if "doi.org/" in norm_doi:
+                    norm_doi = "https://doi.org/" + norm_doi.split("doi.org/")[-1]
+                h1 = hashlib.sha256(norm_doi.encode("utf-8")).hexdigest()[:16]
+                try:
+                    r_c = await client.get(f"{es_url}/croissant/_doc/{h1}")
+                    if r_c.status_code == 200:
+                        croissant_doc = r_c.json().get("_source", {})
+                        matched_doc_id = h1
+                except Exception:
+                    pass
+
+            # B: Search by distribution file if not found
+            if not croissant_doc and target_file:
+                try:
+                    q_file = {
+                        "query": {
+                            "nested": {
+                                "path": "distribution",
+                                "query": {"term": {"distribution.contentUrl": target_file}}
+                            }
+                        },
+                        "size": 1
+                    }
+                    r_f = await client.post(f"{es_url}/_all/_search", json=q_file)
+                    if r_f.status_code == 200:
+                        hits = r_f.json().get("hits", {}).get("hits", [])
+                        if hits:
+                            matched_doc_id = hits[0].get("_id")
+                            croissant_doc = hits[0].get("_source", {})
+                except Exception:
+                    pass
+
+            # Fetch CDIF JSON-LD from export endpoint
+            try:
+                r_exp = await client.get(export_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+                if r_exp.status_code == 200:
+                    cdif_doc = r_exp.json()
+            except Exception as cdif_err:
+                pass
+
+        if not croissant_doc and not cdif_doc:
+            return [types.TextContent(type="text", text=f"Could not retrieve Croissant or CDIF metadata for '{url_or_id}'.")]
+
+        # Extract Croissant Summary
+        croissant_summary = {}
+        if croissant_doc:
+            croissant_summary["title"] = croissant_doc.get("name")
+            croissant_summary["doi_or_url"] = croissant_doc.get("url") or croissant_doc.get("identifier") or target_doi
+            croissant_summary["description"] = croissant_doc.get("description")
+            croissant_summary["creator"] = [c.get("name") if isinstance(c, dict) else str(c) for c in (croissant_doc.get("creator") or [])]
+            croissant_summary["license"] = croissant_doc.get("license")
+            croissant_summary["datePublished"] = croissant_doc.get("datePublished")
+
+            # Distributions
+            dist_list = []
+            for d in croissant_doc.get("distribution", []):
+                dist_list.append({
+                    "name": d.get("name"),
+                    "description": d.get("description"),
+                    "contentUrl": d.get("contentUrl"),
+                    "encodingFormat": d.get("encodingFormat"),
+                    "contentSize": d.get("contentSize")
+                })
+            croissant_summary["distributions"] = dist_list
+
+            # RecordSets / Fields
+            croissant_vars = []
+            for rs in croissant_doc.get("recordSet", []):
+                for f in rs.get("field", []):
+                    croissant_vars.append({
+                        "recordSet": rs.get("name"),
+                        "name": f.get("name"),
+                        "description": f.get("description"),
+                        "dataType": f.get("dataType")
+                    })
+            croissant_summary["recordSet_fields"] = croissant_vars
+
+        # Extract CDIF Summary
+        cdif_summary = {}
+        if cdif_doc:
+            cdif_summary["id"] = cdif_doc.get("@id")
+            cdif_summary["title"] = cdif_doc.get("dct:title")
+            cdif_summary["description"] = cdif_doc.get("dct:description")
+            cdif_summary["license"] = cdif_doc.get("dct:license")
+            cdif_summary["language"] = cdif_doc.get("dct:language")
+            cdif_summary["isPartOf"] = cdif_doc.get("dct:isPartOf")
+            cdif_summary["wasDerivedFrom"] = cdif_doc.get("prov:wasDerivedFrom")
+            cdif_summary["contentSize"] = cdif_doc.get("schema:contentSize")
+            cdif_summary["checksum"] = cdif_doc.get("schema:checksum")
+
+            # Extract CDIF InstanceVariables and DataStructures
+            cdif_variables = []
+            for elem in cdif_doc.get("DDICDIModels", []):
+                if isinstance(elem, dict) and elem.get("@type") == "InstanceVariable":
+                    v_name = elem.get("name", {}).get("name") if isinstance(elem.get("name"), dict) else str(elem.get("name", ""))
+                    v_display = ""
+                    disp_obj = elem.get("displayLabel", {})
+                    if isinstance(disp_obj, dict):
+                        loc_var = disp_obj.get("locationVariant", {})
+                        v_display = loc_var.get("entryValue", "") if isinstance(loc_var, dict) else str(loc_var)
+                    v_desc = elem.get("dct:description") or ""
+                    v_unit = elem.get("schema:unitText") or ""
+                    cdif_variables.append({
+                        "name": v_name,
+                        "displayLabel": v_display,
+                        "description": v_desc,
+                        "unit": v_unit
+                    })
+            cdif_summary["instance_variables"] = cdif_variables
+
+        # Build readable Markdown output
+        md_lines = []
+        md_lines.append(f"# 📊 CDIF & Croissant Combined Summary\n")
+        
+        # Dataset Overview
+        md_lines.append(f"## 🌐 Dataset Overview")
+        title = cdif_summary.get("title") or croissant_summary.get("title") or "Unknown"
+        md_lines.append(f"- **Title:** {title}")
+        if target_doi:
+            md_lines.append(f"- **DOI / Identifier:** {target_doi}")
+        if target_file:
+            md_lines.append(f"- **File Distribution URL:** {target_file}")
+        if matched_doc_id:
+            md_lines.append(f"- **Vault Doc ID:** `{matched_doc_id}`")
+        if cdif_summary.get("id"):
+            md_lines.append(f"- **CDIF Export URI:** [{cdif_summary.get('id')}]({cdif_summary.get('id')})")
+        if cdif_summary.get("description") or croissant_summary.get("description"):
+            desc = cdif_summary.get("description") or croissant_summary.get("description")
+            md_lines.append(f"- **Description:** {desc}")
+        if croissant_summary.get("creator"):
+            md_lines.append(f"- **Creator(s):** {', '.join(croissant_summary.get('creator'))}")
+        if cdif_summary.get("license") or croissant_summary.get("license"):
+            md_lines.append(f"- **License:** {cdif_summary.get('license') or croissant_summary.get('license')}")
+        if cdif_summary.get("contentSize"):
+            md_lines.append(f"- **File Size:** {cdif_summary.get('contentSize')} bytes")
+
+        # Variables table
+        md_lines.append(f"\n## 📋 Variables & Data Schema")
+        if cdif_summary.get("instance_variables"):
+            md_lines.append(f"### DDI-CDI Instance Variables ({len(cdif_summary['instance_variables'])} variables)")
+            md_lines.append("| Variable Name | Display Label | Description | Unit |")
+            md_lines.append("| --- | --- | --- | --- |")
+            for iv in cdif_summary["instance_variables"]:
+                md_lines.append(f"| `{iv.get('name')}` | {iv.get('displayLabel') or '-'} | {iv.get('description') or '-'} | {iv.get('unit') or '-'} |")
+        elif croissant_summary.get("recordSet_fields"):
+            md_lines.append(f"### Croissant RecordSet Fields ({len(croissant_summary['recordSet_fields'])} fields)")
+            md_lines.append("| RecordSet | Field Name | Description | Data Type |")
+            md_lines.append("| --- | --- | --- | --- |")
+            for f in croissant_summary["recordSet_fields"]:
+                md_lines.append(f"| {f.get('recordSet')} | `{f.get('name')}` | {f.get('description') or '-'} | `{f.get('dataType')}` |")
+        else:
+            md_lines.append("No explicit variable schema definitions found in CDIF or Croissant.")
+
+        # Distribution Files
+        if croissant_summary.get("distributions"):
+            md_lines.append(f"\n## 📦 Associated Files ({len(croissant_summary['distributions'])})")
+            md_lines.append("| File Name | Format | Size | Description |")
+            md_lines.append("| --- | --- | --- | --- |")
+            for d in croissant_summary["distributions"][:15]:
+                md_lines.append(f"| [{d.get('name')}]({d.get('contentUrl')}) | `{d.get('encodingFormat') or '-'}` | {d.get('contentSize') or '-'} | {d.get('description') or '-'} |")
+            if len(croissant_summary["distributions"]) > 15:
+                md_lines.append(f"*... and {len(croissant_summary['distributions']) - 15} more files.*")
+
+        final_md = "\n".join(md_lines)
+        return [types.TextContent(type="text", text=final_md)]
+
+    except Exception as e:
+        return [types.TextContent(type="text", text=f"Error analyzing CDIF and Croissant summary: {str(e)}")]
+
 async def get_croissant_dataset(id: str) -> list[types.TextContent]:
+
     import os, json, re, hashlib, urllib.parse, httpx
     try:
         raw_id = id.strip()
@@ -2698,7 +2929,9 @@ Here is detailed information about how every tool works:
 - elasticsearch_fulltext_search: Query the Elasticsearch index directly for indexed Croissant datasets (includes full-text search over full Markdown and metadata).
 - ask_expert: Query one of the semantic expert indices in Elasticsearch: 'trump' (Trump expert/collection), 'croissant' (Croissant expert/collection), 'dataverse', 'openml', 'honduras', 'hips', 'ollama', 'huggingface'.
 - get_croissant_dataset: Get the full Croissant JSON-LD payload for a specific dataset ID. IMPORTANT: You MUST read the JSON payload and print a summary of the dataset (Title, Description, Creator, URL) for the user in readable Markdown. Do not hide the payload.
+- get_cdif_summary: Read both Croissant and CDIF (DDI-CDI) representations for a dataset or export URL (e.g. export?ds=...&file=...) and summarize dataset metadata, distributions, and DDI-CDI variables.
 - hazards_info_profile: Search for Hazard Information Profiles (HIPs) based on a query.
+
 - hazards_translation: Get translations for Hazard Information Profiles into a specific language.
 - extract_variables_from_croissant: Fetch a dataset's metadata and extract its variables and files.
 - extract_variables_from_oai: Fetch metadata via OAI-PMH and extract variables/files.
@@ -2822,7 +3055,10 @@ Here is detailed information about how every tool works:
         )
     elif name == "get_croissant_dataset":
         return await get_croissant_dataset(id=arguments.get("id"))
+    elif name == "get_cdif_summary":
+        return await get_cdif_summary(url_or_id=arguments.get("url_or_id") or arguments.get("url") or arguments.get("id"))
     elif name == "read_croissant_file":
+
         return await read_croissant_file(
             dataset_id_or_url=arguments.get("dataset_id_or_url"),
             file_name=arguments.get("file_name")
@@ -3080,6 +3316,18 @@ async def list_tools() -> list[types.Tool]:
                 }
             }
         ),
+        types.Tool(
+            name="get_cdif_summary",
+            description="Read both Croissant and CDIF (DDI-CDI) representations for a dataset or file export URL, and provide a unified summary with dataset metadata, variables/columns, and distributions. Recognizes URLs like /export?ds=...&file=..., export URLs, DOIs, or vault IDs.",
+            inputSchema={
+                "type": "object",
+                "required": ["url_or_id"],
+                "properties": {
+                    "url_or_id": {"type": "string", "description": "The CDIF export URL (e.g. 'export?ds=https%3A%2F%2Fdoi.org%2F10.7910%2FDVN%2F3H1E4X&file=https%3A%2F%2Fdataverse.harvard.edu%2Fapi%2Faccess%2Fdatafile%2F5373735'), dataset DOI, or vault ID."}
+                }
+            }
+        ),
+
         types.Tool(
             name="read_croissant_file",
             description="Read the contents of a specific file from a Croissant dataset's distribution. Use this when the user explicitly asks to read or download a file from a dataset.",
