@@ -1272,10 +1272,15 @@
                                 html += `<thead><tr style="background: var(--header-bg, #f1f5f9);"><th style="padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border-color);">Field</th><th style="padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border-color);">Type</th><th style="padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border-color);">Description</th></tr></thead><tbody>`;
                                 rs.field.forEach(f => {
                                     const dataType = f.dataType || f['cr:dataType'] || '';
+                                    const fName = f.name || '';
+                                    let fDesc = f.description || '';
+                                    if (!fDesc || fDesc.trim().toLowerCase() === fName.trim().toLowerCase()) {
+                                        fDesc = '-';
+                                    }
                                     html += `<tr style="border-bottom: 1px solid var(--border-color, #eee);">
-                                        <td style="padding: 8px 12px; font-weight: bold;">${f.name || ''}</td>
+                                        <td style="padding: 8px 12px; font-weight: bold;">${fName}</td>
                                         <td style="padding: 8px 12px; color: #d63384; font-family: monospace;">${dataType.replace('sc:', '')}</td>
-                                        <td style="padding: 8px 12px; color: #555;">${f.description || ''}</td>
+                                        <td style="padding: 8px 12px; color: #555;">${fDesc}</td>
                                     </tr>`;
                                 });
                                 html += `</tbody></table>`;
@@ -1386,6 +1391,22 @@
                                 }
                             });
                         }
+                    } else if (ths.includes('field') && ths.includes('type') && ths.includes('description')) {
+                        // Schema / Record Set table: clean up redundant descriptions that repeat the field name
+                        const fieldColIdx = ths.indexOf('field');
+                        const descColIdx = ths.indexOf('description');
+                        tbl.querySelectorAll('tbody tr').forEach(tr => {
+                            const fTd = tr.children[fieldColIdx];
+                            const dTd = tr.children[descColIdx];
+                            if (fTd && dTd) {
+                                const fName = fTd.textContent.trim().toLowerCase();
+                                const dVal = dTd.textContent.trim().toLowerCase();
+                                if (!dVal || dVal === fName) {
+                                    dTd.textContent = '-';
+                                    dTd.style.color = '#888';
+                                }
+                            }
+                        });
                     }
                 });
 

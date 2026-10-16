@@ -4783,7 +4783,11 @@ Please answer the question based ONLY on the context provided above, or by using
                                 f_name = f.get('name', '')
                                 f_type = f.get('dataType') or f.get('cr:dataType') or ''
                                 f_type = str(f_type).replace('sc:', '')
-                                f_desc = f.get('description', '').replace('|', '\\|').replace('\n', ' ')
+                                raw_desc = f.get('description', '')
+                                if not raw_desc or raw_desc.strip().lower() == f_name.strip().lower():
+                                    f_desc = '-'
+                                else:
+                                    f_desc = raw_desc.replace('|', '\\|').replace('\n', ' ')
                                 md.append(f"| **{f_name}** | `{f_type}` | {f_desc} |")
                         md.append("\n")
                 return "\n".join(md)
