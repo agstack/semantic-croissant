@@ -1808,14 +1808,152 @@ async def read_direct_file(url: str) -> list[types.TextContent]:
         return [types.TextContent(type="text", text=f"Failed to read direct file: {str(e)}")]
 
 async def get_croissant_dataset(id: str) -> list[types.TextContent]:
-
+    import os, json, re, hashlib, urllib.parse, httpx
     try:
+        raw_id = id.strip()
+        target_doi = None
+        target_file = None
+        matched_doc = None
+        es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+
+        # 1. Check if input is an export URL, e.g. https://ai.mediaquantum.eu/export?ds=...&file=...
+        if "/export" in raw_id and ("?" in raw_id or "&" in raw_id):
+            parsed_export = urllib.parse.urlparse(raw_id)
+            qs = urllib.parse.parse_qs(parsed_export.query)
+            if "ds" in qs and qs["ds"]:
+                target_doi = qs["ds"][0]
+            if "file" in qs and qs["file"]:
+                target_file = qs["file"][0]
+            if "url" in qs and qs["url"]:
+                if not target_file:
+                    target_file = qs["url"][0]
+
+        # 2. Extract DOI if present in the string
+        doi_match = re.search(r'(?:https?://(?:dx\.)?doi\.org/|doi:)?(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)', raw_id)
+        if doi_match:
+            clean_doi_suffix = doi_match.group(1).rstrip(")>]\"'.,;")
+            target_doi = f"https://doi.org/{clean_doi_suffix}"
+
+        # 3. Extract datafile URL if present
+        if "dataverse" in raw_id and "datafile" in raw_id:
+            m_df = re.search(r'https?://[^\s\"\'<>]+datafile/\d+', raw_id)
+            if m_df:
+                target_file = m_df.group(0)
+
         async with httpx.AsyncClient(timeout=30.0, headers=get_auth_headers(get_auth_headers())) as client:
-            response = await client.get(f"{API_BASE}/croissant", params={"id": id})
-            response.raise_for_status()
-            data = response.json()
-            tool_response_text = f"SUCCESS! Dataset metadata retrieved.\n\nCRITICAL INSTRUCTION: You MUST now generate a formatted Markdown response for the user that summarizes this dataset. Include the Title, Description, Creator, and URL.\n\nDATASET JSON-LD:\n{json.dumps(data, indent=2)}"
+            # Step A: Try direct ID lookup if it is a 16-hex hash
+            if re.match(r'^[a-f0-9]{16}$', raw_id):
+                try:
+                    r = await client.get(f"{es_url}/croissant/_doc/{raw_id}")
+                    if r.status_code == 200:
+                        matched_doc = r.json().get("_source")
+                except Exception:
+                    pass
+
+            # Step B: If target_doi is known, try hash of normalized DOI
+            if not matched_doc and target_doi:
+                h_doi = hashlib.sha256(target_doi.encode("utf-8")).hexdigest()[:16]
+                try:
+                    r = await client.get(f"{es_url}/croissant/_doc/{h_doi}")
+                    if r.status_code == 200:
+                        matched_doc = r.json().get("_source")
+                except Exception:
+                    pass
+
+                # If not by hash, query by term or wildcard
+                if not matched_doc:
+                    try:
+                        q_doi = {
+                            "query": {
+                                "bool": {
+                                    "should": [
+                                        {"term": {"url": target_doi}},
+                                        {"term": {"identifier": target_doi}},
+                                        {"term": {"@id": target_doi}},
+                                        {"wildcard": {"url": f"*{clean_doi_suffix}*"}}
+                                    ],
+                                    "minimum_should_match": 1
+                                }
+                            },
+                            "size": 1
+                        }
+                        r_q = await client.post(f"{es_url}/croissant/_search", json=q_doi)
+                        if r_q.status_code == 200:
+                            hits = r_q.json().get("hits", {}).get("hits", [])
+                            if hits:
+                                matched_doc = hits[0].get("_source")
+                    except Exception:
+                        pass
+
+            # Step C: If target_file is known, search by distribution.contentUrl
+            if not matched_doc and target_file:
+                try:
+                    q_file = {
+                        "query": {
+                            "nested": {
+                                "path": "distribution",
+                                "query": {
+                                    "term": {"distribution.contentUrl": target_file}
+                                }
+                            }
+                        },
+                        "size": 1
+                    }
+                    r_f = await client.post(f"{es_url}/_all/_search", json=q_file)
+                    if r_f.status_code == 200:
+                        hits = r_f.json().get("hits", {}).get("hits", [])
+                        if hits:
+                            matched_doc = hits[0].get("_source")
+                except Exception:
+                    pass
+
+            # Step D: Try legacy API_BASE /croissant
+            if not matched_doc:
+                lookup_param = target_doi or raw_id
+                try:
+                    response = await client.get(f"{API_BASE}/croissant", params={"id": lookup_param})
+                    if response.status_code == 200:
+                        data = response.json()
+                        if isinstance(data, dict) and "error" not in data:
+                            matched_doc = data
+                except Exception:
+                    pass
+
+            # Step E: Fallback search across all text in ES
+            if not matched_doc:
+                try:
+                    q_fallback = {
+                        "query": {
+                            "query_string": {
+                                "query": f"\"{clean_doi_suffix}\"" if target_doi else f"\"{raw_id}\"",
+                                "fields": ["url", "name", "identifier", "@id", "description"]
+                            }
+                        },
+                        "size": 1
+                    }
+                    r_fb = await client.post(f"{es_url}/_all/_search", json=q_fallback)
+                    if r_fb.status_code == 200:
+                        hits = r_fb.json().get("hits", {}).get("hits", [])
+                        if hits:
+                            matched_doc = hits[0].get("_source")
+                except Exception:
+                    pass
+
+        if matched_doc:
+            doc_doi = matched_doc.get("url") or matched_doc.get("identifier") or target_doi or "Unknown DOI"
+            doc_title = matched_doc.get("name") or "Untitled Dataset"
+            doc_desc = matched_doc.get("description") or "No description provided."
+            
+            tool_response_text = (
+                f"SUCCESS! Dataset metadata retrieved for DOI: {doc_doi}\n\n"
+                f"CRITICAL INSTRUCTION: You MUST now generate a formatted Markdown response for the user that summarizes this dataset. "
+                f"Include the Title, Description, Creator, and URL.\n\n"
+                f"DATASET JSON-LD:\n{json.dumps(matched_doc, indent=2)}"
+            )
             return [types.TextContent(type="text", text=tool_response_text)]
+        else:
+            return [types.TextContent(type="text", text=json.dumps({"error": f"Failed to fetch dataset for ID/URL '{id}'. Dataset not found."}))]
+
     except Exception as e:
         return [types.TextContent(type="text", text=json.dumps({"error": f"Failed to fetch dataset: {str(e)}"}))]
 
