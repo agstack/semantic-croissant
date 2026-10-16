@@ -3520,19 +3520,57 @@ def main(port: int, transport: str) -> int:
                 data = await request.json()
                 question = data.get("question", "").strip()
                 context_text = data.get("context", "").strip()
+                file_url = data.get("file_url", "").strip()
+                file_name = data.get("file_name", "").strip()
                 model_name = data.get("model", "gemma4:31b-cloud").strip()
                 if not model_name:
                     model_name = "gemma4:31b-cloud"
                 if not question:
                     from starlette.responses import JSONResponse
                     return JSONResponse({"success": False, "error": "No question provided"})
+
+                # If a file_url is provided (e.g. for NER or file tool analysis), download and extract content
+                file_content_snippet = ""
+                if file_url and file_url.startswith(("http://", "https://")):
+                    try:
+                        import httpx
+                        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+                            resp = await client.get(file_url, headers={"User-Agent": "SemanticCroissant/1.0"})
+                            if resp.status_code == 200:
+                                raw_bytes = resp.content
+                                # Try decoding as text
+                                text_sample = ""
+                                try:
+                                    text_sample = raw_bytes.decode('utf-8', errors='replace')
+                                except Exception:
+                                    text_sample = raw_bytes.decode('latin-1', errors='replace')
+                                
+                                # If tabular or text, take up to first 250 lines / 12,000 characters
+                                lines = text_sample.splitlines()
+                                if len(lines) > 250:
+                                    lines_preview = "\n".join(lines[:250]) + f"\n... [Truncated: showing first 250 of {len(lines)} lines]"
+                                else:
+                                    lines_preview = "\n".join(lines)
+                                
+                                if len(lines_preview) > 12000:
+                                    lines_preview = lines_preview[:12000] + "\n... [Truncated sample]"
+                                
+                                file_content_snippet = f"\n\nDownloaded File Content ({file_name}):\n```\n{lines_preview}\n```"
+                            else:
+                                file_content_snippet = f"\n\n(Note: Attempted to download file {file_url}, status code: {resp.status_code})"
+                    except Exception as dl_err:
+                        file_content_snippet = f"\n\n(Note: Could not download remote file content: {str(dl_err)})"
+
+                if file_content_snippet:
+                    context_text = context_text + file_content_snippet
                     
                 prompt = f"""Context:
 {context_text}
 
 Question: {question}
 
-Please answer the question based ONLY on the context provided above, or by using your tools if you need to fetch additional files or data (like reading specific files from a dataset)."""
+Please answer the question based ONLY on the context provided above (including the downloaded file content if available), or by using your tools if you need to fetch additional files or data."""
+
                 
                 import asyncio
                 import subprocess

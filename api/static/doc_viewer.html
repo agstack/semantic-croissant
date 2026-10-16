@@ -2707,15 +2707,26 @@
             const selectedModel = modelSelect ? modelSelect.value : 'llama3.1';
             
             // Show loading QA modal
-            showQAModal(question, 'Thinking and running ' + action + ' tool...', null, promptContext, [], selectedModel, true);
+            const loadingMsg = (action === 'ner') 
+                ? 'Downloading file content and performing Named Entity Recognition (NER)...' 
+                : ('Thinking and running ' + action + ' tool...');
+            showQAModal(question, loadingMsg, null, promptContext, [], selectedModel, true);
 
             try {
                 const response = await fetch('/vault/ask', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ context: promptContext, question: question, model: selectedModel })
+                    body: JSON.stringify({ 
+                        context: promptContext, 
+                        question: question, 
+                        model: selectedModel,
+                        file_url: fileUrl,
+                        file_name: fileName,
+                        action: action
+                    })
                 });
                 const result = await response.json();
+
                 
                 // Remove previous loading modal
                 const oldModal = document.querySelector('div[style*="z-index: 9999"]');
