@@ -1788,23 +1788,207 @@ async def read_croissant_file(dataset_id_or_url: str, file_name: str) -> list[ty
     except Exception as e:
         return [types.TextContent(type="text", text=f"Failed to read file from Croissant: {str(e)}")]
 
-async def read_direct_file(url: str) -> list[types.TextContent]:
-    import httpx
+async def read_direct_file(url: str, plan: str = None) -> list[types.TextContent]:
+    """
+    Read the contents of a raw file directly from a URL.
+    Optionally accepts a 'plan' parameter pointing to a CDIF (DDI-CDI) export URL (e.g. /export?ds=...&file=...)
+    or dataset/file ID which provides structural metadata, delimiter, variable mappings, and instructions on how to read the data.
+    """
+    import os, json, re, hashlib, urllib.parse, httpx
     try:
+        cdif_plan_text = ""
+        cdif_doc = None
+
+        if plan:
+            plan_str = plan.strip()
+            plan_target_doi = None
+            plan_target_file = None
+
+            # 1. Parse export query parameters if present in plan
+            if "export" in plan_str and ("?" in plan_str or "&" in plan_str):
+                query_part = plan_str.split("?", 1)[-1] if "?" in plan_str else plan_str
+                qs = urllib.parse.parse_qs(query_part)
+                if "ds" in qs and qs["ds"]:
+                    plan_target_doi = qs["ds"][0]
+                if "file" in qs and qs["file"]:
+                    plan_target_file = qs["file"][0]
+                elif "url" in qs and qs["url"]:
+                    plan_target_file = qs["url"][0]
+
+            # 2. Extract DOI if present
+            if not plan_target_doi:
+                m_doi = re.search(r'(?:https?://(?:dx\.)?doi\.org/|doi:)?(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)', plan_str)
+                if m_doi:
+                    clean_doi_suffix = m_doi.group(1).rstrip(")>]\"'.,;")
+                    plan_target_doi = f"https://doi.org/{clean_doi_suffix}"
+
+            # 3. Extract datafile URL if present
+            if not plan_target_file and "datafile" in plan_str:
+                m_df = re.search(r'https?://[^\s\"\'<>]+datafile/\d+', plan_str)
+                if m_df:
+                    plan_target_file = m_df.group(0)
+
+            # If url points to a datafile and plan_target_file not set, use url
+            if not plan_target_file and url and "datafile" in url:
+                m_df = re.search(r'https?://[^\s\"\'<>]+datafile/\d+', url)
+                if m_df:
+                    plan_target_file = m_df.group(0)
+
+            # Check MinIO cache for CDIF JSON-LD
+            try:
+                minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                minio_endpoint = minio_base.replace("http://", "").replace("https://", "")
+                lookup_file = plan_target_file or url
+                vault_cache_key = f"cdif_cache_{hashlib.sha256((lookup_file + (plan_target_doi or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
+                from minio import Minio
+                m_cache_client = Minio(
+                    minio_endpoint,
+                    access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                    secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                    secure=False
+                )
+                if m_cache_client.bucket_exists("vault"):
+                    try:
+                        cached_obj = m_cache_client.get_object("vault", vault_cache_key)
+                        cached_bytes = cached_obj.read()
+                        cached_obj.close()
+                        cached_obj.release_conn()
+                        cdif_doc = json.loads(cached_bytes.decode("utf-8"))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # Fallback: Fetch directly from export endpoint or plan URL if not in cache
+            if not cdif_doc:
+                try:
+                    fetch_plan_url = plan_str
+                    if not fetch_plan_url.startswith("http"):
+                        fetch_plan_url = f"http://localhost:7070/{fetch_plan_url.lstrip('/')}"
+                    elif "ai.mediaquantum.eu" in fetch_plan_url:
+                        fetch_plan_url = fetch_plan_url.replace("https://ai.mediaquantum.eu", "http://localhost:7070")
+
+                    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as p_client:
+                        p_resp = await p_client.get(fetch_plan_url, headers={"User-Agent": "Mozilla/5.0"})
+                        if p_resp.status_code == 200:
+                            cdif_doc = p_resp.json()
+                except Exception:
+                    pass
+
+            # Format the plan instructions for the LLM
+            if cdif_doc:
+                lines = []
+                lines.append("## 📐 CDIF Data Reading Plan & Specification")
+                title = cdif_doc.get("dct:title") or ""
+                desc = cdif_doc.get("dct:description") or ""
+                if title:
+                    lines.append(f"- **Dataset / Target File:** {title}")
+                if desc:
+                    lines.append(f"- **Description:** {desc}")
+                if plan_target_doi:
+                    lines.append(f"- **Dataset DOI:** {plan_target_doi}")
+                lines.append(f"- **Plan Reference (CDIF):** {plan_str}")
+
+                # Structure details: TabularTextDataSet / WideDataSet / DimensionalDataSet
+                tabular_spec = {}
+                variables = []
+                sample_data_points = {}
+                from collections import defaultdict
+                sample_rows = defaultdict(dict)
+
+                for elem in cdif_doc.get("DDICDIModels", []):
+                    elem_type = elem.get("@type")
+                    if elem_type == "TabularTextDataSet":
+                        tabular_spec["isDelimited"] = elem.get("isDelimited")
+                        tabular_spec["delimiter"] = elem.get("delimiter")
+                        tabular_spec["hasHeader"] = elem.get("hasHeader")
+                        tabular_spec["headerRowCount"] = elem.get("headerRowCount")
+                        tabular_spec["recordCount"] = elem.get("recordCount")
+                        enc = elem.get("encoding", {})
+                        tabular_spec["encoding"] = enc.get("entryValue") if isinstance(enc, dict) else str(enc)
+                    elif elem_type == "InstanceVariable":
+                        v_name = elem.get("name", {}).get("name") if isinstance(elem.get("name"), dict) else str(elem.get("name", ""))
+                        v_display = ""
+                        disp_obj = elem.get("displayLabel", {})
+                        if isinstance(disp_obj, dict):
+                            loc_var = disp_obj.get("locationVariant", {})
+                            v_display = loc_var.get("entryValue", "") if isinstance(loc_var, dict) else str(loc_var)
+                        v_desc = elem.get("dct:description") or ""
+                        v_unit = elem.get("schema:unitText") or ""
+                        variables.append({
+                            "name": v_name,
+                            "display": v_display,
+                            "description": v_desc,
+                            "unit": v_unit
+                        })
+                    elif elem_type == "InstanceValue":
+                        val_id = elem.get("@id", "")
+                        parts = val_id.replace("#instanceValue-", "").split("-", 1)
+                        if len(parts) == 2:
+                            r_idx, var_n = parts[0], parts[1]
+                            cnt = elem.get("content", {})
+                            v_val = cnt.get("content") if isinstance(cnt, dict) else str(cnt)
+                            try:
+                                sample_rows[int(r_idx)][var_n] = v_val
+                            except ValueError:
+                                pass
+
+                # Delimiter & format instructions
+                if tabular_spec:
+                    delim_repr = repr(tabular_spec.get('delimiter', ','))
+                    lines.append(f"\n### 🛠️ File Format & Parsing Instructions")
+                    lines.append(f"- **Encoding:** `{tabular_spec.get('encoding') or 'utf-8'}`")
+                    lines.append(f"- **Format:** Delimited text (Delimiter: `{delim_repr}`)")
+                    lines.append(f"- **Header Row:** {'Present (row 1)' if tabular_spec.get('hasHeader') else 'None'}")
+                    if tabular_spec.get('recordCount'):
+                        lines.append(f"- **Expected Records / Rows:** {tabular_spec.get('recordCount')}")
+
+                # Variable definitions
+                if variables:
+                    lines.append(f"\n### 📊 Variable & Column Definitions ({len(variables)} variables)")
+                    lines.append("| Column / Variable | Label | Description | Unit |")
+                    lines.append("| --- | --- | --- | --- |")
+                    for v in variables:
+                        lines.append(f"| `{v['name']}` | {v['display'] or '-'} | {v['description'] or '-'} | {v['unit'] or '-'} |")
+
+                # Sample data if available in CDIF
+                if sample_rows:
+                    lines.append(f"\n### 🔬 Verified Sample Data (from CDIF InstanceValues)")
+                    col_names = [v['name'] for v in variables] if variables else list(next(iter(sample_rows.values())).keys())
+                    lines.append("| Row | " + " | ".join(col_names) + " |")
+                    lines.append("| --- | " + " | ".join(["---"] * len(col_names)) + " |")
+                    for r_idx in sorted(sample_rows.keys())[:10]:
+                        row_dict = sample_rows[r_idx]
+                        row_vals = [str(row_dict.get(c, "-")) for c in col_names]
+                        lines.append(f"| {r_idx + 1} | " + " | ".join(row_vals) + " |")
+
+                lines.append("\n---\n")
+                cdif_plan_text = "\n".join(lines) + "\n\n"
+
+        # Now read the raw file from the url
         async with httpx.AsyncClient(timeout=60.0) as client:
             res = await client.get(url, follow_redirects=True)
             res.raise_for_status()
             
+            content_type = res.headers.get("content-type", "")
             try:
                 content = res.text
             except UnicodeDecodeError:
+                if cdif_plan_text:
+                    return [types.TextContent(
+                        type="text",
+                        text=f"{cdif_plan_text}File at {url} is binary ({content_type or 'NetCDF/HDF5/binary'}).\n"
+                             f"Use the verified Variable Definitions and Sample Data above as the exact structural representation."
+                    )]
                 return [types.TextContent(type="text", text=f"File at {url} appears to be binary and cannot be read as text.")]
                 
             if len(content) > 100000:
                 content = content[:100000] + "\n\n... (truncated due to length limits)"
                 
-            return [types.TextContent(type="text", text=f"File Content from {url}:\n\n{content}")]
+            return [types.TextContent(type="text", text=f"{cdif_plan_text}File Content from {url}:\n\n{content}")]
     except Exception as e:
+        if cdif_plan_text:
+            return [types.TextContent(type="text", text=f"{cdif_plan_text}Note: Direct file download failed ({str(e)}), but structural CDIF plan is provided above.")]
         return [types.TextContent(type="text", text=f"Failed to read direct file: {str(e)}")]
 
 async def get_cdif_summary(url_or_id: str) -> list[types.TextContent]:
@@ -3124,7 +3308,7 @@ Here is detailed information about how every tool works:
             file_name=arguments.get("file_name")
         )
     elif name == "read_direct_file":
-        return await read_direct_file(url=arguments.get("url"))
+        return await read_direct_file(url=arguments.get("url"), plan=arguments.get("plan"))
     elif name == "hazards_info_profile":
         return await get_hazard_info_profiles(q=arguments.get("q"))
     elif name == "hazards_translation":
@@ -3402,12 +3586,13 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="read_direct_file",
-            description="Read the contents of a raw file directly from a URL. Use this when you have a direct URL to a file you need to read.",
+            description="Read the contents of a raw file directly from a URL. Optionally provide 'plan' (e.g. /export?ds=...&file=...) to load structural metadata, column definitions, delimiters, and sample values from CDIF (DDI-CDI) to understand how to read and parse the file.",
             inputSchema={
                 "type": "object",
                 "required": ["url"],
                 "properties": {
-                    "url": {"type": "string", "description": "The exact URL of the file to download and read."}
+                    "url": {"type": "string", "description": "The exact URL of the file to download and read."},
+                    "plan": {"type": "string", "description": "Optional CDIF export URL (e.g. 'https://ai.mediaquantum.eu/export?ds=...&file=...') specifying structural format, column mapping, delimiter, and sample records."}
                 }
             }
         ),
