@@ -27,3 +27,7 @@ pandas
 openpyxl
 xlrd
 odfpy
+netCDF4
+xarray
+scipy
+

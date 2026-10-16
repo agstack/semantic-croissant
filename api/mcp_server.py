@@ -4331,6 +4331,72 @@ Please answer the question based ONLY on the context provided above (including t
                         except Exception as spss_err:
                             print(f"Failed to auto-convert SPSS/statistical file with pyreadstat: {spss_err}")
 
+                    # If file is NetCDF (.nc, .nc4, .cdf, .netcdf) or starts with CDF magic bytes, convert using xarray
+                    netcdf_exts = [".nc", ".nc4", ".cdf", ".netcdf"]
+                    is_netcdf = any(filename.lower().endswith(ext) for ext in netcdf_exts) or \
+                                "netcdf" in content_type_header or \
+                                file_content.startswith(b"CDF\x01") or \
+                                file_content.startswith(b"CDF\x02") or \
+                                file_content.startswith(b"\x89HDF\r\n\x1a\n")
+
+                    if is_netcdf:
+                        try:
+                            import tempfile, xarray as xr, os
+                            ext = ".nc"
+                            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp_nc:
+                                tmp_nc.write(file_content)
+                                tmp_nc_path = tmp_nc.name
+
+                            try:
+                                ds = xr.open_dataset(tmp_nc_path)
+                                
+                                # Extract global attributes
+                                if ds.attrs:
+                                    extracted_file_meta["title"] = ds.attrs.get("title") or ds.attrs.get("institution")
+                                    extracted_file_meta["description"] = ds.attrs.get("summary") or ds.attrs.get("comment") or ds.attrs.get("history")
+                                    if "Conventions" in ds.attrs:
+                                        extracted_file_meta["unit"] = ds.attrs.get("Conventions")
+
+                                # Extract variable attributes and metadata
+                                for v_name, var in ds.variables.items():
+                                    long_name = var.attrs.get("long_name") or var.attrs.get("standard_name") or v_name
+                                    v_unit = var.attrs.get("units")
+                                    display_label = f"{long_name} ({v_unit})" if v_unit else str(long_name)
+                                    extracted_file_meta["col_labels"][v_name] = {
+                                        "name": v_name,
+                                        "displayLabel": display_label,
+                                        "units": v_unit,
+                                        "description": var.attrs.get("long_name") or var.attrs.get("standard_name") or ""
+                                    }
+
+                                # Slice or sample dataset for tabular conversion if large
+                                # We take a representative slice across dimensions to keep conversion snappy
+                                sub_ds = ds
+                                slice_dict = {}
+                                for dim_name, dim_size in ds.sizes.items():
+                                    if dim_size > 10:
+                                        slice_dict[dim_name] = slice(0, 10)
+                                if slice_dict:
+                                    sub_ds = ds.isel(slice_dict)
+
+                                df = sub_ds.to_dataframe().reset_index()
+                                # Limit max preview rows to 500
+                                if len(df) > 500:
+                                    df = df.iloc[:500]
+
+                                file_content = df.to_csv(index=False).encode("utf-8")
+                                filename = filename.rsplit(".", 1)[0] + ".csv"
+                                ds.close()
+                            finally:
+                                if os.path.exists(tmp_nc_path):
+                                    try:
+                                        os.remove(tmp_nc_path)
+                                    except Exception:
+                                        pass
+                        except Exception as nc_err:
+                            print(f"Failed to auto-convert NetCDF file with xarray: {nc_err}")
+
+
                     # If file is a ZIP archive, inspect and extract the first tabular/data file
                     if filename.lower().endswith(".zip") or "zip" in file_resp.headers.get("content-type", "").lower():
                         try:
