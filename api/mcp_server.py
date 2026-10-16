@@ -5066,6 +5066,52 @@ Please answer the question based ONLY on the context provided above (including t
                         except Exception as zip_err:
                             print(f"Failed to extract tabular data from zip: {zip_err}")
 
+                    # If file is a RAR archive (.rar or starts with Rar! magic bytes)
+                    is_rar = filename.lower().endswith(".rar") or "rar" in file_resp.headers.get("content-type", "").lower() or file_content.startswith(b"Rar!\x1a\x07")
+                    if is_rar:
+                        try:
+                            import subprocess, tempfile, shutil
+                            ext = ".rar"
+                            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp_rar:
+                                tmp_rar.write(file_content)
+                                tmp_rar_path = tmp_rar.name
+
+                            out_dir = tempfile.mkdtemp()
+                            try:
+                                # Try unar first, fallback to 7z
+                                res = subprocess.run(["unar", "-q", "-o", out_dir, tmp_rar_path], capture_output=True, text=True)
+                                if res.returncode != 0:
+                                    subprocess.run(["7z", "x", f"-o{out_dir}", "-y", tmp_rar_path], capture_output=True, text=True)
+
+                                # Search extracted directory for priority tabular data files
+                                priority_exts = [".csv", ".tsv", ".tab", ".parquet", ".xlsx", ".xls", ".dbf", ".sav", ".dta", ".txt"]
+                                chosen_file = None
+                                for p_ext in priority_exts:
+                                    for root, _, files_in_dir in os.walk(out_dir):
+                                        for f_item in files_in_dir:
+                                            if f_item.lower().endswith(p_ext) and not f_item.startswith("."):
+                                                chosen_file = os.path.join(root, f_item)
+                                                break
+                                        if chosen_file:
+                                            break
+                                    if chosen_file:
+                                        break
+
+                                if chosen_file and os.path.exists(chosen_file):
+                                    with open(chosen_file, "rb") as extracted_fh:
+                                        file_content = extracted_fh.read()
+                                    filename = os.path.basename(chosen_file)
+                            finally:
+                                if os.path.exists(tmp_rar_path):
+                                    try:
+                                        os.remove(tmp_rar_path)
+                                    except Exception:
+                                        pass
+                                if os.path.exists(out_dir):
+                                    shutil.rmtree(out_dir, ignore_errors=True)
+                        except Exception as rar_err:
+                            print(f"Failed to extract tabular data from RAR: {rar_err}")
+
                     # If no valid tabular extension, fallback to .csv
                     known_exts = [".csv", ".tsv", ".txt", ".sav", ".dta", ".parquet", ".por", ".zsav", ".xpt"]
                     if not any(filename.lower().endswith(ext) for ext in known_exts):
