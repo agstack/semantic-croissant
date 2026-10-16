@@ -3799,11 +3799,25 @@ Please answer the question based ONLY on the context provided above, or by using
             Example: /export?url=https://dataverse.harvard.edu/api/access/datafile/10877119
             """
             from starlette.responses import Response, JSONResponse
-            import os, httpx, io, re, urllib.parse, csv, struct, zipfile, tempfile
+            import os, httpx, io, re, urllib.parse, csv, struct, zipfile, tempfile, hashlib, json
 
-            target_url = request.query_params.get("url") or request.query_params.get("file")
+            target_url = request.query_params.get("file") or request.query_params.get("url")
             if not target_url:
-                return JSONResponse({"error": "Missing 'url' query parameter, e.g. /export?url=<file_url>"}, status_code=400)
+                return JSONResponse({"error": "Missing 'file' or 'url' query parameter, e.g. /export?file=<file_url>"}, status_code=400)
+
+            ds_param = request.query_params.get("ds")
+            ds_url = None
+            if ds_param:
+                # Clean markdown links e.g. [https://doi.org/...](https://doi.org/...)
+                m_ds = re.search(r'\((https?://[^)]+)\)', ds_param)
+                if m_ds:
+                    ds_url = m_ds.group(1).strip()
+                else:
+                    m_ds2 = re.search(r'https?://[^\s\]\)]+', ds_param)
+                    if m_ds2:
+                        ds_url = m_ds2.group(0).strip()
+                    else:
+                        ds_url = ds_param.strip()
 
             ddi_cdi_base = os.environ.get("DDI_CDI_BASE_URL", "http://10.147.18.186:8088").rstrip("/")
             api_key = os.environ.get("DDI_CDI_API_KEY", "")
@@ -4035,8 +4049,106 @@ Please answer the question based ONLY on the context provided above, or by using
 
                     if conv_resp.status_code == 200:
                         base_cdif_filename = filename.rsplit(".", 1)[0] + "_cdif.jsonld"
+                        resp_content = conv_resp.content
+                        try:
+                            cdif_json = json.loads(resp_content.decode("utf-8"))
+                            if isinstance(cdif_json, dict):
+                                # Determine dataset identifier and vault document ID
+                                es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+                                matched_doc_id = None
+                                matched_ds_url = ds_url
+
+                                # 1. If ds_url provided, try direct hash or query
+                                if matched_ds_url:
+                                    # Normalize doi
+                                    norm_doi = matched_ds_url
+                                    if "doi.org/" in norm_doi:
+                                        norm_doi = "https://doi.org/" + norm_doi.split("doi.org/")[-1]
+                                    h1 = hashlib.sha256(norm_doi.encode("utf-8")).hexdigest()[:16]
+                                    try:
+                                        r_check = await client.get(f"{es_url}/croissant/_doc/{h1}")
+                                        if r_check.status_code == 200:
+                                            matched_doc_id = h1
+                                            matched_ds_url = norm_doi
+                                    except Exception:
+                                        pass
+
+                                # 2. If still not matched, search ES for dataset containing target_url in distribution
+                                if not matched_doc_id:
+                                    try:
+                                        q_nested = {
+                                            "query": {
+                                                "nested": {
+                                                    "path": "distribution",
+                                                    "query": {
+                                                        "term": {"distribution.contentUrl": target_url}
+                                                    }
+                                                }
+                                            },
+                                            "_source": ["url", "name", "identifier"],
+                                            "size": 1
+                                        }
+                                        r_nested = await client.post(f"{es_url}/_all/_search", json=q_nested)
+                                        if r_nested.status_code == 200:
+                                            hits = r_nested.json().get("hits", {}).get("hits", [])
+                                            if hits:
+                                                matched_doc_id = hits[0].get("_id")
+                                                src = hits[0].get("_source", {})
+                                                if not matched_ds_url:
+                                                    matched_ds_url = src.get("url") or src.get("identifier")
+                                    except Exception:
+                                        pass
+
+                                # 3. Fallback: hash matched_ds_url if present
+                                if not matched_doc_id and matched_ds_url:
+                                    matched_doc_id = hashlib.sha256(matched_ds_url.encode("utf-8")).hexdigest()[:16]
+
+                                # Build context
+                                orig_context = cdif_json.get("@context")
+                                new_context = [
+                                    "https://ddi-cdi.github.io/m2t-ng/DDI-CDI_1-1beta/encoding/json-ld/ddi-cdi.jsonld",
+                                    {
+                                        "dct": "http://purl.org/dc/terms/",
+                                        "prov": "http://www.w3.org/ns/prov#"
+                                    }
+                                ]
+                                if isinstance(orig_context, list):
+                                    for ctx_item in orig_context:
+                                        if ctx_item != "https://ddi-cdi.github.io/m2t-ng/DDI-CDI_1-1beta/encoding/json-ld/ddi-cdi.jsonld" and ctx_item not in new_context:
+                                            new_context.append(ctx_item)
+                                elif isinstance(orig_context, dict):
+                                    new_context.append(orig_context)
+
+                                base_host = f"https://{MCP_DOMAIN}"
+                                export_id = f"{base_host}/export?file={target_url}"
+                                if matched_ds_url:
+                                    export_id = f"{base_host}/export?ds={matched_ds_url}&file={target_url}"
+
+                                # Construct enriched dictionary
+                                enriched_json = {
+                                    "@context": new_context,
+                                    "@id": export_id
+                                }
+                                if matched_doc_id:
+                                    enriched_json["dct:isPartOf"] = {
+                                        "@id": f"{base_host}/vault/{matched_doc_id}.jsonld"
+                                    }
+                                if matched_ds_url:
+                                    enriched_json["dct:identifier"] = matched_ds_url
+                                enriched_json["prov:wasDerivedFrom"] = {
+                                    "@id": target_url
+                                }
+
+                                for k, v in cdif_json.items():
+                                    if k not in ["@context", "@id"]:
+                                        enriched_json[k] = v
+
+                                resp_content = json.dumps(enriched_json, indent=4).encode("utf-8")
+                        except Exception as enrich_err:
+                            print(f"Error enriching CDIF jsonld: {enrich_err}")
+
                         return Response(
-                            content=conv_resp.content,
+                            content=resp_content,
                             status_code=200,
                             media_type="application/ld+json; charset=utf-8",
                             headers={
@@ -4141,12 +4253,14 @@ Please answer the question based ONLY on the context provided above, or by using
                         md.append(f"**{d_name}**")
                         fmt = d.get('encodingFormat')
                         if fmt: md.append(f"- **Format:** {fmt}")
-                        size = d.get('contentSize')
-                        if size: md.append(f"- **Size:** {size}")
                         curl = d.get('contentUrl')
                         if curl:
                             import urllib.parse
-                            export_url = f"/export?url={urllib.parse.quote(curl, safe='')}"
+                            ds_for_export = data.get('url') or data.get('identifier')
+                            if ds_for_export:
+                                export_url = f"/export?ds={urllib.parse.quote(ds_for_export, safe='')}&file={urllib.parse.quote(curl, safe='')}"
+                            else:
+                                export_url = f"/export?file={urllib.parse.quote(curl, safe='')}"
                             md.append(f"- **[Download]({curl})** &nbsp;|&nbsp; **[⚡ Export to CDIF]({export_url})**")
                         md.append("")
                     md.append("\n")

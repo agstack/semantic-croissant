@@ -1026,7 +1026,9 @@
                             if (d.contentUrl) {
                                 html += `<div style="margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">`;
                                 html += `<a href="${d.contentUrl}" target="_blank" style="font-size: 0.85rem; color: white; background: var(--accent-color); padding: 5px 10px; border-radius: 4px; text-decoration: none;">Download</a>`;
-                                html += `<a href="/export?url=${encodeURIComponent(d.contentUrl)}" target="_blank" style="font-size: 0.85rem; color: #155724; background: #d4edda; border: 1px solid #c3e6cb; padding: 4px 10px; border-radius: 4px; text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;" title="Convert to DDI-CDI JSON-LD">⚡ Export to CDIF</a>`;
+                                const dsParam = data.url || data.identifier || '';
+                                const cdifHref = dsParam ? `/export?ds=${encodeURIComponent(dsParam)}&file=${encodeURIComponent(d.contentUrl)}` : `/export?file=${encodeURIComponent(d.contentUrl)}`;
+                                html += `<a href="${cdifHref}" target="_blank" style="font-size: 0.85rem; color: #155724; background: #d4edda; border: 1px solid #c3e6cb; padding: 4px 10px; border-radius: 4px; text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;" title="Convert to DDI-CDI JSON-LD">⚡ Export to CDIF</a>`;
                                 html += `</div>`;
                             }
                             html += `</div>`;
@@ -1756,7 +1758,8 @@
                                 }
                                 if (anyDataDist) {
                                     const btnCdif = document.createElement('a');
-                                    btnCdif.href = `/export?url=${encodeURIComponent(anyDataDist.contentUrl)}`;
+                                    const dsParam = data.url || data.identifier || '';
+                                    btnCdif.href = dsParam ? `/export?ds=${encodeURIComponent(dsParam)}&file=${encodeURIComponent(anyDataDist.contentUrl)}` : `/export?file=${encodeURIComponent(anyDataDist.contentUrl)}`;
                                     btnCdif.target = '_blank';
                                     btnCdif.innerHTML = '⚡ Export to CDIF';
                                     btnCdif.title = 'Convert dataset file to DDI-CDI JSON-LD';
