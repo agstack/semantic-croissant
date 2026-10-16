@@ -3718,6 +3718,161 @@ Please answer the question based ONLY on the context provided above, or by using
             from starlette.responses import Response
             return Response("Not Found", status_code=404)
             
+        async def export_to_cdif(request):
+            """
+            Export a dataset file (from URL or file query parameter) to CDIF (DDI-CDI JSON-LD)
+            using the DDI-CDI Studio service.
+            Example: /export?url=https://dataverse.harvard.edu/api/access/datafile/10877119
+            """
+            from starlette.responses import Response, JSONResponse
+            import os, httpx, io, re, urllib.parse
+
+            target_url = request.query_params.get("url") or request.query_params.get("file")
+            if not target_url:
+                return JSONResponse({"error": "Missing 'url' query parameter, e.g. /export?url=<file_url>"}, status_code=400)
+
+            ddi_cdi_base = os.environ.get("DDI_CDI_BASE_URL", "http://10.147.18.186:8088").rstrip("/")
+            api_key = os.environ.get("DDI_CDI_API_KEY", "")
+
+            try:
+                # 1. Download file from target_url
+                download_headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                }
+                async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+                    file_resp = await client.get(target_url, headers=download_headers)
+                    if file_resp.status_code != 200:
+                        return JSONResponse({
+                            "error": f"Failed to download file from {target_url}",
+                            "status_code": file_resp.status_code,
+                            "details": file_resp.text[:500]
+                        }, status_code=502)
+
+                    # Determine filename
+                    filename = None
+                    cd = file_resp.headers.get("content-disposition", "")
+                    if "filename=" in cd or "filename*=" in cd:
+                        m = re.search(r"filename\*?=['\"]?(?:UTF-8'')?([^;'\"]+)", cd)
+                        if m:
+                            filename = urllib.parse.unquote(m.group(1))
+
+                    if not filename:
+                        filename = target_url.split("/")[-1].split("?")[0] or "data.csv"
+
+                    file_content = file_resp.content
+
+                    # If file is an Excel spreadsheet (.xlsx), convert to CSV so DDI-CDI studio can process it
+                    if filename.lower().endswith(".xlsx") or file_resp.headers.get("content-type", "").startswith("application/vnd.openxmlformats"):
+                        try:
+                            import zipfile, csv, xml.etree.ElementTree as ET
+                            with zipfile.ZipFile(io.BytesIO(file_content)) as z:
+                                strings = []
+                                if "xl/sharedStrings.xml" in z.namelist():
+                                    stree = ET.fromstring(z.read("xl/sharedStrings.xml"))
+                                    for elem in stree.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}si"):
+                                        t_parts = [t.text for t in elem.iter("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t") if t.text]
+                                        strings.append("".join(t_parts))
+
+                                # Search for the first worksheet that has rows
+                                sheet_names = [n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
+                                sheet_names.sort()
+                                best_sheet_data = None
+                                for sname in sheet_names:
+                                    sheet = ET.fromstring(z.read(sname))
+                                    sd = sheet.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheetData")
+                                    if sd is not None and len(sd.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row")) > 0:
+                                        best_sheet_data = sd
+                                        break
+
+                                if best_sheet_data is not None:
+                                    out_buf = io.StringIO()
+                                    csv_writer = csv.writer(out_buf)
+                                    for row in best_sheet_data.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row"):
+                                        row_dict = {}
+                                        max_col = 0
+                                        for c in row.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"):
+                                            r_ref = c.get("r", "")
+                                            col_match = re.match(r"([A-Z]+)", r_ref)
+                                            if col_match:
+                                                col_str = col_match.group(1)
+                                                col_idx = 0
+                                                for ch in col_str:
+                                                    col_idx = col_idx * 26 + (ord(ch) - ord("A") + 1)
+                                                col_idx -= 1
+                                            else:
+                                                col_idx = max_col
+
+                                            t = c.get("t")
+                                            v = c.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v")
+                                            val = v.text if v is not None and v.text else ""
+                                            if t == "s" and val.isdigit():
+                                                idx = int(val)
+                                                val = strings[idx] if idx < len(strings) else ""
+                                            elif t == "inlineStr":
+                                                is_el = c.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}is")
+                                                if is_el is not None:
+                                                    t_el = is_el.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t")
+                                                    val = t_el.text if t_el is not None and t_el.text else ""
+                                            row_dict[col_idx] = val
+                                            if col_idx >= max_col:
+                                                max_col = col_idx + 1
+                                        csv_writer.writerow([row_dict.get(i, "") for i in range(max_col)])
+
+                                    file_content = out_buf.getvalue().encode("utf-8")
+                                    filename = filename.rsplit(".", 1)[0] + ".csv"
+                        except Exception as excel_err:
+                            print(f"Failed to auto-convert xlsx to csv: {excel_err}")
+
+                    # If no valid tabular extension, fallback to .csv
+                    known_exts = [".csv", ".tsv", ".txt", ".sav", ".dta", ".parquet", ".por", ".zsav", ".xpt"]
+                    if not any(filename.lower().endswith(ext) for ext in known_exts):
+                        filename += ".csv"
+
+                    # 2. Forward file to DDI-CDI Studio /api/convert
+                    files = {
+                        "file": (filename, file_content, "application/octet-stream")
+                    }
+                    data = {
+                        "max_rows": request.query_params.get("max_rows", "5"),
+                        "process_all_rows": request.query_params.get("process_all_rows", "false"),
+                        "include_statistics": request.query_params.get("include_statistics", "false")
+                    }
+                    conv_headers = {}
+                    if api_key:
+                        conv_headers["X-API-Key"] = api_key
+
+                    conv_resp = await client.post(
+                        f"{ddi_cdi_base}/api/convert",
+                        files=files,
+                        data=data,
+                        headers=conv_headers,
+                        timeout=180.0
+                    )
+
+                    if conv_resp.status_code == 200:
+                        base_cdif_filename = filename.rsplit(".", 1)[0] + "_cdif.jsonld"
+                        return Response(
+                            content=conv_resp.content,
+                            status_code=200,
+                            media_type="application/ld+json; charset=utf-8",
+                            headers={
+                                "Content-Disposition": f'inline; filename="{base_cdif_filename}"',
+                                "Access-Control-Allow-Origin": "*"
+                            }
+                        )
+                    else:
+                        return Response(
+                            content=conv_resp.content,
+                            status_code=conv_resp.status_code,
+                            media_type=conv_resp.headers.get("content-type", "application/json")
+                        )
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                return JSONResponse({"error": str(e)}, status_code=500)
+
+            
         
         async def vault_es_doc_html(request):
             user_agent = request.headers.get("user-agent", "").lower()
@@ -6005,6 +6160,8 @@ Output a JSON object with:
                 Route("/api/collections/{id}/remove", endpoint=api_collections_remove_item, methods=["POST"]),
 
                 Route("/api/collections/{id}", endpoint=api_collections_delete, methods=["DELETE"]),
+                Route("/export", endpoint=export_to_cdif, methods=["GET", "POST"]),
+                Route("/api/export", endpoint=export_to_cdif, methods=["GET", "POST"]),
                 Route("/vault/doc/{es_id}", endpoint=vault_es_doc_html),
                 Route("/vault/doc/{es_id}/annotations", endpoint=vault_es_doc_html),
                 Route("/vault/history", endpoint=vault_get_history, methods=["GET"]),

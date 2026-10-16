@@ -1024,7 +1024,10 @@
                             if (d.encodingFormat) html += `<div style="font-size: 0.85rem; color: #666; margin-bottom: 5px;"><strong>Format:</strong> ${d.encodingFormat}</div>`;
                             if (d.contentSize) html += `<div style="font-size: 0.85rem; color: #666; margin-bottom: 5px;"><strong>Size:</strong> ${d.contentSize}</div>`;
                             if (d.contentUrl) {
-                                html += `<div style="margin-top: 10px;"><a href="${d.contentUrl}" target="_blank" style="font-size: 0.85rem; color: white; background: var(--accent-color); padding: 5px 10px; border-radius: 4px; text-decoration: none;">Download</a></div>`;
+                                html += `<div style="margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">`;
+                                html += `<a href="${d.contentUrl}" target="_blank" style="font-size: 0.85rem; color: white; background: var(--accent-color); padding: 5px 10px; border-radius: 4px; text-decoration: none;">Download</a>`;
+                                html += `<a href="/export?url=${encodeURIComponent(d.contentUrl)}" target="_blank" style="font-size: 0.85rem; color: #155724; background: #d4edda; border: 1px solid #c3e6cb; padding: 4px 10px; border-radius: 4px; text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;" title="Convert to DDI-CDI JSON-LD">⚡ Export to CDIF</a>`;
+                                html += `</div>`;
                             }
                             html += `</div>`;
                         });
@@ -1738,16 +1741,27 @@
                         // Extract and display CSV download button if available
                         if (data.distribution) {
                             let distArray = Array.isArray(data.distribution) ? data.distribution : [data.distribution];
-                            let csvDist = distArray.find(d => d.encodingFormat === 'text/csv' && d.contentUrl);
-                            if (csvDist) {
-                                const toolbarRight = document.getElementById('action-toolbar-right');
-                                if (toolbarRight) {
+                            let csvDist = distArray.find(d => (d.encodingFormat === 'text/csv' || (d.name && d.name.endsWith('.csv'))) && d.contentUrl);
+                            let anyDataDist = csvDist || distArray.find(d => d.contentUrl && (d.encodingFormat?.includes('spreadsheet') || d.name?.endsWith('.xlsx') || d.name?.endsWith('.tsv') || d.name?.endsWith('.sav') || d.name?.endsWith('.dta')));
+                            
+                            const toolbarRight = document.getElementById('action-toolbar-right');
+                            if (toolbarRight) {
+                                if (csvDist) {
                                     const btnCsv = document.createElement('a');
                                     btnCsv.href = csvDist.contentUrl;
                                     btnCsv.target = '_blank';
                                     btnCsv.innerHTML = '📊 CSV';
                                     btnCsv.style.cssText = 'padding: 4px 12px; border-radius: 4px; border: 1px solid var(--border-color); cursor: pointer; background: var(--header-bg); color: var(--text-color); font-size: 0.85rem; text-decoration: none; display: flex; align-items: center; gap: 5px;';
                                     toolbarRight.appendChild(btnCsv);
+                                }
+                                if (anyDataDist) {
+                                    const btnCdif = document.createElement('a');
+                                    btnCdif.href = `/export?url=${encodeURIComponent(anyDataDist.contentUrl)}`;
+                                    btnCdif.target = '_blank';
+                                    btnCdif.innerHTML = '⚡ Export to CDIF';
+                                    btnCdif.title = 'Convert dataset file to DDI-CDI JSON-LD';
+                                    btnCdif.style.cssText = 'padding: 4px 12px; border-radius: 4px; border: 1px solid #c3e6cb; cursor: pointer; background: #d4edda; color: #155724; font-size: 0.85rem; text-decoration: none; display: flex; align-items: center; gap: 5px; font-weight: 500;';
+                                    toolbarRight.appendChild(btnCdif);
                                 }
                             }
                         }
