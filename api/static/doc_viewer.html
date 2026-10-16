@@ -356,8 +356,20 @@
             }
         });
 
-        // Setup Marked.js with highlight.js
+        // Setup Marked.js with highlight.js and open links in new tab
+        const renderer = new marked.Renderer();
+        const originalLinkRenderer = renderer.link.bind(renderer);
+        renderer.link = function(href, title, text) {
+            // Handle both marked v4 (href, title, text) and marked v5+ ({href, title, text})
+            let linkHref = typeof href === 'object' && href !== null ? href.href : href;
+            let linkTitle = typeof href === 'object' && href !== null ? href.title : title;
+            let linkText = typeof href === 'object' && href !== null ? href.text : text;
+            const titleAttr = linkTitle ? ` title="${linkTitle}"` : '';
+            return `<a href="${linkHref}" target="_blank" rel="noopener noreferrer"${titleAttr}>${linkText}</a>`;
+        };
+
         marked.setOptions({
+            renderer: renderer,
             highlight: function(code, lang) {
                 const language = hljs.getLanguage(lang) ? lang : 'plaintext';
                 return hljs.highlight(code, { language }).value;
