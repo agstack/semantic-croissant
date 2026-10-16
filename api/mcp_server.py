@@ -3822,6 +3822,40 @@ Please answer the question based ONLY on the context provided above, or by using
             ddi_cdi_base = os.environ.get("DDI_CDI_BASE_URL", "http://10.147.18.186:8088").rstrip("/")
             api_key = os.environ.get("DDI_CDI_API_KEY", "")
 
+            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+            minio_endpoint = minio_base.replace("http://", "").replace("https://", "")
+            vault_cache_key = f"cdif_cache_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
+            
+            # Check vault cache first for instant response
+            try:
+                from minio import Minio
+                m_cache_client = Minio(
+                    minio_endpoint,
+                    access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                    secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                    secure=False
+                )
+                if m_cache_client.bucket_exists("vault"):
+                    try:
+                        cached_obj = m_cache_client.get_object("vault", vault_cache_key)
+                        cached_bytes = cached_obj.read()
+                        cached_obj.close()
+                        cached_obj.release_conn()
+                        return Response(
+                            content=cached_bytes,
+                            status_code=200,
+                            media_type="application/ld+json; charset=utf-8",
+                            headers={
+                                "Content-Disposition": f'inline; filename="export_cdif.jsonld"',
+                                "Access-Control-Allow-Origin": "*",
+                                "X-Cache": "HIT"
+                            }
+                        )
+                    except Exception:
+                        pass
+            except Exception as minio_init_err:
+                pass
+
             try:
                 # 1. Download file from target_url
                 download_headers = {
@@ -4147,13 +4181,26 @@ Please answer the question based ONLY on the context provided above, or by using
                         except Exception as enrich_err:
                             print(f"Error enriching CDIF jsonld: {enrich_err}")
 
+                        # Save to MinIO vault cache for subsequent requests
+                        try:
+                            m_cache_client.put_object(
+                                "vault",
+                                vault_cache_key,
+                                io.BytesIO(resp_content),
+                                length=len(resp_content),
+                                content_type="application/ld+json; charset=utf-8"
+                            )
+                        except Exception as cache_write_err:
+                            pass
+
                         return Response(
                             content=resp_content,
                             status_code=200,
                             media_type="application/ld+json; charset=utf-8",
                             headers={
                                 "Content-Disposition": f'inline; filename="{base_cdif_filename}"',
-                                "Access-Control-Allow-Origin": "*"
+                                "Access-Control-Allow-Origin": "*",
+                                "X-Cache": "MISS"
                             }
                         )
                     else:
