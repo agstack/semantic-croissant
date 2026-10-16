@@ -3896,6 +3896,20 @@ Please answer the question based ONLY on the context provided above, or by using
 
                     file_content = file_resp.content
 
+                    # Store file metadata extracted during processing
+                    file_size = len(file_content)
+                    file_md5 = hashlib.md5(file_content).hexdigest()
+                    extracted_file_meta = {
+                        "unit": None,
+                        "temporal": None,
+                        "spatial": None,
+                        "title": None,
+                        "description": None,
+                        "col_labels": {},
+                        "file_size": file_size,
+                        "file_md5": file_md5
+                    }
+
                     # If file is a spreadsheet (.xlsx, .xls, .xlsm, .ods), convert to CSV so DDI-CDI studio can process it
                     spreadsheet_exts = [".xlsx", ".xls", ".xlsm", ".ods"]
                     content_type_header = file_resp.headers.get("content-type", "").lower()
@@ -3903,79 +3917,121 @@ Please answer the question based ONLY on the context provided above, or by using
                     if is_spreadsheet:
                         converted = False
                         try:
-                            import pandas as pd
-                            xls = pd.ExcelFile(io.BytesIO(file_content))
-                            best_df = None
-                            for s in xls.sheet_names:
-                                df = pd.read_excel(xls, sheet_name=s)
-                                if not df.empty and (best_df is None or len(df) > len(best_df)):
-                                    best_df = df
-                            if best_df is not None and not best_df.empty:
-                                file_content = best_df.to_csv(index=False).encode("utf-8")
-                                filename = filename.rsplit(".", 1)[0] + ".csv"
-                                converted = True
-                        except Exception as pd_err:
-                            print(f"pandas Excel reading failed, trying fallback: {pd_err}")
+                            import openpyxl
+                            wb = openpyxl.load_workbook(io.BytesIO(file_content), data_only=True)
+                            best_sheet = None
+                            max_rows_cols = 0
+                            for s in wb.sheetnames:
+                                ws = wb[s]
+                                if (ws.max_row * ws.max_column) > max_rows_cols:
+                                    max_rows_cols = ws.max_row * ws.max_column
+                                    best_sheet = ws
 
-                        if not converted and (filename.lower().endswith(".xlsx") or "openxmlformats" in content_type_header):
-                            try:
-                                import zipfile, xml.etree.ElementTree as ET
-                                with zipfile.ZipFile(io.BytesIO(file_content)) as z:
-                                    strings = []
-                                    if "xl/sharedStrings.xml" in z.namelist():
-                                        stree = ET.fromstring(z.read("xl/sharedStrings.xml"))
-                                        for elem in stree.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}si"):
-                                            t_parts = [t.text for t in elem.iter("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t") if t.text]
-                                            strings.append("".join(t_parts))
+                            if best_sheet is not None:
+                                ws = best_sheet
+                                # Scan rows for preamble metadata (title, spatial, temporal, unit)
+                                preamble_lines = []
+                                unit_str = None
+                                for r in range(1, min(ws.max_row + 1, 25)):
+                                    row_vals = [ws.cell(r, c).value for c in range(1, min(ws.max_column + 1, 15))]
+                                    non_nulls = [str(v).replace('\xa0', ' ').strip() for v in row_vals if v is not None and str(v).strip()]
+                                    if not non_nulls:
+                                        continue
+                                    for v in non_nulls:
+                                        if any(u in v.lower() for u in ['personen', '1 000', '1000', 'euro', 'million', ' prozent', 'in %', 'fl\u00e4che', 'qm']):
+                                            unit_str = v
+                                    if len(non_nulls) <= 2:
+                                        line = ' '.join(non_nulls)
+                                        preamble_lines.append(line)
 
-                                    sheet_names = [n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
-                                    sheet_names.sort()
-                                    best_sheet_data = None
-                                    for sname in sheet_names:
-                                        sheet = ET.fromstring(z.read(sname))
-                                        sd = sheet.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheetData")
-                                        if sd is not None and len(sd.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row")) > 0:
-                                            best_sheet_data = sd
+                                if preamble_lines:
+                                    extracted_file_meta["title"] = preamble_lines[0]
+                                    if len(preamble_lines) > 1:
+                                        extracted_file_meta["description"] = ' | '.join(preamble_lines[1:])
+                                    full_p_text = ' '.join(preamble_lines)
+                                    years = re.findall(r'\b(19\d\d|20\d\d)\b', full_p_text)
+                                    if years:
+                                        extracted_file_meta["temporal"] = years[-1] if len(years) > 1 and int(years[-1]) in range(1990, 2030) else years[0]
+                                    for sp in ['Thüringen', 'Thuringen', 'Niedersachsen', 'Sachsen', 'Bayern', 'Hessen', 'Deutschland', 'Germany']:
+                                        if sp.lower() in full_p_text.lower():
+                                            extracted_file_meta["spatial"] = sp
                                             break
 
-                                    if best_sheet_data is not None:
-                                        out_buf = io.StringIO()
-                                        csv_writer = csv.writer(out_buf)
-                                        for row in best_sheet_data.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row"):
-                                            row_dict = {}
-                                            max_col = 0
-                                            for c in row.findall("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c"):
-                                                r_ref = c.get("r", "")
-                                                col_match = re.match(r"([A-Z]+)", r_ref)
-                                                if col_match:
-                                                    col_str = col_match.group(1)
-                                                    col_idx = 0
-                                                    for ch in col_str:
-                                                        col_idx = col_idx * 26 + (ord(ch) - ord("A") + 1)
-                                                    col_idx -= 1
-                                                else:
-                                                    col_idx = max_col
+                                if unit_str:
+                                    extracted_file_meta["unit"] = unit_str
 
-                                                t = c.get("t")
-                                                v = c.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v")
-                                                val = v.text if v is not None and v.text else ""
-                                                if t == "s" and val.isdigit():
-                                                    idx = int(val)
-                                                    val = strings[idx] if idx < len(strings) else ""
-                                                elif t == "inlineStr":
-                                                    is_el = c.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}is")
-                                                    if is_el is not None:
-                                                        t_el = is_el.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t")
-                                                        val = t_el.text if t_el is not None and t_el.text else ""
-                                                row_dict[col_idx] = val
-                                                if col_idx >= max_col:
-                                                    max_col = col_idx + 1
-                                            csv_writer.writerow([row_dict.get(i, "") for i in range(max_col)])
+                                # Detect data start row
+                                data_start_row = None
+                                for r in range(1, min(ws.max_row + 1, 50)):
+                                    row_vals = [ws.cell(r, c).value for c in range(1, min(ws.max_column + 1, 15))]
+                                    non_nulls = [v for v in row_vals if v is not None and str(v).strip()]
+                                    if len(non_nulls) >= 3:
+                                        c1 = str(row_vals[0]).strip() if row_vals[0] is not None else ''
+                                        c2 = str(row_vals[1]).strip() if row_vals[1] is not None else ''
+                                        if (c1.isdigit() or '/' in c1 or '-' in c1) and len(c2) > 1:
+                                            data_start_row = r
+                                            break
 
-                                        file_content = out_buf.getvalue().encode("utf-8")
-                                        filename = filename.rsplit(".", 1)[0] + ".csv"
-                            except Exception as excel_err:
-                                print(f"Failed to auto-convert xlsx to csv: {excel_err}")
+                                if data_start_row is not None and data_start_row > 1:
+                                    # Detect header start row
+                                    header_start_row = 1
+                                    for r in range(1, data_start_row):
+                                        row_vals = [ws.cell(r, c).value for c in range(1, min(ws.max_column + 1, 15))]
+                                        non_nulls = [v for v in row_vals if v is not None and str(v).strip()]
+                                        if len(non_nulls) >= 3 or any('schl\u00fcssel' in str(v).lower() for v in non_nulls):
+                                            header_start_row = r
+                                            break
+
+                                    headers = []
+                                    max_c = min(ws.max_column, 25)
+                                    for c in range(1, max_c + 1):
+                                        parts = []
+                                        for r in range(header_start_row, data_start_row):
+                                            v = ws.cell(r, c).value
+                                            if v:
+                                                v_str = str(v).replace('\xa0', ' ').strip()
+                                                if v_str and v_str not in parts and v_str != unit_str:
+                                                    parts.append(v_str)
+                                        h_name = ' - '.join(parts) or f'Column_{c}'
+                                        headers.append(h_name)
+                                        # Save display label and clean variable name
+                                        extracted_file_meta["col_labels"][h_name] = {
+                                            "name": parts[-1] if parts else f'Column_{c}',
+                                            "displayLabel": ' - '.join(parts) if len(parts) > 1 else (parts[0] if parts else f'Column_{c}')
+                                        }
+
+                                    out_csv = io.StringIO()
+                                    w_csv = csv.writer(out_csv)
+                                    w_csv.writerow(headers)
+                                    for r in range(data_start_row, ws.max_row + 1):
+                                        row_vals = [ws.cell(r, c).value for c in range(1, max_c + 1)]
+                                        first_val = str(row_vals[0]).strip().lower() if row_vals[0] is not None else ''
+                                        if 'erstellt am' in first_val or 'copyright' in first_val or 'quelle:' in first_val:
+                                            break
+                                        if any(v is not None and str(v).strip() for v in row_vals):
+                                            w_csv.writerow(['' if v is None else str(v).replace('\xa0', ' ').strip() for v in row_vals])
+
+                                    file_content = out_csv.getvalue().encode("utf-8")
+                                    filename = filename.rsplit(".", 1)[0] + ".csv"
+                                    converted = True
+                        except Exception as openpyxl_err:
+                            print(f"openpyxl smart conversion failed: {openpyxl_err}")
+
+                        if not converted:
+                            try:
+                                import pandas as pd
+                                xls = pd.ExcelFile(io.BytesIO(file_content))
+                                best_df = None
+                                for s in xls.sheet_names:
+                                    df = pd.read_excel(xls, sheet_name=s)
+                                    if not df.empty and (best_df is None or len(df) > len(best_df)):
+                                        best_df = df
+                                if best_df is not None and not best_df.empty:
+                                    file_content = best_df.to_csv(index=False).encode("utf-8")
+                                    filename = filename.rsplit(".", 1)[0] + ".csv"
+                                    converted = True
+                            except Exception as pd_err:
+                                print(f"pandas Excel reading failed, trying fallback: {pd_err}")
 
                     # If file is an SPSS file (.por, .sav, .zsav) or Stata (.dta) / SAS (.sas7bdat), convert using pyreadstat
                     spss_exts = [".por", ".sav", ".zsav", ".dta", ".sas7bdat", ".xpt"]
@@ -4105,6 +4161,7 @@ Please answer the question based ONLY on the context provided above, or by using
                                 matched_doc_id = None
                                 matched_ds_url = ds_url
 
+                                es_doc_src = {}
                                 # 1. If ds_url provided, try direct hash or query
                                 if matched_ds_url:
                                     # Normalize doi
@@ -4117,6 +4174,7 @@ Please answer the question based ONLY on the context provided above, or by using
                                         if r_check.status_code == 200:
                                             matched_doc_id = h1
                                             matched_ds_url = norm_doi
+                                            es_doc_src = r_check.json().get("_source", {})
                                     except Exception:
                                         pass
 
@@ -4132,7 +4190,7 @@ Please answer the question based ONLY on the context provided above, or by using
                                                     }
                                                 }
                                             },
-                                            "_source": ["url", "name", "identifier"],
+                                            "_source": True,
                                             "size": 1
                                         }
                                         r_nested = await client.post(f"{es_url}/_all/_search", json=q_nested)
@@ -4140,9 +4198,9 @@ Please answer the question based ONLY on the context provided above, or by using
                                             hits = r_nested.json().get("hits", {}).get("hits", [])
                                             if hits:
                                                 matched_doc_id = hits[0].get("_id")
-                                                src = hits[0].get("_source", {})
+                                                es_doc_src = hits[0].get("_source", {})
                                                 if not matched_ds_url:
-                                                    matched_ds_url = src.get("url") or src.get("identifier")
+                                                    matched_ds_url = es_doc_src.get("url") or es_doc_src.get("identifier")
                                     except Exception:
                                         pass
 
@@ -4150,13 +4208,51 @@ Please answer the question based ONLY on the context provided above, or by using
                                 if not matched_doc_id and matched_ds_url:
                                     matched_doc_id = hashlib.sha256(matched_ds_url.encode("utf-8")).hexdigest()[:16]
 
+                                # If we didn't fetch es_doc_src yet, try by matched_doc_id
+                                if matched_doc_id and not es_doc_src:
+                                    try:
+                                        r_doc = await client.get(f"{es_url}/croissant/_doc/{matched_doc_id}")
+                                        if r_doc.status_code == 200:
+                                            es_doc_src = r_doc.json().get("_source", {})
+                                    except Exception:
+                                        pass
+
+                                # Extract distribution details from Croissant if available
+                                matched_dist = {}
+                                for d_obj in es_doc_src.get("distribution", []):
+                                    d_url = d_obj.get("contentUrl", "")
+                                    if target_url in d_url or d_url in target_url:
+                                        matched_dist = d_obj
+                                        break
+
+                                # Extract field definitions from recordSet
+                                field_definitions = {}
+                                for rs_obj in es_doc_src.get("recordSet", []):
+                                    for f_obj in rs_obj.get("field", []):
+                                        f_name = f_obj.get("name", "")
+                                        f_desc = f_obj.get("description", "")
+                                        if f_name and f_desc:
+                                            field_definitions[f_name.lower()] = f_desc
+
+                                # Resolve metadata values
+                                ds_title = extracted_file_meta.get("title") or matched_dist.get("name") or es_doc_src.get("name") or filename
+                                ds_desc = extracted_file_meta.get("description") or matched_dist.get("description") or es_doc_src.get("description") or ""
+                                ds_temporal = extracted_file_meta.get("temporal") or es_doc_src.get("temporalCoverage") or ""
+                                ds_spatial = extracted_file_meta.get("spatial") or es_doc_src.get("spatialCoverage") or ""
+                                ds_license = es_doc_src.get("license") or "https://creativecommons.org/publicdomain/zero/1.0/"
+                                ds_language = es_doc_src.get("inLanguage") or "de"
+                                ds_unit = extracted_file_meta.get("unit") or ""
+                                final_file_size = matched_dist.get("contentSize") or extracted_file_meta.get("file_size")
+                                final_md5 = matched_dist.get("md5") or extracted_file_meta.get("file_md5")
+
                                 # Build context
                                 orig_context = cdif_json.get("@context")
                                 new_context = [
                                     "https://ddi-cdi.github.io/m2t-ng/DDI-CDI_1-1beta/encoding/json-ld/ddi-cdi.jsonld",
                                     {
                                         "dct": "http://purl.org/dc/terms/",
-                                        "prov": "http://www.w3.org/ns/prov#"
+                                        "prov": "http://www.w3.org/ns/prov#",
+                                        "schema": "http://schema.org/"
                                     }
                                 ]
                                 if isinstance(orig_context, list):
@@ -4182,14 +4278,34 @@ Please answer the question based ONLY on the context provided above, or by using
                                 if matched_doc_id:
                                     is_part_of.append({"@id": f"{base_host}/vault/{matched_doc_id}.jsonld"})
 
-                                # Construct enriched dictionary
+                                # Construct enriched root dictionary with @type and metadata
                                 enriched_json = {
                                     "@context": new_context,
-                                    "@id": export_id
+                                    "@id": export_id,
+                                    "@type": ["schema:Dataset", "prov:Entity"]
                                 }
                                 if is_part_of:
                                     enriched_json["dct:isPartOf"] = is_part_of if len(is_part_of) > 1 else is_part_of[0]
                                 enriched_json["dct:identifier"] = export_id
+                                enriched_json["dct:title"] = ds_title
+                                if ds_desc:
+                                    enriched_json["dct:description"] = ds_desc
+                                if ds_license:
+                                    enriched_json["dct:license"] = ds_license
+                                if ds_language:
+                                    enriched_json["dct:language"] = ds_language
+                                if ds_temporal:
+                                    enriched_json["dct:temporal"] = ds_temporal
+                                if ds_spatial:
+                                    enriched_json["dct:spatial"] = ds_spatial
+                                if final_file_size:
+                                    enriched_json["schema:contentSize"] = int(final_file_size) if str(final_file_size).isdigit() else final_file_size
+                                if final_md5:
+                                    enriched_json["schema:checksum"] = {
+                                        "@type": "schema:Checksum",
+                                        "schema:algorithm": "md5",
+                                        "schema:checksumValue": final_md5
+                                    }
                                 enriched_json["prov:wasDerivedFrom"] = {
                                     "@id": target_url
                                 }
@@ -4198,18 +4314,78 @@ Please answer the question based ONLY on the context provided above, or by using
                                     if k not in ["@context", "@id"]:
                                         enriched_json[k] = v
 
-                                # Also repeat prov:wasDerivedFrom on dataset nodes in DDICDIModels (e.g. #wideDataSet, #tabularTextDataSet)
+                                # Also enrich dataset nodes and variable nodes in DDICDIModels
                                 if "DDICDIModels" in enriched_json and isinstance(enriched_json["DDICDIModels"], list):
                                     for model_elem in enriched_json["DDICDIModels"]:
                                         if isinstance(model_elem, dict):
                                             elem_id = model_elem.get("@id", "")
                                             elem_type = model_elem.get("@type", "")
+                                            
+                                            # Dataset nodes
                                             if elem_id in ["#wideDataSet", "#tabularTextDataSet"] or "DataSet" in elem_type:
                                                 model_elem["prov:wasDerivedFrom"] = {
                                                     "@id": target_url
                                                 }
                                                 if is_part_of:
                                                     model_elem["dct:isPartOf"] = is_part_of if len(is_part_of) > 1 else is_part_of[0]
+                                                model_elem["dct:title"] = ds_title
+                                                if ds_desc:
+                                                    model_elem["dct:description"] = ds_desc
+                                                if ds_temporal:
+                                                    model_elem["dct:temporal"] = ds_temporal
+                                                if ds_spatial:
+                                                    model_elem["dct:spatial"] = ds_spatial
+                                                if ds_license:
+                                                    model_elem["dct:license"] = ds_license
+                                                if ds_language:
+                                                    model_elem["dct:language"] = ds_language
+                                                if final_file_size:
+                                                    model_elem["schema:contentSize"] = int(final_file_size) if str(final_file_size).isdigit() else final_file_size
+                                                if final_md5:
+                                                    model_elem["schema:checksum"] = final_md5
+
+                                            # Physical mapping nodes / null sequence
+                                            if "nullSequence" in model_elem or elem_type in ["TextMapping", "PhysicalSegmentLayout"]:
+                                                model_elem["nullSequence"] = ["", "NA", "N/A", "NaN", "null", "None", "-", "."]
+
+                                            # InstanceVariable / RepresentedVariable / MeasureComponent nodes
+                                            if elem_type == "InstanceVariable":
+                                                cur_name_obj = model_elem.get("name", {})
+                                                raw_name = cur_name_obj.get("name", "") if isinstance(cur_name_obj, dict) else str(cur_name_obj)
+                                                
+                                                # Check if we have extracted structured labels
+                                                lbl_info = extracted_file_meta.get("col_labels", {}).get(raw_name)
+                                                if lbl_info:
+                                                    var_short_name = lbl_info["name"]
+                                                    var_display = lbl_info["displayLabel"]
+                                                    model_elem["name"] = {
+                                                        "@type": "ObjectName",
+                                                        "name": var_short_name
+                                                    }
+                                                    model_elem["displayLabel"] = {
+                                                        "@type": "LabelForDisplay",
+                                                        "locationVariant": {
+                                                            "@type": "ControlledVocabularyEntry",
+                                                            "entryValue": var_display
+                                                        }
+                                                    }
+                                                    model_elem["dct:description"] = var_display
+
+                                                # Check definitions from Croissant recordSet
+                                                for k_def, v_def in field_definitions.items():
+                                                    if k_def in raw_name.lower():
+                                                        model_elem["definition"] = {
+                                                            "@type": "InternationalString",
+                                                            "language": ds_language,
+                                                            "content": v_def
+                                                        }
+                                                        break
+
+                                                # Add unit of measure if applicable
+                                                phys_type = model_elem.get("physicalDataType", {})
+                                                p_val = phys_type.get("entryValue", "") if isinstance(phys_type, dict) else str(phys_type)
+                                                if p_val == "numeric" and ds_unit:
+                                                    model_elem["schema:unitText"] = ds_unit
 
                                 resp_content = json.dumps(enriched_json, indent=4).encode("utf-8")
                         except Exception as enrich_err:
