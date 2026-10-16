@@ -3725,7 +3725,7 @@ Please answer the question based ONLY on the context provided above, or by using
             Example: /export?url=https://dataverse.harvard.edu/api/access/datafile/10877119
             """
             from starlette.responses import Response, JSONResponse
-            import os, httpx, io, re, urllib.parse
+            import os, httpx, io, re, urllib.parse, csv, struct, zipfile, tempfile
 
             target_url = request.query_params.get("url") or request.query_params.get("file")
             if not target_url:
@@ -3852,6 +3852,67 @@ Please answer the question based ONLY on the context provided above, or by using
                                 filename = filename.rsplit(".", 1)[0] + ".csv"
                         except Exception as spss_err:
                             print(f"Failed to auto-convert SPSS/statistical file with pyreadstat: {spss_err}")
+
+                    # If file is a ZIP archive, inspect and extract the first tabular/data file
+                    if filename.lower().endswith(".zip") or "zip" in file_resp.headers.get("content-type", "").lower():
+                        try:
+                            import zipfile, struct
+                            with zipfile.ZipFile(io.BytesIO(file_content)) as z:
+                                namelist = z.namelist()
+                                # Prioritize tabular / data formats inside the zip
+                                priority_exts = [".csv", ".tsv", ".tab", ".dbf", ".por", ".sav", ".zsav", ".dta", ".parquet", ".xlsx", ".txt"]
+                                chosen_name = None
+                                for p_ext in priority_exts:
+                                    for z_name in namelist:
+                                        if z_name.lower().endswith(p_ext) and not z_name.startswith("__MACOSX"):
+                                            chosen_name = z_name
+                                            break
+                                    if chosen_name:
+                                        break
+
+                                if chosen_name:
+                                    extracted_bytes = z.read(chosen_name)
+                                    extracted_lower = chosen_name.lower()
+                                    if extracted_lower.endswith(".dbf"):
+                                        # Decode dBASE .dbf to CSV
+                                        try:
+                                            dbf_io = io.BytesIO(extracted_bytes)
+                                            hdr = dbf_io.read(32)
+                                            num_recs, hdr_len, rec_len = struct.unpack('<IHH', hdr[4:12])
+                                            n_flds = (hdr_len - 33) // 32
+                                            fields = []
+                                            for _ in range(n_flds):
+                                                f_desc = dbf_io.read(32)
+                                                f_name = f_desc[:11].replace(b'\x00', b'').decode('ascii', errors='ignore').strip()
+                                                f_typ = chr(f_desc[11])
+                                                f_len = f_desc[16]
+                                                fields.append((f_name, f_typ, f_len))
+                                            dbf_io.seek(hdr_len)
+                                            out_dbf = io.StringIO()
+                                            w_dbf = csv.writer(out_dbf)
+                                            w_dbf.writerow([f[0] for f in fields])
+                                            for _ in range(num_recs):
+                                                flg = dbf_io.read(1)
+                                                if not flg or flg == b'\x1a': break
+                                                rc = dbf_io.read(rec_len - 1)
+                                                if flg == b'*': continue
+                                                r_vals = []
+                                                p = 0
+                                                for f_name, f_typ, f_len in fields:
+                                                    r_vals.append(rc[p:p+f_len].decode('utf-8', errors='replace').strip())
+                                                    p += f_len
+                                                w_dbf.writerow(r_vals)
+                                            file_content = out_dbf.getvalue().encode('utf-8')
+                                            filename = chosen_name.rsplit('/', 1)[-1].rsplit('.', 1)[0] + '.csv'
+                                        except Exception as dbf_err:
+                                            print(f"Error converting extracted dbf: {dbf_err}")
+                                            file_content = extracted_bytes
+                                            filename = chosen_name.rsplit('/', 1)[-1]
+                                    else:
+                                        file_content = extracted_bytes
+                                        filename = chosen_name.rsplit('/', 1)[-1]
+                        except Exception as zip_err:
+                            print(f"Failed to extract tabular data from zip: {zip_err}")
 
                     # If no valid tabular extension, fallback to .csv
                     known_exts = [".csv", ".tsv", ".txt", ".sav", ".dta", ".parquet", ".por", ".zsav", ".xpt"]
