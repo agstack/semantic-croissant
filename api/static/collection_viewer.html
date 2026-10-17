@@ -505,6 +505,10 @@
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
                         Export
                     </button>
+                    <button id="btn-analyze-col" onclick="openAnalyzeModal()" style="padding: 6px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 5px; font-weight: 500; display: inline-flex; align-items: center; gap: 5px;" title="Analyze tabular files (CSV, STATA, XLS) and produce CDIF">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                        Analyze
+                    </button>
                     <button onclick="dropCollection()" style="padding: 6px 12px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 5px;">Drop</button>
                     
                     <div class="view-switcher" style="margin-left: 10px;">
@@ -1579,6 +1583,69 @@
             </div>
         </div>
     </div>
+
+    <!-- Analyze Modal with Progress Bar -->
+    <div id="analyze-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 10002; justify-content: center; align-items: center; backdrop-filter: blur(2px);">
+        <div style="background: var(--bg-color); padding: 25px; border-radius: 8px; width: 650px; max-width: 92%; border: 1px solid var(--border-color); box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h3 style="margin: 0; color: var(--text-color); font-size: 1.25rem; display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 1.4rem;">🔬</span> Analyze Collection & Produce CDIF
+                </h3>
+                <button onclick="closeAnalyzeModal()" style="background: transparent; border: none; font-size: 1.3rem; color: var(--text-color); cursor: pointer; line-height: 1;">&times;</button>
+            </div>
+            
+            <p style="color: var(--text-color); opacity: 0.85; font-size: 0.95rem; margin-top: 0; margin-bottom: 20px;">
+                Extracts and converts all tabular files (CSV, STATA, XLS/XLSX, TSV, SPSS, Parquet) across datasets into standard CDIF (DDI-CDI JSON-LD) and caches them in the Elasticsearch <code>cdif</code> index.
+            </p>
+
+            <!-- Stats Header -->
+            <div id="analyze-stats-box" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px; background: var(--panel-bg); padding: 12px; border-radius: 6px; border: 1px solid var(--border-color); text-align: center;">
+                <div>
+                    <div style="font-size: 0.75rem; color: var(--text-color); opacity: 0.7; text-transform: uppercase;">Total Files</div>
+                    <div id="analyze-total-files" style="font-size: 1.25rem; font-weight: bold; color: var(--text-color);">-</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.75rem; color: var(--text-color); opacity: 0.7; text-transform: uppercase;">Processed</div>
+                    <div id="analyze-processed-files" style="font-size: 1.25rem; font-weight: bold; color: var(--accent-color);">0</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.75rem; color: var(--text-color); opacity: 0.7; text-transform: uppercase;">Successful</div>
+                    <div id="analyze-success-files" style="font-size: 1.25rem; font-weight: bold; color: #28a745;">0</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.75rem; color: var(--text-color); opacity: 0.7; text-transform: uppercase;">Failed</div>
+                    <div id="analyze-failed-files" style="font-size: 1.25rem; font-weight: bold; color: #dc3545;">0</div>
+                </div>
+            </div>
+
+            <!-- Progress Bar Container -->
+            <div style="margin-bottom: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 0.9rem; color: var(--text-color);">
+                    <span id="analyze-status-label" style="font-weight: 500;">Calculating files to be processed...</span>
+                    <span id="analyze-percent-label" style="font-weight: bold; color: var(--accent-color);">0%</span>
+                </div>
+                <div style="width: 100%; height: 18px; background: var(--border-color); border-radius: 9px; overflow: hidden; position: relative;">
+                    <div id="analyze-progress-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #007bff, #28a745); transition: width 0.3s ease; border-radius: 9px;"></div>
+                </div>
+            </div>
+
+            <!-- Current File / Details Activity Stream -->
+            <div style="margin-bottom: 20px;">
+                <div style="font-size: 0.8rem; color: var(--text-color); opacity: 0.7; margin-bottom: 4px;">Activity Log:</div>
+                <div id="analyze-log-list" style="font-family: monospace; font-size: 0.8rem; background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; max-height: 150px; overflow-y: auto; color: var(--text-color);">
+                    <div style="opacity: 0.6;">Waiting to start analysis...</div>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button id="analyze-close-btn" onclick="closeAnalyzeModal()" style="padding: 8px 16px; background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">Close</button>
+                <button id="analyze-start-btn" onclick="startAnalysis()" style="padding: 8px 18px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; display: inline-flex; align-items: center; gap: 6px;">
+                    <span>Start Analysis</span>
+                </button>
+            </div>
+        </div>
+    </div>
     
     <script>
         const toggleBtn = document.getElementById('theme-toggle');
@@ -1640,6 +1707,175 @@
                 return;
             }
             window.open('/api/collections/' + colId + '/export', '_blank');
+        }
+
+        let analyzeAbortController = null;
+
+        function openAnalyzeModal() {
+            if (!colId) {
+                alert('No collection ID found.');
+                return;
+            }
+            const modal = document.getElementById('analyze-modal');
+            modal.style.display = 'flex';
+
+            // Reset UI state
+            document.getElementById('analyze-progress-fill').style.width = '0%';
+            document.getElementById('analyze-percent-label').innerText = '0%';
+            document.getElementById('analyze-total-files').innerText = '...';
+            document.getElementById('analyze-processed-files').innerText = '0';
+            document.getElementById('analyze-success-files').innerText = '0';
+            document.getElementById('analyze-failed-files').innerText = '0';
+            document.getElementById('analyze-status-label').innerText = 'Ready to analyze tabular files';
+            
+            const startBtn = document.getElementById('analyze-start-btn');
+            startBtn.disabled = false;
+            startBtn.innerHTML = '<span>Start Analysis</span>';
+
+            const logList = document.getElementById('analyze-log-list');
+            logList.innerHTML = '<div style="opacity: 0.7;">Click "Start Analysis" to discover all CSV, STATA, and XLS files and produce CDIF.</div>';
+
+            // Auto-trigger discovery and start
+            startAnalysis();
+        }
+
+        function closeAnalyzeModal() {
+            if (analyzeAbortController) {
+                try {
+                    analyzeAbortController.abort();
+                } catch (e) {}
+                analyzeAbortController = null;
+            }
+            document.getElementById('analyze-modal').style.display = 'none';
+        }
+
+        async function startAnalysis() {
+            if (!colId) return;
+
+            const startBtn = document.getElementById('analyze-start-btn');
+            startBtn.disabled = true;
+            startBtn.innerHTML = '<span class="spinner" style="display:inline-block; width:12px; height:12px; border:2px solid white; border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite;"></span> Running...';
+
+            const fillBar = document.getElementById('analyze-progress-fill');
+            const pctLabel = document.getElementById('analyze-percent-label');
+            const statusLabel = document.getElementById('analyze-status-label');
+            const totalEl = document.getElementById('analyze-total-files');
+            const procEl = document.getElementById('analyze-processed-files');
+            const succEl = document.getElementById('analyze-success-files');
+            const failEl = document.getElementById('analyze-failed-files');
+            const logList = document.getElementById('analyze-log-list');
+
+            statusLabel.innerText = 'Calculating files to be processed...';
+            logList.innerHTML = '<div style="color: var(--accent-color);">🔍 Inspecting collection datasets and discovering tabular distributions...</div>';
+
+            if (analyzeAbortController) {
+                try { analyzeAbortController.abort(); } catch (e) {}
+            }
+            analyzeAbortController = new AbortController();
+
+            try {
+                const response = await fetch(`/api/collections/${colId}/analyze?stream=true`, {
+                    headers: { 'Accept': 'text/event-stream' },
+                    signal: analyzeAbortController.signal
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server returned HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n\n');
+                    buffer = lines.pop(); // Keep remaining incomplete chunk
+
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (trimmed.startsWith('data: ')) {
+                            try {
+                                const evt = JSON.parse(trimmed.substring(6));
+                                
+                                if (evt.type === 'init') {
+                                    totalEl.innerText = evt.total_tabular_files;
+                                    statusLabel.innerText = `Found ${evt.total_tabular_files} tabular files across ${evt.total_datasets} datasets. Processing...`;
+                                    const entry = document.createElement('div');
+                                    entry.style.padding = '3px 0';
+                                    entry.innerHTML = `<span style="color:#007bff;">[DISCOVERY]</span> ${evt.total_tabular_files} files queued for CDIF conversion across ${evt.total_datasets} datasets.`;
+                                    logList.appendChild(entry);
+                                    logList.scrollTop = logList.scrollHeight;
+
+                                    if (evt.total_tabular_files === 0) {
+                                        fillBar.style.width = '100%';
+                                        pctLabel.innerText = '100%';
+                                        statusLabel.innerText = 'No tabular files found in collection.';
+                                    }
+                                } else if (evt.type === 'progress') {
+                                    const pct = Math.min(100, Math.max(0, evt.percent || 0));
+                                    fillBar.style.width = pct + '%';
+                                    pctLabel.innerText = Math.round(pct) + '%';
+                                    procEl.innerText = evt.processed;
+                                    totalEl.innerText = evt.total;
+                                    succEl.innerText = evt.successful;
+                                    failEl.innerText = evt.failed;
+
+                                    statusLabel.innerText = `Processing (${evt.processed}/${evt.total}): ${evt.current_file}`;
+
+                                    const entry = document.createElement('div');
+                                    entry.style.padding = '2px 0';
+                                    const isSuccess = evt.current_status === 'success' || evt.current_status === 'cached';
+                                    const tagColor = isSuccess ? '#28a745' : '#dc3545';
+                                    const tagText = evt.current_status === 'cached' ? 'CACHED' : (isSuccess ? 'SUCCESS' : 'FAILED');
+                                    
+                                    entry.innerHTML = `<span style="color:${tagColor}; font-weight:bold;">[${tagText}]</span> ${evt.current_file}`;
+                                    logList.appendChild(entry);
+                                    logList.scrollTop = logList.scrollHeight;
+                                } else if (evt.type === 'complete') {
+                                    fillBar.style.width = '100%';
+                                    pctLabel.innerText = '100%';
+                                    procEl.innerText = evt.processed;
+                                    succEl.innerText = evt.successful;
+                                    failEl.innerText = evt.failed;
+                                    totalEl.innerText = evt.total;
+
+                                    statusLabel.innerHTML = `✅ Complete! ${evt.successful} CDIF exports ready in ${evt.total_elapsed_seconds}s.`;
+
+                                    const entry = document.createElement('div');
+                                    entry.style.padding = '6px 0';
+                                    entry.style.fontWeight = 'bold';
+                                    entry.style.color = '#28a745';
+                                    entry.innerHTML = `🎉 Finished! Processed ${evt.processed} files in ${evt.total_elapsed_seconds} seconds. Results cached in Elasticsearch 'cdif' index.`;
+                                    logList.appendChild(entry);
+                                    logList.scrollTop = logList.scrollHeight;
+
+                                    startBtn.disabled = false;
+                                    startBtn.innerHTML = '<span>Re-analyze</span>';
+                                }
+                            } catch (parseErr) {
+                                console.error('SSE JSON parse error:', parseErr, trimmed);
+                            }
+                        }
+                    }
+                }
+            } catch (err) {
+                if (err.name === 'AbortError') {
+                    statusLabel.innerText = 'Analysis paused/cancelled.';
+                } else {
+                    console.error('Analysis error:', err);
+                    statusLabel.innerText = 'Error: ' + err.message;
+                    const entry = document.createElement('div');
+                    entry.style.color = '#dc3545';
+                    entry.innerText = `[ERROR] ${err.message}`;
+                    logList.appendChild(entry);
+                }
+                startBtn.disabled = false;
+                startBtn.innerHTML = '<span>Start Analysis</span>';
+            }
         }
 
         async function dropCollection() {

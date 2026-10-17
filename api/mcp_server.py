@@ -4590,6 +4590,15 @@ Please answer the question based ONLY on the context provided above (including t
             if not target_url:
                 return JSONResponse({"error": "Missing 'file' or 'url' query parameter, e.g. /export?file=<file_url>"}, status_code=400)
 
+            # Strip any accidental surrounding or trailing quotes/brackets (e.g. from copy-pasted URLs or JSON strings)
+            target_url = target_url.strip().strip("'\"`<>")
+            while target_url.endswith("%22") or target_url.endswith("%27"):
+                if target_url.endswith("%22"):
+                    target_url = target_url[:-3]
+                elif target_url.endswith("%27"):
+                    target_url = target_url[:-3]
+            target_url = target_url.strip().strip("'\"`<>")
+
             ds_param = request.query_params.get("ds")
             ds_url = None
             if ds_param:
@@ -6841,6 +6850,365 @@ Please answer the question based ONLY on the context provided above (including t
                 traceback.print_exc()
                 return JSONResponse({"error": str(e)}, status_code=500)
 
+        async def api_collections_analyze(request):
+            """
+            Analyzes all tabular distribution files (CSV, STATA, XLS/XLSX, TSV, SPSS, Parquet)
+            across all member datasets in a collection, converts them to CDIF (DDI-CDI JSON-LD)
+            using the DDI-CDI converter, and caches every result in Elasticsearch index 'cdif'
+            as well as MinIO vault cache.
+            """
+            from starlette.responses import JSONResponse
+            import json, httpx, os, re, time, hashlib, urllib.parse, datetime, asyncio
+            
+            t_start = time.time()
+            cid = request.path_params["id"]
+            m_client = get_minio_client()
+            
+            try:
+                resp = m_client.get_object("collections", f"{cid}.json")
+                col_data = json.loads(resp.read().decode("utf-8"))
+                resp.close()
+                resp.release_conn()
+            except Exception:
+                return JSONResponse({"error": "Collection not found"}, status_code=404)
+
+            items = list(col_data.get("items", []))
+            
+            # Fetch descendant subcollections to include their items as well
+            try:
+                objects = m_client.list_objects("collections")
+                all_cols = []
+                for obj in objects:
+                    if obj.object_name.endswith(".json"):
+                        try:
+                            c_resp = m_client.get_object("collections", obj.object_name)
+                            all_cols.append(json.loads(c_resp.read().decode("utf-8")))
+                            c_resp.close()
+                            c_resp.release_conn()
+                        except Exception:
+                            pass
+                descendants = set([cid])
+                added = True
+                while added:
+                    added = False
+                    for c in all_cols:
+                        if c.get("id") not in descendants and c.get("parent_id") in descendants:
+                            descendants.add(c.get("id"))
+                            added = True
+                for c in all_cols:
+                    if c.get("id") in descendants and c.get("id") != cid:
+                        items.extend(c.get("items", []))
+                seen_ids = set()
+                items = [x for x in items if not (x in seen_ids or seen_ids.add(x))]
+            except Exception:
+                pass
+
+            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_docs = {}
+            if items:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    chunk_size = 500
+                    for i in range(0, len(items), chunk_size):
+                        chunk = items[i:i + chunk_size]
+                        payload = {
+                            "query": {"terms": {"_id": chunk}},
+                            "size": len(chunk),
+                            "_source": True
+                        }
+                        docs_resp = await client.post(f"{es_url}/croissant,dataverse,trump,openml,honduras/_search", json=payload)
+                        if docs_resp.status_code == 200:
+                            for h in docs_resp.json().get("hits", {}).get("hits", []):
+                                doc_id_val = h.get("_id")
+                                if doc_id_val not in es_docs:
+                                    es_docs[doc_id_val] = h.get("_source", {})
+
+            # Gather all tabular files from distributions
+            tabular_exts = {
+                "csv", "tsv", "tab", "xlsx", "xls", "xlsm", "ods",
+                "dta", "sav", "por", "zsav", "sas7bdat", "xpt", "parquet"
+            }
+            tabular_mime_hints = ["csv", "excel", "spreadsheet", "stata", "spss", "tabular", "tab-separated", "parquet"]
+
+            files_to_process = []
+            for doc_id in items:
+                src = es_docs.get(doc_id)
+                if not src:
+                    try:
+                        j_resp = m_client.get_object("vault", f"{doc_id}.jsonld")
+                        src = json.loads(j_resp.read().decode("utf-8"))
+                        j_resp.close()
+                        j_resp.release_conn()
+                    except Exception:
+                        src = {}
+                
+                ds_url = src.get("url") or src.get("_source_url") or f"https://ai.mediaquantum.eu/vault/doc/{doc_id}"
+                dists = src.get("distribution") or src.get("fileObject") or []
+                if isinstance(dists, dict):
+                    dists = [dists]
+
+                for d in dists:
+                    if not isinstance(d, dict):
+                        continue
+                    fname = d.get("name") or d.get("@id") or ""
+                    fmt = (d.get("encodingFormat") or "").lower()
+                    curl = d.get("contentUrl") or ""
+                    if not curl:
+                        continue
+
+                    ext = fname.split(".")[-1].lower() if "." in fname else ""
+                    is_tabular = (
+                        ext in tabular_exts or
+                        any(h in fmt for h in tabular_mime_hints) or
+                        any(ext_candidate in curl.lower() for ext_candidate in [".csv", ".xls", ".xlsx", ".dta", ".sav", ".tab"])
+                    )
+
+                    if is_tabular:
+                        files_to_process.append({
+                            "dataset_id": doc_id,
+                            "dataset_url": ds_url,
+                            "file_name": fname or "data.csv",
+                            "file_url": curl,
+                            "format": fmt or ext,
+                            "content_size": d.get("contentSize")
+                        })
+
+            results = []
+            sem = asyncio.Semaphore(5)
+
+            async def process_single_file(f_item, http_client):
+                async with sem:
+                    f_url = f_item["file_url"]
+                    d_url = f_item["dataset_url"]
+                    f_name = f_item["file_name"]
+                    t_file_start = time.time()
+                    
+                    # Target CDIF export URL on our local service
+                    params = [("file", f_url)]
+                    if d_url:
+                        params.insert(0, ("ds", d_url))
+                    query_string = urllib.parse.urlencode(params)
+                    canonical_export_url = f"https://ai.mediaquantum.eu/export?{query_string}"
+                    internal_export_url = f"http://127.0.0.1:7070/export?{query_string}"
+
+                    doc_cache_id = hashlib.sha256((f_url + (d_url or "")).encode("utf-8")).hexdigest()[:24]
+
+                    # 1. Check if already cached in Elasticsearch 'cdif' index
+                    try:
+                        r_es_cache = await http_client.get(f"{es_url}/cdif/_doc/{doc_cache_id}")
+                        if r_es_cache.status_code == 200:
+                            cached_es = r_es_cache.json().get("_source", {})
+                            return {
+                                "status": "cached",
+                                "source": "elasticsearch",
+                                "file_name": f_name,
+                                "file_url": f_url,
+                                "dataset_url": d_url,
+                                "cdif_export_url": canonical_export_url,
+                                "models_count": cached_es.get("models_count", 0),
+                                "time_taken_seconds": round(time.time() - t_file_start, 2)
+                            }
+                    except Exception:
+                        pass
+
+                    # 2. Invoke CDIF export endpoint
+                    try:
+                        exp_resp = await http_client.get(internal_export_url, timeout=120.0)
+                        file_dt = round(time.time() - t_file_start, 2)
+                        if exp_resp.status_code == 200:
+                            cdif_data = exp_resp.json()
+                            models_count = len(cdif_data.get("DDICDIModels", []))
+                            title = cdif_data.get("dct:title") or f_name
+                            desc = cdif_data.get("dct:description") or ""
+
+                            # Index in Elastic cdif index
+                            es_record = {
+                                "collection_id": cid,
+                                "dataset_id": f_item["dataset_id"],
+                                "dataset_url": d_url,
+                                "file_name": f_name,
+                                "file_url": f_url,
+                                "file_format": f_item["format"],
+                                "cdif_export_url": canonical_export_url,
+                                "title": title,
+                                "description": desc,
+                                "models_count": models_count,
+                                "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+                                "status": "success",
+                                "cdif_jsonld": cdif_data
+                            }
+                            try:
+                                await http_client.put(f"{es_url}/cdif/_doc/{doc_cache_id}", json=es_record)
+                            except Exception as es_put_err:
+                                print(f"Error caching to ES cdif index: {es_put_err}")
+
+                            return {
+                                "status": "success",
+                                "file_name": f_name,
+                                "file_url": f_url,
+                                "dataset_url": d_url,
+                                "cdif_export_url": canonical_export_url,
+                                "models_count": models_count,
+                                "time_taken_seconds": file_dt
+                            }
+                        else:
+                            return {
+                                "status": "error",
+                                "status_code": exp_resp.status_code,
+                                "file_name": f_name,
+                                "file_url": f_url,
+                                "dataset_url": d_url,
+                                "details": exp_resp.text[:300],
+                                "time_taken_seconds": file_dt
+                            }
+                    except Exception as conv_err:
+                        return {
+                            "status": "error",
+                            "file_name": f_name,
+                            "file_url": f_url,
+                            "dataset_url": d_url,
+                            "error": str(conv_err),
+                            "time_taken_seconds": round(time.time() - t_file_start, 2)
+                        }
+
+            is_stream = request.query_params.get("stream") == "true" or "text/event-stream" in request.headers.get("accept", "")
+            
+            if is_stream:
+                from starlette.responses import StreamingResponse
+                
+                async def event_generator():
+                    # Send initial discovery event
+                    init_data = json.dumps({
+                        "type": "init",
+                        "collection_id": cid,
+                        "collection_name": col_data.get("name"),
+                        "total_datasets": len(items),
+                        "total_tabular_files": len(files_to_process)
+                    })
+                    yield f"data: {init_data}\n\n"
+                    
+                    completed_count = 0
+                    success_count = 0
+                    error_count = 0
+                    
+                    if not files_to_process:
+                        done_data = json.dumps({
+                            "type": "complete",
+                            "total": 0,
+                            "processed": 0,
+                            "successful": 0,
+                            "failed": 0,
+                            "progress": 100,
+                            "total_elapsed_seconds": 0
+                        })
+                        yield f"data: {done_data}\n\n"
+                        return
+
+                    async with httpx.AsyncClient(timeout=180.0) as http_client:
+                        # Process files using worker queue with semaphore for bounded concurrency
+                        q = asyncio.Queue()
+                        for f in files_to_process:
+                            await q.put(f)
+
+                        results_lock = asyncio.Lock()
+
+                        async def worker():
+                            nonlocal completed_count, success_count, error_count
+                            while not q.empty():
+                                try:
+                                    f_item = q.get_nowait()
+                                except asyncio.QueueEmpty:
+                                    break
+                                res = await process_single_file(f_item, http_client)
+                                async with results_lock:
+                                    completed_count += 1
+                                    if res.get("status") in ["success", "cached"]:
+                                        success_count += 1
+                                    else:
+                                        error_count += 1
+                                    pct = round((completed_count / len(files_to_process)) * 100, 1)
+                                    evt = {
+                                        "type": "progress",
+                                        "processed": completed_count,
+                                        "total": len(files_to_process),
+                                        "percent": pct,
+                                        "current_file": f_item["file_name"],
+                                        "current_status": res.get("status"),
+                                        "successful": success_count,
+                                        "failed": error_count,
+                                        "result": res
+                                    }
+                                    yield_msg = f"data: {json.dumps(evt)}\n\n"
+                                q.task_done()
+                                yield yield_msg
+
+                        # Use an async generator worker stream
+                        async def stream_workers():
+                            nonlocal completed_count, success_count, error_count
+                            for f_item in files_to_process:
+                                res = await process_single_file(f_item, http_client)
+                                completed_count += 1
+                                if res.get("status") in ["success", "cached"]:
+                                    success_count += 1
+                                else:
+                                    error_count += 1
+                                pct = round((completed_count / len(files_to_process)) * 100, 1)
+                                evt = {
+                                    "type": "progress",
+                                    "processed": completed_count,
+                                    "total": len(files_to_process),
+                                    "percent": pct,
+                                    "current_file": f_item["file_name"],
+                                    "current_status": res.get("status"),
+                                    "successful": success_count,
+                                    "failed": error_count,
+                                    "result": res
+                                }
+                                yield f"data: {json.dumps(evt)}\n\n"
+
+                        async for msg in stream_workers():
+                            yield msg
+
+                    total_elapsed = round(time.time() - t_start, 2)
+                    summary = json.dumps({
+                        "type": "complete",
+                        "total": len(files_to_process),
+                        "processed": completed_count,
+                        "successful": success_count,
+                        "failed": error_count,
+                        "progress": 100,
+                        "total_elapsed_seconds": total_elapsed
+                    })
+                    yield f"data: {summary}\n\n"
+
+                return StreamingResponse(
+                    event_generator(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no"
+                    }
+                )
+
+            async with httpx.AsyncClient(timeout=180.0) as http_client:
+                tasks = [process_single_file(f, http_client) for f in files_to_process]
+                results = await asyncio.gather(*tasks)
+
+            total_elapsed = round(time.time() - t_start, 2)
+            successful = [r for r in results if r.get("status") in ["success", "cached"]]
+            errors = [r for r in results if r.get("status") == "error"]
+
+            return JSONResponse({
+                "collection_id": cid,
+                "collection_name": col_data.get("name"),
+                "total_datasets": len(items),
+                "total_tabular_files": len(files_to_process),
+                "successful_cdif_exports": len(successful),
+                "failed_cdif_exports": len(errors),
+                "total_elapsed_seconds": total_elapsed,
+                "results": results
+            })
+
         async def api_collections_delete(request):
 
             from starlette.responses import JSONResponse
@@ -7821,6 +8189,7 @@ Output a JSON object with:
                 Route("/api/collections/{id}", endpoint=api_collections_get_single, methods=["GET"]),
                 Route("/api/collections/{id}/resolved", endpoint=api_collections_get_resolved, methods=["GET"]),
                 Route("/api/collections/{id}/export", endpoint=api_collections_export_croissant, methods=["GET"]),
+                Route("/api/collections/{id}/analyze", endpoint=api_collections_analyze, methods=["GET", "POST"]),
                 Route("/api/collections/{id}/ask", endpoint=api_collections_ask, methods=["POST"]),
                 Route("/api/collectionsindex/ask", endpoint=api_collections_index_ask, methods=["POST"]),
                 Route("/collections/{es_id}", endpoint=collection_es_doc_html),
