@@ -581,6 +581,8 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
             "id": cid,
             "name": collection_name,
             "description": f"Automatically generated collection from expert '{expert_index}' for query '{query}'.",
+            "expert": expert_index_resolved,
+            "expert_index": expert_index_resolved,
             "is_private": is_private,
             "owner": owner,
             "created_at": datetime.datetime.utcnow().isoformat() + "Z",
@@ -6703,7 +6705,7 @@ Please answer the question based ONLY on the context provided above (including t
                 if items:
                     es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
                     async with httpx.AsyncClient(timeout=30.0) as client:
-                        # Batch in chunks of 500
+                        # Batch in chunks of 500 across all candidate indices
                         chunk_size = 500
                         for i in range(0, len(items), chunk_size):
                             chunk = items[i:i + chunk_size]
@@ -6712,15 +6714,23 @@ Please answer the question based ONLY on the context provided above (including t
                                 "size": len(chunk),
                                 "_source": True
                             }
-                            docs_resp = await client.post(f"{es_url}/trump,croissant/_search", json=payload)
+                            docs_resp = await client.post(f"{es_url}/croissant,dataverse,trump,openml,honduras/_search", json=payload)
                             if docs_resp.status_code == 200:
                                 for h in docs_resp.json().get("hits", {}).get("hits", []):
-                                    es_docs[h["_id"]] = h.get("_source", {})
+                                    doc_src = h.get("_source", {})
+                                    doc_src["_index"] = h.get("_index")
+                                    es_docs[h["_id"]] = doc_src
 
                 distributions = []
                 record_sets = []
                 has_parts = []
                 
+                is_dataverse_col = (
+                    col_data.get("expert") == "dataverse" or
+                    col_data.get("expert_index") == "dataverse" or
+                    "expert 'dataverse'" in (col_data.get("description") or "").lower()
+                )
+
                 for doc_id in items:
                     src = es_docs.get(doc_id)
                     doc_jsonld = None
@@ -6742,14 +6752,34 @@ Please answer the question based ONLY on the context provided above (including t
                         doc_keywords = [k.strip() for k in doc_keywords.split(",") if k.strip()]
                     doc_date = doc_data.get("datePublished") or doc_data.get("dateCreated") or doc_data.get("dateModified")
 
+                    # Check if this item is a Dataset (e.g. from Dataverse, Croissant index, or item marked Dataset)
+                    item_is_dataset = (
+                        is_dataverse_col or
+                        doc_data.get("_index") in ["dataverse", "openml"] or
+                        doc_data.get("@type") in ["Dataset", "sc:Dataset", "cr:Dataset", "schema:Dataset"] or
+                        "dataverse" in doc_url.lower() or
+                        "doi.org/10.7910" in doc_url or
+                        "dataverse" in str(doc_data.get("includedInDataCatalog", "")).lower() or
+                        "dataverse" in str(doc_data.get("publisher", "")).lower()
+                    )
+
+                    dist_type = "cr:Dataset" if item_is_dataset else "cr:FileObject"
+
                     dist_obj = {
-                        "@type": "cr:FileObject",
+                        "@type": dist_type,
                         "@id": f"material-{doc_id}",
                         "name": doc_name,
                         "description": doc_desc,
-                        "contentUrl": doc_url,
-                        "encodingFormat": "text/html"
+                        "contentUrl": doc_url
                     }
+                    if not item_is_dataset:
+                        dist_obj["encodingFormat"] = "text/html"
+                    else:
+                        if doc_data.get("includedInDataCatalog"):
+                            dist_obj["includedInDataCatalog"] = doc_data.get("includedInDataCatalog")
+                        if doc_data.get("publisher"):
+                            dist_obj["publisher"] = doc_data.get("publisher")
+
                     if doc_date:
                         dist_obj["datePublished"] = doc_date
                     if doc_keywords:
@@ -6757,13 +6787,17 @@ Please answer the question based ONLY on the context provided above (including t
 
                     distributions.append(dist_obj)
 
-                    has_parts.append({
-                        "@type": "schema:CreativeWork",
+                    part_type = "cr:Dataset" if item_is_dataset else "schema:CreativeWork"
+                    part_obj = {
+                        "@type": part_type,
                         "@id": f"https://ai.mediaquantum.eu/vault/doc/{doc_id}",
                         "name": doc_name,
                         "description": doc_desc,
                         "url": doc_url
-                    })
+                    }
+                    if item_is_dataset and doc_data.get("includedInDataCatalog"):
+                        part_obj["includedInDataCatalog"] = doc_data.get("includedInDataCatalog")
+                    has_parts.append(part_obj)
 
                 col_name = col_data.get("name") or "Collection"
                 col_desc = col_data.get("description") or f"Croissant dataset collection {cid}"
