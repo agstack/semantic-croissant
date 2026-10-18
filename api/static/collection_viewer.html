@@ -580,6 +580,9 @@
                 currentCollectionData = data;
                 currentSubcollectionsData = subCollections;
                 renderCollection(data, subCollections, allCollections);
+
+                // Proactively check if CDIF variables already exist for this collection
+                checkCollectionVariablesPresence();
             } catch (err) {
                 document.getElementById('collections-container').innerHTML = `
                     <div style="color: #cf222e; padding: 20px;">
@@ -1194,6 +1197,69 @@
                 .replace(/'/g, '&#039;');
         }
 
+        async function checkCollectionVariablesPresence() {
+            if (!colId) return;
+            try {
+                const res = await fetch(`/api/collections/${colId}/variables`);
+                if (!res.ok) return;
+                const data = await res.json();
+                cachedVariablesData = data;
+                updateVariablesBadgesAndButtons(data);
+            } catch (e) {
+                console.warn('Proactive variables presence check failed:', e);
+            }
+        }
+
+        function updateVariablesBadgesAndButtons(data) {
+            const totalVars = (data && data.total_variables !== undefined) ? data.total_variables : (data && data.variables ? data.variables.length : 0);
+            const totalFiles = (data && data.total_files !== undefined) ? data.total_files : 0;
+
+            const btnVars = document.getElementById('btn-view-variables');
+            if (btnVars) {
+                if (totalVars > 0) {
+                    btnVars.innerHTML = `
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><circle cx="18" cy="17" r="2"/></svg>
+                        📋 Variables <span style="font-size: 0.75rem; background: #10b981; color: white; padding: 1px 7px; border-radius: 10px; margin-left: 5px; font-weight: 600;">${totalVars.toLocaleString()}</span>
+                    `;
+                    btnVars.title = `${totalVars.toLocaleString()} CDIF variables available across ${totalFiles} files. Click to view!`;
+                } else {
+                    btnVars.innerHTML = `
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><circle cx="18" cy="17" r="2"/></svg>
+                        📋 Variables
+                    `;
+                }
+            }
+
+            const countBadge = document.getElementById('dash-var-count-badge');
+            if (countBadge) {
+                countBadge.textContent = `${totalVars.toLocaleString()} variables (${totalFiles} files)`;
+            }
+
+            // Update completeness progress bar
+            if (!isAnalysisRunning) {
+                const tbFill = document.getElementById('var-bg-progress-fill');
+                const tbText = document.getElementById('var-bg-progress-text');
+                const tbSpinner = document.getElementById('var-bg-spinner');
+                const tbLabel = document.getElementById('var-bg-status-label');
+                if (tbSpinner) tbSpinner.style.display = 'none';
+                if (tbLabel) tbLabel.innerText = 'Analysis:';
+                
+                if (totalFiles > 0 || totalVars > 0) {
+                    if (tbFill) tbFill.style.width = '100%';
+                    if (tbText) tbText.innerText = '100%';
+                } else {
+                    if (tbFill) tbFill.style.width = '0%';
+                    if (tbText) tbText.innerText = '0%';
+                }
+            }
+
+            // If analyze button exists, highlight if CDIF is ready
+            const btnAnalyze = document.getElementById('btn-analyze-col');
+            if (btnAnalyze && totalVars > 0) {
+                btnAnalyze.title = `CDIF is already generated (${totalVars.toLocaleString()} variables). Click to view details or re-analyze.`;
+            }
+        }
+
         async function loadAndRenderVariables(forceRefresh = false) {
             const tableBody = document.getElementById('dash-var-table-body');
             const tableContainer = document.getElementById('dash-var-table-container');
@@ -1261,27 +1327,9 @@
             const totalFiles = (data && data.total_files !== undefined) ? data.total_files : 0;
             const totalVars = (data && data.total_variables !== undefined) ? data.total_variables : vars.length;
 
-            if (countBadge) countBadge.textContent = `${totalVars.toLocaleString()} variables (${totalFiles} files)`;
+            updateVariablesBadgesAndButtons(data);
             if (statTotal) statTotal.textContent = totalVars.toLocaleString();
             if (statFiles) statFiles.textContent = totalFiles.toLocaleString();
-
-            // Always update progress bar completeness based on analyzed files vs total files
-            if (!isAnalysisRunning) {
-                const tbFill = document.getElementById('var-bg-progress-fill');
-                const tbText = document.getElementById('var-bg-progress-text');
-                const tbSpinner = document.getElementById('var-bg-spinner');
-                const tbLabel = document.getElementById('var-bg-status-label');
-                if (tbSpinner) tbSpinner.style.display = 'none';
-                if (tbLabel) tbLabel.innerText = 'Analysis:';
-                
-                if (totalFiles > 0) {
-                    if (tbFill) tbFill.style.width = '100%';
-                    if (tbText) tbText.innerText = '100%';
-                } else {
-                    if (tbFill) tbFill.style.width = '0%';
-                    if (tbText) tbText.innerText = '0%';
-                }
-            }
 
             let numCount = 0;
             let otherCount = 0;
@@ -2273,6 +2321,17 @@
                 Extracts and converts all tabular files (CSV, STATA, XLS/XLSX, TSV, SPSS, Parquet) across datasets into standard CDIF (DDI-CDI JSON-LD) and caches them in the Elasticsearch <code>cdif</code> index.
             </p>
 
+            <!-- Existing CDIF Presence Alert (shown if CDIF variables are already cached) -->
+            <div id="analyze-cdif-presence-alert" style="display: none; margin-bottom: 15px; padding: 12px 16px; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 6px; font-size: 0.9rem; color: #065f46; align-items: center; justify-content: space-between; gap: 10px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 1.2rem;">✅</span>
+                    <span id="analyze-cdif-presence-text">CDIF variables already cached for this collection.</span>
+                </div>
+                <button onclick="closeAnalyzeModal(); switchCollectionView('variables');" style="padding: 5px 12px; background: #059669; color: white; border: none; border-radius: 4px; font-weight: 600; cursor: pointer; font-size: 0.82rem; white-space: nowrap;">
+                    View Variables &rarr;
+                </button>
+            </div>
+
             <!-- Stats Header -->
             <div id="analyze-stats-box" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px; background: var(--panel-bg); padding: 12px; border-radius: 6px; border: 1px solid var(--border-color); text-align: center;">
                 <div>
@@ -2315,6 +2374,9 @@
             <!-- Action Buttons -->
             <div style="display: flex; justify-content: flex-end; align-items: center; gap: 10px;">
                 <button id="analyze-close-btn" onclick="closeAnalyzeModal()" style="padding: 8px 16px; background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">Close</button>
+                <button id="analyze-view-vars-btn" onclick="closeAnalyzeModal(); switchCollectionView('variables');" style="display: none; padding: 8px 18px; background: #059669; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; align-items: center; gap: 6px;">
+                    <span>View CDIF Variables &rarr;</span>
+                </button>
                 <button id="analyze-start-btn" onclick="startAnalysis()" style="padding: 8px 18px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; display: inline-flex; align-items: center; gap: 6px;">
                     <span>Start Analysis</span>
                 </button>
@@ -2392,7 +2454,7 @@
         let isAnalysisRunning = false;
         let isAnalysisInBackground = false;
 
-        function openAnalyzeModal() {
+        async function openAnalyzeModal() {
             if (!colId) {
                 alert('No collection ID found.');
                 return;
@@ -2408,6 +2470,24 @@
                 startBtn.innerHTML = '<span class="spinner" style="display:inline-block; width:12px; height:12px; border:2px solid white; border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite;"></span> Running...';
                 if (bgBtn) bgBtn.style.display = 'inline-flex';
                 return;
+            }
+
+            // Check if CDIF variables are already present for the collection
+            const alertBox = document.getElementById('analyze-cdif-presence-alert');
+            const alertText = document.getElementById('analyze-cdif-presence-text');
+            const viewVarsBtn = document.getElementById('analyze-view-vars-btn');
+            
+            if (cachedVariablesData && cachedVariablesData.total_variables > 0) {
+                if (alertBox) {
+                    alertBox.style.display = 'flex';
+                    if (alertText) {
+                        alertText.innerHTML = `This collection already has <b>${cachedVariablesData.total_variables.toLocaleString()} CDIF variables</b> cached across ${cachedVariablesData.total_files || 0} files.`;
+                    }
+                }
+                if (viewVarsBtn) viewVarsBtn.style.display = 'inline-flex';
+            } else {
+                if (alertBox) alertBox.style.display = 'none';
+                if (viewVarsBtn) viewVarsBtn.style.display = 'none';
             }
 
             // Reset UI state
@@ -2597,15 +2677,21 @@
                                     startBtn.innerHTML = '<span>Re-analyze</span>';
                                     if (bgBtn) bgBtn.style.display = 'none';
 
+                                    // Display 'View CDIF Variables' button prominently
+                                    const viewVarsBtn = document.getElementById('analyze-view-vars-btn');
+                                    if (viewVarsBtn) viewVarsBtn.style.display = 'inline-flex';
+
                                     // Update toolbar progress to 100% complete
                                     updateToolbarBgProgress(100, false);
                                     const tbText = document.getElementById('var-bg-progress-text');
                                     if (tbText) tbText.innerText = '100%';
 
-                                    // Auto reload variables table if Variables view is open
-                                    if (currentViewMode === 'variables') {
-                                        loadAndRenderVariables(true);
-                                    }
+                                    // Always re-check and fetch variables from Elasticsearch so badges and table are ready
+                                    checkCollectionVariablesPresence().then(() => {
+                                        if (currentViewMode === 'variables') {
+                                            loadAndRenderVariables(true);
+                                        }
+                                    });
                                 }
                             } catch (parseErr) {
                                 console.error('SSE JSON parse error:', parseErr, trimmed);
