@@ -6787,7 +6787,7 @@ Please answer the question based ONLY on the context provided above (including t
                                 "size": len(chunk),
                                 "_source": True
                             }
-                            docs_resp = await client.post(f"{es_url}/croissant,dataverse,trump,openml,honduras/_search", json=payload)
+                            docs_resp = await client.post(f"{es_url}/*,-.*,-collections,-history,-groups,-cdif/_search", json=payload)
                             if docs_resp.status_code == 200:
                                 for h in docs_resp.json().get("hits", {}).get("hits", []):
                                     doc_src = h.get("_source", {})
@@ -6979,7 +6979,7 @@ Please answer the question based ONLY on the context provided above (including t
                             "size": len(chunk),
                             "_source": True
                         }
-                        docs_resp = await client.post(f"{es_url}/croissant,dataverse,trump,openml,honduras/_search", json=payload)
+                        docs_resp = await client.post(f"{es_url}/*,-.*,-collections,-history,-groups,-cdif/_search", json=payload)
                         if docs_resp.status_code == 200:
                             for h in docs_resp.json().get("hits", {}).get("hits", []):
                                 doc_id_val = h.get("_id")
@@ -7006,16 +7006,16 @@ Please answer the question based ONLY on the context provided above (including t
                         src = {}
                 
                 ds_url = src.get("url") or src.get("_source_url") or f"https://ai.mediaquantum.eu/vault/doc/{doc_id}"
-                dists = src.get("distribution") or src.get("fileObject") or []
+                dists = src.get("distribution") or src.get("fileObject") or src.get("files") or []
                 if isinstance(dists, dict):
                     dists = [dists]
 
                 for d in dists:
                     if not isinstance(d, dict):
                         continue
-                    fname = d.get("name") or d.get("@id") or ""
-                    fmt = (d.get("encodingFormat") or "").lower()
-                    curl = d.get("contentUrl") or ""
+                    fname = d.get("name") or d.get("@id") or d.get("title") or d.get("filename") or ""
+                    fmt = (d.get("encodingFormat") or d.get("format") or d.get("contentType") or "").lower()
+                    curl = d.get("contentUrl") or d.get("downloadUrl") or d.get("url") or d.get("accessUrl") or ""
                     if not curl:
                         continue
 
@@ -7023,7 +7023,7 @@ Please answer the question based ONLY on the context provided above (including t
                     is_tabular = (
                         ext in tabular_exts or
                         any(h in fmt for h in tabular_mime_hints) or
-                        any(ext_candidate in curl.lower() for ext_candidate in [".csv", ".xls", ".xlsx", ".dta", ".sav", ".tab"])
+                        any(ext_candidate in curl.lower() for ext_candidate in [".csv", ".xls", ".xlsx", ".dta", ".sav", ".tab", ".parquet", ".tsv"])
                     )
 
                     if is_tabular:
@@ -7033,7 +7033,7 @@ Please answer the question based ONLY on the context provided above (including t
                             "file_name": fname or "data.csv",
                             "file_url": curl,
                             "format": fmt or ext,
-                            "content_size": d.get("contentSize")
+                            "content_size": d.get("contentSize") or d.get("size")
                         })
 
             results = []
@@ -7315,7 +7315,7 @@ Please answer the question based ONLY on the context provided above (including t
                     if unique_dids:
                         try:
                             ds_resp = await client.post(
-                                f"{es_url}/croissant,trump/_search",
+                                f"{es_url}/*,-.*,-collections,-history,-groups,-cdif/_search",
                                 json={
                                     "query": {"ids": {"values": unique_dids}},
                                     "size": len(unique_dids),
