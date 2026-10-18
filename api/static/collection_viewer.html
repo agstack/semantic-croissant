@@ -680,7 +680,39 @@
                         <button onclick="updateParent()" style="padding: 6px 12px; background: var(--accent-color); color: white; border: none; border-radius: 4px; cursor: pointer;">Set Parent</button>
                     </div>
                 </div>
-                <div id="qa-result" style="display: none; margin-bottom: 20px; padding: 15px; background: var(--user-msg-bg); border: 1px solid var(--border-color); border-radius: 6px; font-size: 1rem; color: var(--text-color); white-space: pre-wrap;"></div>
+                                <div id="qa-result" style="display: none; margin-bottom: 20px; padding: 16px 20px; background: var(--user-msg-bg); border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95rem; color: var(--text-color); position: relative;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; gap: 10px; flex-wrap: wrap;">
+                        <strong style="color: var(--accent-color); display: flex; align-items: center; gap: 6px;">
+                            <span>🤖 AI Answer</span>
+                        </strong>
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <button id="gen-qa-copy-btn" onclick="copyGenQaResult()" title="Copy response to clipboard" style="padding: 4px 10px; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 5px; color: var(--text-color); cursor: pointer; font-size: 0.8rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                                <span>Copy</span>
+                            </button>
+                            <span style="color: var(--border-color); font-size: 0.85rem;">|</span>
+                            <div class="export-dropdown-wrapper" style="position: relative; display: inline-block;">
+                                <button onclick="toggleGenExportMenu(event)" title="Export response" style="padding: 4px 10px; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 5px; color: var(--text-color); cursor: pointer; font-size: 0.8rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                    <span>Export</span>
+                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                                </button>
+                                <div id="gen-export-dropdown" style="display: none; position: absolute; right: 0; top: 100%; margin-top: 4px; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 100; min-width: 170px; padding: 4px 0;">
+                                    <a href="javascript:void(0)" onclick="exportGenQaMarkdown()" style="display: flex; align-items: center; gap: 8px; padding: 7px 12px; color: var(--text-color); text-decoration: none; font-size: 0.82rem; font-weight: 500;">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                                        <span>Markdown (.md)</span>
+                                    </a>
+                                    <a href="javascript:void(0)" onclick="exportGenQaGoogleDocs()" style="display: flex; align-items: center; gap: 8px; padding: 7px 12px; color: var(--text-color); text-decoration: none; font-size: 0.82rem; font-weight: 500;">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                                        <span>Google Docs</span>
+                                    </a>
+                                </div>
+                            </div>
+                            <button onclick="document.getElementById('qa-result').style.display='none'" title="Close" style="background: transparent; border: none; font-size: 1.25rem; color: var(--text-color); opacity: 0.7; cursor: pointer; line-height: 1; padding: 0 4px; margin-left: 4px;">&times;</button>
+                        </div>
+                    </div>
+                    <div id="qa-result-content" style="line-height: 1.6; white-space: pre-wrap;"></div>
+                </div>
 
                 <!-- Dashboard / Chart Representation View matching target design -->
                 <div id="dashboard-view" class="dashboard-container">
@@ -772,9 +804,19 @@
                     <div class="variables-card">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 15px;">
                             <div>
-                                <h3 style="margin: 0; font-size: 1.15rem; font-weight: 700; color: #111827; display: flex; align-items: center; gap: 8px;">
+                                <h3 style="margin: 0; font-size: 1.15rem; font-weight: 700; color: #111827; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
                                     <span>📋 CDIF Tabular Variables</span>
                                     <span id="dash-var-count-badge" style="font-size: 0.78rem; font-weight: 600; padding: 2px 8px; border-radius: 12px; background: #e0f2fe; color: #0284c7;">Loading...</span>
+                                    
+                                    <!-- Analysis Progress Bar directly after count badge (always visible showing how full analysis is) -->
+                                    <div id="var-bg-progress-bar" onclick="reopenAnalyzeModalFromToolbar()" style="display: inline-flex; align-items: center; gap: 8px; padding: 3px 10px; background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; cursor: pointer; transition: all 0.2s ease;" title="Collection analysis completeness. Click to open analysis details.">
+                                        <span id="var-bg-spinner" class="spinner" style="display: none; width: 11px; height: 11px; border: 2px solid #16a34a; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite;"></span>
+                                        <span id="var-bg-status-label" style="font-size: 0.78rem; font-weight: 600; color: #166534;">Analysis:</span>
+                                        <div style="width: 120px; height: 8px; background: #dcfce7; border-radius: 4px; overflow: hidden; position: relative;">
+                                            <div id="var-bg-progress-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #10b981, #059669); transition: width 0.3s ease; border-radius: 4px;"></div>
+                                        </div>
+                                        <span id="var-bg-progress-text" style="font-size: 0.78rem; font-weight: 700; color: #15803d; min-width: 32px;">0%</span>
+                                    </div>
                                 </h3>
                                 <div style="font-size: 0.82rem; color: #6b7280; margin-top: 4px;">
                                     Variables extracted from tabular distribution files (CSV, STATA, Excel, TSV) and modeled in CDIF DDI-CDI format.
@@ -802,11 +844,35 @@
 
                         <!-- Variables AI Ask Response Panel -->
                         <div id="var-qa-result" style="display: none; margin-bottom: 20px; padding: 16px 20px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; font-size: 0.95rem; color: #1f2937; position: relative;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid #dcfce7; padding-bottom: 6px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid #dcfce7; padding-bottom: 8px; gap: 10px; flex-wrap: wrap;">
                                 <strong style="color: #166534; display: flex; align-items: center; gap: 6px;">
                                     <span>🤖 AI Variable Analysis</span>
                                 </strong>
-                                <button onclick="document.getElementById('var-qa-result').style.display='none'" style="background: transparent; border: none; font-size: 1.1rem; color: #4b5563; cursor: pointer; line-height: 1;">&times;</button>
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <button id="var-qa-copy-btn" onclick="copyVarQaResult()" title="Copy response to clipboard" style="padding: 4px 10px; background: #ffffff; border: 1px solid #86efac; border-radius: 5px; color: #166534; cursor: pointer; font-size: 0.8rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                                        <span>Copy</span>
+                                    </button>
+                                    <span style="color: #cbd5e1; font-size: 0.85rem;">|</span>
+                                    <div class="export-dropdown-wrapper" style="position: relative; display: inline-block;">
+                                        <button onclick="toggleVarExportMenu(event)" title="Export response" style="padding: 4px 10px; background: #ffffff; border: 1px solid #86efac; border-radius: 5px; color: #166534; cursor: pointer; font-size: 0.8rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                            <span>Export</span>
+                                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                                        </button>
+                                        <div id="var-export-dropdown" style="display: none; position: absolute; right: 0; top: 100%; margin-top: 4px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.12); z-index: 100; min-width: 170px; padding: 4px 0;">
+                                            <a href="javascript:void(0)" onclick="exportVarQaMarkdown()" style="display: flex; align-items: center; gap: 8px; padding: 7px 12px; color: #1e293b; text-decoration: none; font-size: 0.82rem; font-weight: 500;">
+                                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                                                <span>Markdown (.md)</span>
+                                            </a>
+                                            <a href="javascript:void(0)" onclick="exportVarQaGoogleDocs()" style="display: flex; align-items: center; gap: 8px; padding: 7px 12px; color: #1e293b; text-decoration: none; font-size: 0.82rem; font-weight: 500;">
+                                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                                                <span>Google Docs</span>
+                                            </a>
+                                        </div>
+                                    </div>
+                                    <button onclick="document.getElementById('var-qa-result').style.display='none'" title="Close" style="background: transparent; border: none; font-size: 1.25rem; color: #4b5563; cursor: pointer; line-height: 1; padding: 0 4px; margin-left: 4px;">&times;</button>
+                                </div>
                             </div>
                             <div id="var-qa-content" style="line-height: 1.6;"></div>
                         </div>
@@ -1199,6 +1265,24 @@
             if (statTotal) statTotal.textContent = totalVars.toLocaleString();
             if (statFiles) statFiles.textContent = totalFiles.toLocaleString();
 
+            // Always update progress bar completeness based on analyzed files vs total files
+            if (!isAnalysisRunning) {
+                const tbFill = document.getElementById('var-bg-progress-fill');
+                const tbText = document.getElementById('var-bg-progress-text');
+                const tbSpinner = document.getElementById('var-bg-spinner');
+                const tbLabel = document.getElementById('var-bg-status-label');
+                if (tbSpinner) tbSpinner.style.display = 'none';
+                if (tbLabel) tbLabel.innerText = 'Analysis:';
+                
+                if (totalFiles > 0) {
+                    if (tbFill) tbFill.style.width = '100%';
+                    if (tbText) tbText.innerText = '100%';
+                } else {
+                    if (tbFill) tbFill.style.width = '0%';
+                    if (tbText) tbText.innerText = '0%';
+                }
+            }
+
             let numCount = 0;
             let otherCount = 0;
             vars.forEach(v => {
@@ -1407,6 +1491,7 @@
 
                 const data = await res.json();
                 const answerText = data.answer || 'No response returned from the model.';
+                lastVarQaRawAnswer = answerText;
 
                 if (contentBox) {
                     if (typeof marked !== 'undefined') {
@@ -2228,10 +2313,14 @@
             </div>
 
             <!-- Action Buttons -->
-            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+            <div style="display: flex; justify-content: flex-end; align-items: center; gap: 10px;">
                 <button id="analyze-close-btn" onclick="closeAnalyzeModal()" style="padding: 8px 16px; background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">Close</button>
                 <button id="analyze-start-btn" onclick="startAnalysis()" style="padding: 8px 18px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; display: inline-flex; align-items: center; gap: 6px;">
                     <span>Start Analysis</span>
+                </button>
+                <button id="analyze-bg-btn" onclick="continueAnalysisInBackground()" style="display: none; padding: 8px 18px; background: #6366f1; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; align-items: center; gap: 6px;" title="Close modal and keep analysis running with progress bar in toolbar">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                    <span>Continue in background</span>
                 </button>
             </div>
         </div>
@@ -2300,6 +2389,8 @@
         }
 
         let analyzeAbortController = null;
+        let isAnalysisRunning = false;
+        let isAnalysisInBackground = false;
 
         function openAnalyzeModal() {
             if (!colId) {
@@ -2308,6 +2399,16 @@
             }
             const modal = document.getElementById('analyze-modal');
             modal.style.display = 'flex';
+
+            if (isAnalysisRunning) {
+                // Already running (e.g. from background)
+                const startBtn = document.getElementById('analyze-start-btn');
+                const bgBtn = document.getElementById('analyze-bg-btn');
+                startBtn.disabled = true;
+                startBtn.innerHTML = '<span class="spinner" style="display:inline-block; width:12px; height:12px; border:2px solid white; border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite;"></span> Running...';
+                if (bgBtn) bgBtn.style.display = 'inline-flex';
+                return;
+            }
 
             // Reset UI state
             document.getElementById('analyze-progress-fill').style.width = '0%';
@@ -2322,6 +2423,9 @@
             startBtn.disabled = false;
             startBtn.innerHTML = '<span>Start Analysis</span>';
 
+            const bgBtn = document.getElementById('analyze-bg-btn');
+            if (bgBtn) bgBtn.style.display = 'none';
+
             const logList = document.getElementById('analyze-log-list');
             logList.innerHTML = '<div style="opacity: 0.7;">Click "Start Analysis" to discover all CSV, STATA, and XLS files and produce CDIF.</div>';
 
@@ -2330,21 +2434,63 @@
         }
 
         function closeAnalyzeModal() {
-            if (analyzeAbortController) {
+            // If user explicitly closes the modal while running, abort analysis
+            if (isAnalysisRunning && analyzeAbortController) {
                 try {
                     analyzeAbortController.abort();
                 } catch (e) {}
                 analyzeAbortController = null;
             }
+            isAnalysisRunning = false;
+            isAnalysisInBackground = false;
+            hideToolbarBgProgress();
             document.getElementById('analyze-modal').style.display = 'none';
+        }
+
+        function continueAnalysisInBackground() {
+            // Close modal without aborting, display toolbar progress bar
+            isAnalysisInBackground = true;
+            document.getElementById('analyze-modal').style.display = 'none';
+            const tbProgress = document.getElementById('var-bg-progress-bar');
+            if (tbProgress) tbProgress.style.display = 'inline-flex';
+        }
+
+        function reopenAnalyzeModalFromToolbar() {
+            const modal = document.getElementById('analyze-modal');
+            if (modal) modal.style.display = 'flex';
+        }
+
+        function hideToolbarBgProgress() {
+            // Keep progress bar visible, reset to idle status
+            const tbSpinner = document.getElementById('var-bg-spinner');
+            const tbLabel = document.getElementById('var-bg-status-label');
+            if (tbSpinner) tbSpinner.style.display = 'none';
+            if (tbLabel) tbLabel.innerText = 'Analysis:';
+        }
+
+        function updateToolbarBgProgress(pct, isRunning = true) {
+            const tbFill = document.getElementById('var-bg-progress-fill');
+            const tbText = document.getElementById('var-bg-progress-text');
+            const tbSpinner = document.getElementById('var-bg-spinner');
+            const tbLabel = document.getElementById('var-bg-status-label');
+            const rounded = Math.round(pct);
+            if (tbFill) tbFill.style.width = pct + '%';
+            if (tbText) tbText.innerText = rounded + '%';
+            if (tbSpinner) tbSpinner.style.display = isRunning ? 'inline-block' : 'none';
+            if (tbLabel) tbLabel.innerText = isRunning ? 'Analyzing:' : 'Analysis:';
         }
 
         async function startAnalysis() {
             if (!colId) return;
 
+            isAnalysisRunning = true;
+
             const startBtn = document.getElementById('analyze-start-btn');
             startBtn.disabled = true;
             startBtn.innerHTML = '<span class="spinner" style="display:inline-block; width:12px; height:12px; border:2px solid white; border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite;"></span> Running...';
+
+            const bgBtn = document.getElementById('analyze-bg-btn');
+            if (bgBtn) bgBtn.style.display = 'inline-flex';
 
             const fillBar = document.getElementById('analyze-progress-fill');
             const pctLabel = document.getElementById('analyze-percent-label');
@@ -2404,6 +2550,7 @@
                                         fillBar.style.width = '100%';
                                         pctLabel.innerText = '100%';
                                         statusLabel.innerText = 'No tabular files found in collection.';
+                                        updateToolbarBgProgress(100);
                                     }
                                 } else if (evt.type === 'progress') {
                                     const pct = Math.min(100, Math.max(0, evt.percent || 0));
@@ -2415,6 +2562,7 @@
                                     failEl.innerText = evt.failed;
 
                                     statusLabel.innerText = `Processing (${evt.processed}/${evt.total}): ${evt.current_file}`;
+                                    updateToolbarBgProgress(pct);
 
                                     const entry = document.createElement('div');
                                     entry.style.padding = '2px 0';
@@ -2434,6 +2582,7 @@
                                     totalEl.innerText = evt.total;
 
                                     statusLabel.innerHTML = `✅ Complete! ${evt.successful} CDIF exports ready in ${evt.total_elapsed_seconds}s.`;
+                                    updateToolbarBgProgress(100);
 
                                     const entry = document.createElement('div');
                                     entry.style.padding = '6px 0';
@@ -2443,8 +2592,20 @@
                                     logList.appendChild(entry);
                                     logList.scrollTop = logList.scrollHeight;
 
+                                    isAnalysisRunning = false;
                                     startBtn.disabled = false;
                                     startBtn.innerHTML = '<span>Re-analyze</span>';
+                                    if (bgBtn) bgBtn.style.display = 'none';
+
+                                    // Update toolbar progress to 100% complete
+                                    updateToolbarBgProgress(100, false);
+                                    const tbText = document.getElementById('var-bg-progress-text');
+                                    if (tbText) tbText.innerText = '100%';
+
+                                    // Auto reload variables table if Variables view is open
+                                    if (currentViewMode === 'variables') {
+                                        loadAndRenderVariables(true);
+                                    }
                                 }
                             } catch (parseErr) {
                                 console.error('SSE JSON parse error:', parseErr, trimmed);
@@ -2453,6 +2614,7 @@
                     }
                 }
             } catch (err) {
+                isAnalysisRunning = false;
                 if (err.name === 'AbortError') {
                     statusLabel.innerText = 'Analysis paused/cancelled.';
                 } else {
@@ -2465,6 +2627,8 @@
                 }
                 startBtn.disabled = false;
                 startBtn.innerHTML = '<span>Start Analysis</span>';
+                if (bgBtn) bgBtn.style.display = 'none';
+                hideToolbarBgProgress();
             }
         }
 
@@ -2565,7 +2729,8 @@
             
             btn.disabled = true;
             btn.innerText = 'Thinking...';
-            document.getElementById('qa-result').innerHTML = '';
+            const qaContentEl = document.getElementById('qa-result-content') || document.getElementById('qa-result');
+            if (qaContentEl) qaContentEl.innerHTML = '<span class="var-spinner" style="width:12px; height:12px; vertical-align:middle; margin-right:6px;"></span> Thinking...';
             document.getElementById('qa-result').style.display = 'block';
             
             try {
@@ -2575,31 +2740,179 @@
                     body: JSON.stringify({query: queryInput})
                 });
                 const data = await res.json();
+                const answerText = data.answer || '';
+                lastGenQaRawAnswer = answerText;
                 
                 if (data.action === "expert_task") {
                     document.getElementById('qa-result').style.display = 'none';
                     openExpertModal(data.subcollection_name, data.message);
                 } else if (data.action === "subcollections_created") {
                     if (typeof marked !== 'undefined') {
-                        document.getElementById('qa-result').innerHTML = marked.parse(data.answer);
+                        qaContentEl.innerHTML = marked.parse(answerText);
                     } else {
-                        document.getElementById('qa-result').innerText = data.answer;
+                        qaContentEl.innerText = answerText;
                     }
                     // Re-load collection to immediately display the new subcollections in the UI
                     setTimeout(() => { loadCollection(); }, 1200);
                 } else if(typeof marked !== 'undefined') {
-                    document.getElementById('qa-result').innerHTML = marked.parse(data.answer);
+                    qaContentEl.innerHTML = marked.parse(answerText);
                 } else {
-                    document.getElementById('qa-result').innerText = data.answer;
+                    qaContentEl.innerText = answerText;
                 }
             } catch (e) {
-                document.getElementById('qa-result').innerText = 'Error: ' + e;
+                qaContentEl.innerText = 'Error: ' + e;
             }
             
             btn.disabled = false;
             btn.innerText = 'Ask';
         }
 
+
+        // Variables and Collection QA Copy and Export functions
+        let lastVarQaRawAnswer = '';
+        let lastGenQaRawAnswer = '';
+
+        function toggleVarExportMenu(e) {
+            e.stopPropagation();
+            const dd = document.getElementById('var-export-dropdown');
+            if (dd) {
+                dd.style.display = (dd.style.display === 'block') ? 'none' : 'block';
+            }
+        }
+
+        function toggleGenExportMenu(e) {
+            e.stopPropagation();
+            const dd = document.getElementById('gen-export-dropdown');
+            if (dd) {
+                dd.style.display = (dd.style.display === 'block') ? 'none' : 'block';
+            }
+        }
+
+        document.addEventListener('click', function(e) {
+            const vdd = document.getElementById('var-export-dropdown');
+            if (vdd && !e.target.closest('#var-export-dropdown') && !e.target.closest('.export-dropdown-wrapper')) {
+                vdd.style.display = 'none';
+            }
+            const gdd = document.getElementById('gen-export-dropdown');
+            if (gdd && !e.target.closest('#gen-export-dropdown') && !e.target.closest('.export-dropdown-wrapper')) {
+                gdd.style.display = 'none';
+            }
+        });
+
+        function getVarQaText() {
+            if (lastVarQaRawAnswer) return lastVarQaRawAnswer;
+            const contentBox = document.getElementById('var-qa-content');
+            return contentBox ? contentBox.innerText : '';
+        }
+
+        function getGenQaText() {
+            if (lastGenQaRawAnswer) return lastGenQaRawAnswer;
+            const contentBox = document.getElementById('qa-result-content') || document.getElementById('qa-result');
+            return contentBox ? contentBox.innerText : '';
+        }
+
+        async function copyVarQaResult() {
+            const text = getVarQaText();
+            if (!text) return;
+            const btn = document.getElementById('var-qa-copy-btn');
+            try {
+                await navigator.clipboard.writeText(text);
+                if (btn) {
+                    const originalHtml = btn.innerHTML;
+                    btn.innerHTML = '<span style="color:#16a34a;">✓ Copied!</span>';
+                    setTimeout(() => { btn.innerHTML = originalHtml; }, 2000);
+                }
+            } catch (err) {
+                console.error('Clipboard copy failed:', err);
+                prompt('Copy text below:', text);
+            }
+        }
+
+        async function copyGenQaResult() {
+            const text = getGenQaText();
+            if (!text) return;
+            const btn = document.getElementById('gen-qa-copy-btn');
+            try {
+                await navigator.clipboard.writeText(text);
+                if (btn) {
+                    const originalHtml = btn.innerHTML;
+                    btn.innerHTML = '<span style="color:#16a34a;">✓ Copied!</span>';
+                    setTimeout(() => { btn.innerHTML = originalHtml; }, 2000);
+                }
+            } catch (err) {
+                console.error('Clipboard copy failed:', err);
+                prompt('Copy text below:', text);
+            }
+        }
+
+        function downloadMarkdownFile(text, filename) {
+            const blob = new Blob([text], { type: 'text/markdown;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename || 'analysis-response.md';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function exportVarQaMarkdown() {
+            const dd = document.getElementById('var-export-dropdown');
+            if (dd) dd.style.display = 'none';
+            const text = getVarQaText();
+            if (!text) return;
+            const query = (document.getElementById('var-ask-input') ? document.getElementById('var-ask-input').value : 'variables-analysis').trim();
+            const safeName = query.toLowerCase().replace(/[^a-z0-9_-]/g, '_').substring(0, 30);
+            const colName = (currentCollectionData && currentCollectionData.name) ? currentCollectionData.name : colId;
+            const mdContent = '# CDIF Variables AI Analysis\n\n**Collection:** ' + colName + '\n**Question:** ' + query + '\n\n---\n\n' + text + '\n';
+            downloadMarkdownFile(mdContent, 'cdif_variables_' + (safeName || 'analysis') + '.md');
+        }
+
+        function exportGenQaMarkdown() {
+            const dd = document.getElementById('gen-export-dropdown');
+            if (dd) dd.style.display = 'none';
+            const text = getGenQaText();
+            if (!text) return;
+            const inputEl = document.querySelector('#ask-form input');
+            const query = (inputEl ? inputEl.value : 'collection-analysis').trim();
+            const safeName = query.toLowerCase().replace(/[^a-z0-9_-]/g, '_').substring(0, 30);
+            const colName = (currentCollectionData && currentCollectionData.name) ? currentCollectionData.name : colId;
+            const mdContent = '# Collection AI Analysis\n\n**Collection:** ' + colName + '\n**Question:** ' + query + '\n\n---\n\n' + text + '\n';
+            downloadMarkdownFile(mdContent, 'collection_' + (safeName || 'analysis') + '.md');
+        }
+
+        async function exportToGoogleDocs(text, title) {
+            try {
+                await navigator.clipboard.writeText(text);
+            } catch (e) {
+                console.warn('Could not copy to clipboard prior to Google Docs open:', e);
+            }
+            window.open('https://docs.google.com/document/create', '_blank');
+        }
+
+        function exportVarQaGoogleDocs() {
+            const dd = document.getElementById('var-export-dropdown');
+            if (dd) dd.style.display = 'none';
+            const text = getVarQaText();
+            if (!text) return;
+            const query = (document.getElementById('var-ask-input') ? document.getElementById('var-ask-input').value : 'Variables Analysis').trim();
+            const colName = (currentCollectionData && currentCollectionData.name) ? currentCollectionData.name : colId;
+            const fullDocText = query + '\n\nCollection: ' + colName + '\n\n' + text;
+            exportToGoogleDocs(fullDocText, 'Variables Analysis');
+        }
+
+        function exportGenQaGoogleDocs() {
+            const dd = document.getElementById('gen-export-dropdown');
+            if (dd) dd.style.display = 'none';
+            const text = getGenQaText();
+            if (!text) return;
+            const inputEl = document.querySelector('#ask-form input');
+            const query = (inputEl ? inputEl.value : 'Collection Analysis').trim();
+            const colName = (currentCollectionData && currentCollectionData.name) ? currentCollectionData.name : colId;
+            const fullDocText = query + '\n\nCollection: ' + colName + '\n\n' + text;
+            exportToGoogleDocs(fullDocText, 'Collection Analysis');
+        }
     </script>
 </body>
 </html>

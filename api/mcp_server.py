@@ -4630,8 +4630,10 @@ Please answer the question based ONLY on the context provided above (including t
             minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
             minio_endpoint = minio_base.replace("http://", "").replace("https://", "")
             vault_cache_key = f"cdif_cache_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
+            doc_cache_id = hashlib.sha256((target_url + (ds_url or "")).encode("utf-8")).hexdigest()[:24]
+            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
             
-            # Check vault cache first for instant response
+            # Check 1: MinIO vault cache first for instant response
             try:
                 from minio import Minio
                 m_cache_client = Minio(
@@ -4670,6 +4672,47 @@ Please answer the question based ONLY on the context provided above (including t
                     except Exception:
                         pass
             except Exception as minio_init_err:
+                pass
+
+            # Check 2: Elasticsearch 'cdif' index BEFORE downloading the file
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as es_check_client:
+                    r_es_cache = await es_check_client.get(f"{es_url}/cdif/_doc/{doc_cache_id}")
+                    if r_es_cache.status_code == 200:
+                        hit_src = r_es_cache.json().get("_source", {})
+                        cached_cdif = hit_src.get("cdif_jsonld")
+                        if cached_cdif:
+                            if isinstance(cached_cdif, str):
+                                try:
+                                    cached_cdif = json.loads(cached_cdif)
+                                except Exception:
+                                    pass
+                            cached_bytes = json.dumps(cached_cdif, indent=2).encode("utf-8")
+                            
+                            # Also backfill to MinIO vault cache for even faster subsequent reads
+                            try:
+                                if m_cache_client and m_cache_client.bucket_exists("vault"):
+                                    m_cache_client.put_object(
+                                        "vault",
+                                        vault_cache_key,
+                                        io.BytesIO(cached_bytes),
+                                        length=len(cached_bytes),
+                                        content_type="application/ld+json; charset=utf-8"
+                                    )
+                            except Exception:
+                                pass
+
+                            return Response(
+                                content=cached_bytes,
+                                status_code=200,
+                                media_type="application/ld+json; charset=utf-8",
+                                headers={
+                                    "Content-Disposition": f'inline; filename="export_cdif.jsonld"',
+                                    "Access-Control-Allow-Origin": "*",
+                                    "X-Cache": "HIT-ELASTICSEARCH"
+                                }
+                            )
+            except Exception as es_cache_err:
                 pass
 
             try:
@@ -5410,6 +5453,27 @@ Please answer the question based ONLY on the context provided above (including t
                                 content_type="application/ld+json; charset=utf-8"
                             )
                         except Exception as cache_write_err:
+                            pass
+
+                        # Also index in Elasticsearch 'cdif' index for instantaneous subsequent access
+                        try:
+                            models_count = len(enriched_json.get("DDICDIModels", [])) if isinstance(enriched_json.get("DDICDIModels"), list) else 0
+                            es_record = {
+                                "dataset_id": matched_doc_id or "",
+                                "dataset_url": matched_ds_url or ds_url or "",
+                                "file_name": filename,
+                                "file_url": target_url,
+                                "cdif_export_url": export_id,
+                                "title": ds_title or filename,
+                                "description": ds_desc or "",
+                                "models_count": models_count,
+                                "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+                                "status": "success",
+                                "cdif_jsonld": enriched_json
+                            }
+                            async with httpx.AsyncClient(timeout=10.0) as es_save_client:
+                                await es_save_client.put(f"{es_url}/cdif/_doc/{doc_cache_id}", json=es_record)
+                        except Exception as es_index_err:
                             pass
 
                         return Response(
