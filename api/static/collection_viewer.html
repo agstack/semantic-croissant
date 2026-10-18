@@ -780,10 +780,35 @@
                                     Variables extracted from tabular distribution files (CSV, STATA, Excel, TSV) and modeled in CDIF DDI-CDI format.
                                 </div>
                             </div>
-                            <div style="display: flex; align-items: center; gap: 10px;">
+                            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                                <!-- 1. Search Box (Placed before Refresh button) -->
+                                <div style="display: flex; align-items: center; gap: 6px;">
+                                    <input type="text" id="dash-var-search" placeholder="Search variables, files, or types..." oninput="filterDashboardVariables()" style="padding: 6px 12px; font-size: 0.85rem; border: 1px solid #d1d5db; border-radius: 6px; width: 250px; outline: none; background: #fff;">
+                                </div>
+
+                                <!-- 2. Refresh Button -->
                                 <button class="dash-tool-btn" onclick="loadAndRenderVariables(true)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg> Refresh</button>
-                                <input type="text" id="dash-var-search" placeholder="Search variables, files, or types..." oninput="filterDashboardVariables()" style="padding: 6px 12px; font-size: 0.85rem; border: 1px solid #d1d5db; border-radius: 6px; width: 260px; outline: none;">
+
+                                <!-- 3. Ask question on variables input form -->
+                                <form id="var-ask-form" onsubmit="handleVarAskSubmit(event)" style="display: flex; align-items: center; gap: 6px; margin: 0;">
+                                    <input type="text" id="var-ask-input" placeholder="Ask on variables, e.g. list of geospatial related variables..." style="padding: 6px 12px; font-size: 0.85rem; border: 1px solid #008855; border-radius: 6px; width: 330px; outline: none; background: #fff;">
+                                    <button type="submit" id="var-ask-btn" style="padding: 6px 14px; background: #008855; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 500; display: inline-flex; align-items: center; gap: 5px;">
+                                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                                        <span>Ask</span>
+                                    </button>
+                                </form>
                             </div>
+                        </div>
+
+                        <!-- Variables AI Ask Response Panel -->
+                        <div id="var-qa-result" style="display: none; margin-bottom: 20px; padding: 16px 20px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; font-size: 0.95rem; color: #1f2937; position: relative;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid #dcfce7; padding-bottom: 6px;">
+                                <strong style="color: #166534; display: flex; align-items: center; gap: 6px;">
+                                    <span>🤖 AI Variable Analysis</span>
+                                </strong>
+                                <button onclick="document.getElementById('var-qa-result').style.display='none'" style="background: transparent; border: none; font-size: 1.1rem; color: #4b5563; cursor: pointer; line-height: 1;">&times;</button>
+                            </div>
+                            <div id="var-qa-content" style="line-height: 1.6;"></div>
                         </div>
 
                         <!-- Variables Stats Cards -->
@@ -808,22 +833,32 @@
 
                         <!-- Variables Table / Empty Container -->
                         <div id="dash-var-table-container" style="overflow-x: auto; border: 1px solid #e5e7eb; border-radius: 8px;">
+                            <!-- Top Pagination Bar -->
+                            <div id="dash-var-pagination-top" class="var-pagination-wrap" style="display: none; border-top: none; border-bottom: 1px solid #e5e7eb;">
+                                <div id="dash-var-page-info-top" style="font-weight: 500;">
+                                    Showing 1–100 of 100 variables
+                                </div>
+                                <div id="dash-var-page-controls-top" style="display: flex; align-items: center; gap: 6px;">
+                                    <!-- Buttons generated dynamically -->
+                                </div>
+                            </div>
                             <table class="variables-table">
                                 <thead>
                                     <tr>
                                         <th style="width: 22%;">Variable Name</th>
                                         <th style="width: 20%;">Display Label</th>
                                         <th style="width: 12%;">Data Type</th>
-                                        <th style="width: 12%;">Unit</th>
-                                        <th style="width: 22%;">Source File</th>
-                                        <th style="width: 12%; text-align: center;">CDIF Export</th>
+                                        <th style="width: 10%;">Unit</th>
+                                        <th style="width: 20%;">Source File</th>
+                                        <th style="width: 8%; text-align: center;">Dataset</th>
+                                        <th style="width: 8%; text-align: center;">CDIF Export</th>
                                     </tr>
                                 </thead>
                                 <tbody id="dash-var-table-body">
-                                    <tr><td colspan="6" style="text-align: center; padding: 25px; color: #6b7280;">Loading variables...</td></tr>
+                                    <tr><td colspan="7" style="text-align: center; padding: 25px; color: #6b7280;">Loading variables...</td></tr>
                                 </tbody>
                             </table>
-                            <!-- Pagination Bar (100 per page) -->
+                            <!-- Bottom Pagination Bar (100 per page) -->
                             <div id="dash-var-pagination" class="var-pagination-wrap" style="display: none;">
                                 <div id="dash-var-page-info" style="font-weight: 500;">
                                     Showing 1–100 of 100 variables
@@ -1103,6 +1138,7 @@
             const statNumeric = document.getElementById('dash-var-stat-numeric');
             const statOther = document.getElementById('dash-var-stat-other');
             const paginationBar = document.getElementById('dash-var-pagination');
+            const paginationBarTop = document.getElementById('dash-var-pagination-top');
 
             if (!forceRefresh && cachedVariablesData) {
                 renderVariablesTable(cachedVariablesData);
@@ -1110,10 +1146,11 @@
             }
 
             if (paginationBar) paginationBar.style.display = 'none';
+            if (paginationBarTop) paginationBarTop.style.display = 'none';
             if (tableBody) {
                 tableBody.innerHTML = `
                     <tr>
-                        <td colspan="6" style="text-align: center; padding: 40px 20px; color: #4b5563;">
+                        <td colspan="7" style="text-align: center; padding: 40px 20px; color: #4b5563;">
                             <div style="display: inline-flex; align-items: center; gap: 10px; font-weight: 500; font-size: 0.95rem;">
                                 <span class="var-spinner"></span>
                                 <span>Loading CDIF variables from Elasticsearch...</span>
@@ -1136,7 +1173,7 @@
             } catch (err) {
                 console.error('Error fetching CDIF variables:', err);
                 if (tableBody) {
-                    tableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 25px; color: #dc3545;">Error loading variables: ${escapeHtml(err.message)}</td></tr>`;
+                    tableBody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 25px; color: #dc3545;">Error loading variables: ${escapeHtml(err.message)}</td></tr>`;
                 }
                 if (countBadge) countBadge.textContent = 'Error';
             }
@@ -1152,6 +1189,7 @@
             const statNumeric = document.getElementById('dash-var-stat-numeric');
             const statOther = document.getElementById('dash-var-stat-other');
             const paginationBar = document.getElementById('dash-var-pagination');
+            const paginationBarTop = document.getElementById('dash-var-pagination-top');
 
             const vars = (data && data.variables) ? data.variables : [];
             const totalFiles = (data && data.total_files !== undefined) ? data.total_files : 0;
@@ -1177,6 +1215,7 @@
             if (vars.length === 0) {
                 if (tableContainer) tableContainer.style.display = 'none';
                 if (paginationBar) paginationBar.style.display = 'none';
+                if (paginationBarTop) paginationBarTop.style.display = 'none';
                 if (emptyBox) emptyBox.style.display = 'block';
                 return;
             }
@@ -1202,6 +1241,7 @@
                        (v.display_label || '').toLowerCase().includes(query) ||
                        (v.data_type || '').toLowerCase().includes(query) ||
                        (v.file_name || '').toLowerCase().includes(query) ||
+                       (v.dataset_title || '').toLowerCase().includes(query) ||
                        (v.description || '').toLowerCase().includes(query);
             }) : allVars;
 
@@ -1231,12 +1271,16 @@
             const paginationBar = document.getElementById('dash-var-pagination');
             const pageInfo = document.getElementById('dash-var-page-info');
             const pageControls = document.getElementById('dash-var-page-controls');
+            const paginationBarTop = document.getElementById('dash-var-pagination-top');
+            const pageInfoTop = document.getElementById('dash-var-page-info-top');
+            const pageControlsTop = document.getElementById('dash-var-page-controls-top');
             if (!tableBody) return;
 
             const total = filteredVariablesList.length;
             if (total === 0) {
-                tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 25px; color: #6b7280;">No variables match your search filter.</td></tr>';
+                tableBody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 25px; color: #6b7280;">No variables match your search filter.</td></tr>';
                 if (paginationBar) paginationBar.style.display = 'none';
+                if (paginationBarTop) paginationBarTop.style.display = 'none';
                 return;
             }
 
@@ -1264,6 +1308,18 @@
                 const unit = v.unit ? escapeHtml(v.unit) : '<span style="color: #9ca3af;">—</span>';
                 const fileName = escapeHtml(v.file_name || 'Tabular File');
                 const fileLink = v.file_url ? `<a href="${escapeHtml(v.file_url)}" target="_blank" rel="noopener noreferrer" style="color: #4b5563; text-decoration: none;" title="${fileName}">${fileName}</a>` : fileName;
+                
+                // Dataset Download / Vault button with download pictogram; title visible only on hover tooltip
+                let datasetVaultLink = '<span style="color: #9ca3af;">—</span>';
+                const rawTitle = v.dataset_title || (v.dataset_url ? v.dataset_url.replace(/^https?:\/\/doi\.org\//, 'doi:') : 'Dataverse Dataset');
+                const dsEscapedTitle = escapeHtml(rawTitle);
+
+                if (v.dataset_id) {
+                    datasetVaultLink = `<a href="/vault/doc/${encodeURIComponent(v.dataset_id)}" target="_blank" rel="noopener noreferrer" style="display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 6px; background: #f3f4f6; color: #0969da; border: 1px solid #d1d5db; transition: all 0.15s ease;" title="${dsEscapedTitle}" onmouseover="this.style.background='#e5edff'; this.style.borderColor='#93c5fd';" onmouseout="this.style.background='#f3f4f6'; this.style.borderColor='#d1d5db';"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></a>`;
+                } else if (v.dataset_url) {
+                    datasetVaultLink = `<a href="${escapeHtml(v.dataset_url)}" target="_blank" rel="noopener noreferrer" style="display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 6px; background: #f3f4f6; color: #0969da; border: 1px solid #d1d5db; transition: all 0.15s ease;" title="${dsEscapedTitle}" onmouseover="this.style.background='#e5edff'; this.style.borderColor='#93c5fd';" onmouseout="this.style.background='#f3f4f6'; this.style.borderColor='#d1d5db';"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></a>`;
+                }
+
                 const cdifLink = v.cdif_export_url ? `<a href="${escapeHtml(v.cdif_export_url)}" target="_blank" rel="noopener noreferrer" style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 0.78rem; font-weight: 500; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; border-radius: 4px; text-decoration: none;" title="Open CDIF JSON-LD for this file"><span>CDIF</span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></a>` : '<span style="color: #9ca3af;">—</span>';
 
                 rowsHtml += `
@@ -1273,6 +1329,7 @@
                         <td><span class="var-type-badge ${typeClass}">${escapeHtml(v.data_type || 'unspecified')}</span></td>
                         <td>${unit}</td>
                         <td style="max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${fileLink}</td>
+                        <td style="text-align: center;">${datasetVaultLink}</td>
                         <td style="text-align: center;">${cdifLink}</td>
                     </tr>
                 `;
@@ -1280,33 +1337,93 @@
 
             tableBody.innerHTML = rowsHtml;
 
-            // Render Pagination bar
+            // Render Pagination controls (both top and bottom)
+            const showingText = `Showing ${(startIndex + 1).toLocaleString()}–${endIndex.toLocaleString()} of ${total.toLocaleString()} variables (Page ${currentVarPage} of ${totalPages})`;
+
+            let ctrlHtml = `
+                <button class="var-page-btn" onclick="goToVarPage(1)" ${currentVarPage === 1 ? 'disabled' : ''} title="First page">&laquo; First</button>
+                <button class="var-page-btn" onclick="changeVarPage(-1)" ${currentVarPage === 1 ? 'disabled' : ''} title="Previous page">&lsaquo; Prev</button>
+            `;
+
+            // Page numbers window (up to 5 pages around current)
+            let startP = Math.max(1, currentVarPage - 2);
+            let endP = Math.min(totalPages, startP + 4);
+            if (endP - startP < 4) {
+                startP = Math.max(1, endP - 4);
+            }
+
+            for (let p = startP; p <= endP; p++) {
+                ctrlHtml += `<button class="var-page-btn ${p === currentVarPage ? 'active' : ''}" onclick="goToVarPage(${p})">${p}</button>`;
+            }
+
+            ctrlHtml += `
+                <button class="var-page-btn" onclick="changeVarPage(1)" ${currentVarPage === totalPages ? 'disabled' : ''} title="Next page">Next &rsaquo;</button>
+                <button class="var-page-btn" onclick="goToVarPage(${totalPages})" ${currentVarPage === totalPages ? 'disabled' : ''} title="Last page">Last &raquo;</button>
+            `;
+
             if (paginationBar && pageInfo && pageControls) {
                 paginationBar.style.display = 'flex';
-                pageInfo.textContent = `Showing ${(startIndex + 1).toLocaleString()}–${endIndex.toLocaleString()} of ${total.toLocaleString()} variables (Page ${currentVarPage} of ${totalPages})`;
-
-                let ctrlHtml = `
-                    <button class="var-page-btn" onclick="goToVarPage(1)" ${currentVarPage === 1 ? 'disabled' : ''} title="First page">&laquo; First</button>
-                    <button class="var-page-btn" onclick="changeVarPage(-1)" ${currentVarPage === 1 ? 'disabled' : ''} title="Previous page">&lsaquo; Prev</button>
-                `;
-
-                // Page numbers window (up to 5 pages around current)
-                let startP = Math.max(1, currentVarPage - 2);
-                let endP = Math.min(totalPages, startP + 4);
-                if (endP - startP < 4) {
-                    startP = Math.max(1, endP - 4);
-                }
-
-                for (let p = startP; p <= endP; p++) {
-                    ctrlHtml += `<button class="var-page-btn ${p === currentVarPage ? 'active' : ''}" onclick="goToVarPage(${p})">${p}</button>`;
-                }
-
-                ctrlHtml += `
-                    <button class="var-page-btn" onclick="changeVarPage(1)" ${currentVarPage === totalPages ? 'disabled' : ''} title="Next page">Next &rsaquo;</button>
-                    <button class="var-page-btn" onclick="goToVarPage(${totalPages})" ${currentVarPage === totalPages ? 'disabled' : ''} title="Last page">Last &raquo;</button>
-                `;
-
+                pageInfo.textContent = showingText;
                 pageControls.innerHTML = ctrlHtml;
+            }
+
+            if (paginationBarTop && pageInfoTop && pageControlsTop) {
+                paginationBarTop.style.display = 'flex';
+                pageInfoTop.textContent = showingText;
+                pageControlsTop.innerHTML = ctrlHtml;
+            }
+        }
+
+        async function handleVarAskSubmit(event) {
+            event.preventDefault();
+            const input = document.getElementById('var-ask-input');
+            const btn = document.getElementById('var-ask-btn');
+            const resultBox = document.getElementById('var-qa-result');
+            const contentBox = document.getElementById('var-qa-content');
+            const query = (input ? input.value : '').trim();
+
+            if (!query) return;
+
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<span class="var-spinner" style="width: 12px; height: 12px; border-width: 1.5px; border-top-color: #fff;"></span> Analyzing...';
+            }
+
+            if (resultBox) resultBox.style.display = 'block';
+            if (contentBox) {
+                contentBox.innerHTML = '<div style="display: flex; align-items: center; gap: 8px; color: #4b5563;"><span class="var-spinner"></span> <span>Consulting AI on CDIF variable metadata...</span></div>';
+            }
+
+            try {
+                const res = await fetch(`/api/collections/${colId}/variables/ask`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({query: query})
+                });
+
+                if (!res.ok) {
+                    throw new Error(`Server returned status ${res.status}`);
+                }
+
+                const data = await res.json();
+                const answerText = data.answer || 'No response returned from the model.';
+
+                if (contentBox) {
+                    if (typeof marked !== 'undefined') {
+                        contentBox.innerHTML = marked.parse(answerText);
+                    } else {
+                        contentBox.innerText = answerText;
+                    }
+                }
+            } catch (err) {
+                if (contentBox) {
+                    contentBox.innerHTML = `<span style="color: #dc3545;">Error analyzing variables: ${escapeHtml(err.message)}</span>`;
+                }
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> <span>Ask</span>';
+                }
             }
         }
 

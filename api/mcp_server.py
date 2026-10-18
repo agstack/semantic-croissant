@@ -7226,7 +7226,7 @@ Please answer the question based ONLY on the context provided above (including t
                     "query": {"term": {"collection_id": cid}},
                     "size": 1000,
                     "_source": [
-                        "file_name", "file_url", "dataset_url", "cdif_export_url",
+                        "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url",
                         "cdif_jsonld.DDICDIModels.@type",
                         "cdif_jsonld.DDICDIModels.name",
                         "cdif_jsonld.DDICDIModels.displayLabel",
@@ -7245,11 +7245,35 @@ Please answer the question based ONLY on the context provided above (including t
                     all_variables = []
                     files_summary = []
 
+                    # Batch fetch dataset names from croissant,trump indices for all unique dataset_ids
+                    unique_dids = list(set(h.get("_source", {}).get("dataset_id") for h in hits if h.get("_source", {}).get("dataset_id")))
+                    dataset_titles = {}
+                    if unique_dids:
+                        try:
+                            ds_resp = await client.post(
+                                f"{es_url}/croissant,trump/_search",
+                                json={
+                                    "query": {"ids": {"values": unique_dids}},
+                                    "size": len(unique_dids),
+                                    "_source": ["name", "title"]
+                                },
+                                timeout=10.0
+                            )
+                            if ds_resp.status_code == 200:
+                                for dh in ds_resp.json().get("hits", {}).get("hits", []):
+                                    did_key = dh.get("_id")
+                                    dsrc = dh.get("_source", {})
+                                    dataset_titles[did_key] = dsrc.get("name") or dsrc.get("title") or ""
+                        except Exception as ds_err:
+                            print(f"Warning: could not batch fetch dataset titles: {ds_err}", file=sys.stderr)
+
                     for h in hits:
                         src = h.get("_source", {})
                         fname = src.get("file_name", "")
                         furl = src.get("file_url", "")
                         durl = src.get("dataset_url", "")
+                        did = src.get("dataset_id", "")
+                        dtitle = dataset_titles.get(did, "") or src.get("title", "") or ""
                         cdif_url = src.get("cdif_export_url", "")
                         cdif_json = src.get("cdif_jsonld", {})
                         models = cdif_json.get("DDICDIModels", [])
@@ -7286,6 +7310,8 @@ Please answer the question based ONLY on the context provided above (including t
                                     "file_name": fname,
                                     "file_url": furl,
                                     "dataset_url": durl,
+                                    "dataset_id": did,
+                                    "dataset_title": dtitle,
                                     "cdif_export_url": cdif_url
                                 })
 
@@ -7293,6 +7319,8 @@ Please answer the question based ONLY on the context provided above (including t
                             "file_name": fname,
                             "file_url": furl,
                             "dataset_url": durl,
+                            "dataset_id": did,
+                            "dataset_title": dtitle,
                             "cdif_export_url": cdif_url,
                             "variables_count": file_var_count
                         })
@@ -7308,6 +7336,136 @@ Please answer the question based ONLY on the context provided above (including t
                 import traceback
                 traceback.print_exc()
                 return JSONResponse({"error": str(e), "collection_id": cid, "total_variables": 0, "variables": []}, status_code=500)
+
+        async def api_collections_variables_ask(request):
+            """
+            Answers questions specifically about CDIF tabular variables in a collection
+            using Ollama LLM, providing relevant variable names, types, descriptions, files, and links.
+            """
+            import httpx, json, os
+            from starlette.responses import JSONResponse
+
+            cid = request.path_params["id"]
+            body = await request.json()
+            query = body.get("query", "").strip()
+
+            if not query:
+                return JSONResponse({"answer": "Please provide a question about the variables."})
+
+            # Retrieve cached or extracted variables from ES cdif index
+            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            payload = {
+                "query": {"term": {"collection_id": cid}},
+                "size": 1000,
+                "_source": [
+                    "file_name", "file_url", "dataset_url", "cdif_export_url",
+                    "cdif_jsonld.DDICDIModels.@type",
+                    "cdif_jsonld.DDICDIModels.name",
+                    "cdif_jsonld.DDICDIModels.displayLabel",
+                    "cdif_jsonld.DDICDIModels.physicalDataType",
+                    "cdif_jsonld.DDICDIModels.dct:description",
+                    "cdif_jsonld.DDICDIModels.definition",
+                    "cdif_jsonld.DDICDIModels.schema:unitText"
+                ]
+            }
+
+            all_vars = []
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(f"{es_url}/cdif/_search", json=payload)
+                    if resp.status_code == 200:
+                        hits = resp.json().get("hits", {}).get("hits", [])
+                        for h in hits:
+                            src = h.get("_source", {})
+                            fname = src.get("file_name", "")
+                            furl = src.get("file_url", "")
+                            curl = src.get("cdif_export_url", "")
+                            models = src.get("cdif_jsonld", {}).get("DDICDIModels", [])
+                            for m in models:
+                                if isinstance(m, dict) and m.get("@type") == "InstanceVariable":
+                                    raw_name = m.get("name", {})
+                                    vname = raw_name.get("name", "") if isinstance(raw_name, dict) else str(raw_name or "")
+                                    raw_disp = m.get("displayLabel", {})
+                                    loc_var = raw_disp.get("locationVariant", {}) if isinstance(raw_disp, dict) else {}
+                                    dlabel = loc_var.get("entryValue", "") if isinstance(loc_var, dict) else str(loc_var or "")
+                                    raw_dt = m.get("physicalDataType", {})
+                                    dt = raw_dt.get("entryValue", "") if isinstance(raw_dt, dict) else str(raw_dt or "")
+                                    desc = m.get("dct:description") or ""
+                                    if not desc:
+                                        raw_def = m.get("definition", {})
+                                        desc = raw_def.get("content", "") if isinstance(raw_def, dict) else str(raw_def or "")
+                                    unit = m.get("schema:unitText") or ""
+                                    all_vars.append({
+                                        "name": vname,
+                                        "label": dlabel or vname,
+                                        "type": dt or "string",
+                                        "description": desc,
+                                        "unit": unit,
+                                        "file": fname,
+                                        "cdif_url": curl
+                                    })
+            except Exception as e:
+                print(f"Error querying ES for variables ask: {e}")
+
+            if not all_vars:
+                return JSONResponse({
+                    "answer": "No CDIF tabular variables found in this collection yet. Click **'Analyze'** to index tabular files (CSV, STATA, Excel) and generate CDIF variables."
+                })
+
+            # Pre-filter variables with fuzzy/keyword search if the pool is large
+            q_tokens = [w.lower() for w in query.split() if len(w) > 2]
+            scored_vars = []
+            for v in all_vars:
+                haystack = f"{v['name']} {v['label']} {v['description']} {v['type']} {v['unit']} {v['file']}".lower()
+                matches = sum(1 for tok in q_tokens if tok in haystack)
+                scored_vars.append((matches, v))
+
+            scored_vars.sort(key=lambda x: x[0], reverse=True)
+            # Select top relevant variables, up to 150 to keep prompt well within context window
+            context_vars = [item[1] for item in scored_vars[:150]]
+
+            # Build readable variables context for the LLM
+            var_lines = []
+            for v in context_vars:
+                desc_part = f" - Description: {v['description']}" if v['description'] else ""
+                unit_part = f" [{v['unit']}]" if v['unit'] else ""
+                var_lines.append(f"- **{v['name']}** ({v['label']}): type={v['type']}{unit_part}, file={v['file']}{desc_part} (CDIF: {v['cdif_url']})")
+            vars_context = "\n".join(var_lines)
+
+            system_prompt = f"""You are an expert Research Data Assistant and Ontologist.
+The user is asking a question specifically about the tabular data variables extracted from distribution files and modeled in CDIF (DDI-CDI JSON-LD) in this collection.
+Total variables in collection: {len(all_vars)}.
+Relevant variables context:
+{vars_context}
+
+Instructions:
+1. Answer the user's question clearly and accurately based on the provided variables metadata.
+2. If asking for a list of variables (e.g. geospatial, demographics, time-series, economic, etc.), categorize or list them clearly in a Markdown table or bullet points with their Variable Name, Label, Data Type, and Source File.
+3. Include links to the CDIF export where available.
+4. If no exact match is found, highlight the closest related variables and advise how to search or analyze further."""
+
+            ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
+            if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
+                ollama_url = "http://10.147.18.82:11435"
+            model = os.environ.get("MODEL", "gemma4:31b-cloud")
+            ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
+            req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
+
+            try:
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    resp = await client.post(f"{ollama_url}/api/chat", json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": query}
+                        ],
+                        "stream": False
+                    }, headers=req_headers)
+                    resp_json = resp.json()
+                    answer = resp_json.get("message", {}).get("content", "") or f"Unable to generate response. Status: {resp.status_code}"
+                    return JSONResponse({"answer": answer})
+            except Exception as err:
+                return JSONResponse({"answer": f"Error querying AI model for variables: {str(err)}"})
 
         async def api_collections_delete(request):
 
@@ -8293,6 +8451,7 @@ Output a JSON object with:
                 Route("/api/collections/{id}/export", endpoint=api_collections_export_croissant, methods=["GET"]),
                 Route("/api/collections/{id}/analyze", endpoint=api_collections_analyze, methods=["GET", "POST"]),
                 Route("/api/collections/{id}/variables", endpoint=api_collections_variables, methods=["GET"]),
+                Route("/api/collections/{id}/variables/ask", endpoint=api_collections_variables_ask, methods=["POST"]),
                 Route("/api/collections/{id}/ask", endpoint=api_collections_ask, methods=["POST"]),
                 Route("/api/collectionsindex/ask", endpoint=api_collections_index_ask, methods=["POST"]),
                 Route("/collections/{es_id}", endpoint=collection_es_doc_html),
