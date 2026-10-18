@@ -154,6 +154,41 @@
             gap: 8px;
             flex-wrap: wrap;
         }
+        .dash-toggle-group {
+            display: inline-flex;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            overflow: hidden;
+            background: #f6f8fa;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+            margin: 0 4px;
+        }
+        .dash-toggle-btn {
+            border: none;
+            background: transparent;
+            padding: 6px 14px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: #57606a;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.15s ease;
+        }
+        .dash-toggle-btn:not(:last-child) {
+            border-right: 1px solid #d0d7de;
+        }
+        .dash-toggle-btn:hover {
+            background: #eaeef2;
+            color: #24292f;
+        }
+        .dash-toggle-btn.active {
+            background: #ffffff;
+            color: #0969da;
+            font-weight: 600;
+            box-shadow: inset 0 -2px 0 #0969da;
+        }
         .dash-tool-btn {
             display: inline-flex;
             align-items: center;
@@ -177,6 +212,112 @@
             background: #008855;
             color: #ffffff;
             border-color: #008855;
+        }
+        .variables-card {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 22px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        }
+        .variables-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 0.88rem;
+        }
+        .variables-table th {
+            background: #f9fafb;
+            color: #4b5563;
+            font-weight: 600;
+            padding: 10px 14px;
+            text-align: left;
+            border-bottom: 2px solid #e5e7eb;
+            font-size: 0.82rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .variables-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid #f3f4f6;
+            color: #1f2937;
+            vertical-align: middle;
+        }
+        .variables-table tr:hover td {
+            background: #f9fafb;
+        }
+        .var-type-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            border-radius: 12px;
+            background: #eef2ff;
+            color: #4f46e5;
+            text-transform: lowercase;
+        }
+        .var-type-badge.numeric {
+            background: #ecfdf5;
+            color: #059669;
+        }
+        .var-type-badge.string {
+            background: #eff6ff;
+            color: #2563eb;
+        }
+        .var-type-badge.datetime {
+            background: #fef3c7;
+            color: #d97706;
+        }
+        .var-pagination-wrap {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: #f9fafb;
+            border-top: 1px solid #e5e7eb;
+            flex-wrap: wrap;
+            gap: 10px;
+            font-size: 0.85rem;
+            color: #4b5563;
+        }
+        .var-page-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 5px 12px;
+            background: #ffffff;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            font-size: 0.82rem;
+            color: #24292f;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .var-page-btn:hover:not(:disabled) {
+            background: #f3f4f6;
+            border-color: #9ca3af;
+        }
+        .var-page-btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+        .var-page-btn.active {
+            background: #0969da;
+            color: #ffffff;
+            border-color: #0969da;
+            font-weight: 600;
+        }
+        .var-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(9, 105, 218, 0.2);
+            border-radius: 50%;
+            border-top-color: #0969da;
+            animation: var-spin 0.8s linear infinite;
+        }
+        @keyframes var-spin {
+            to { transform: rotate(360deg); }
         }
         .dashboard-grid {
             display: grid;
@@ -402,6 +543,11 @@
         let currentCollectionData = null;
         let currentSubcollectionsData = [];
         let currentViewMode = 'cards';
+        let currentDashboardTab = 'metadata';
+        let cachedVariablesData = null;
+        let currentVarPage = 1;
+        const varPageSize = 100;
+        let filteredVariablesList = [];
         let trendsChartInstance = null;
         let sectorsChartInstance = null;
         let shareOfVoiceChartInstance = null;
@@ -520,6 +666,10 @@
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
                             📊 Dashboard
                         </button>
+                        <button id="btn-view-variables" class="view-btn" onclick="switchCollectionView('variables')">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><circle cx="18" cy="17" r="2"/></svg>
+                            📋 Variables
+                        </button>
                     </div>
 
                     <div style="display: flex; align-items: center; gap: 5px; margin-left: 15px;">
@@ -541,7 +691,7 @@
                         </div>
                         <div class="dashboard-toolbar">
                             <button class="dash-tool-btn" onclick="saveDashboardState()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg> Save</button>
-                            <button class="dash-tool-btn" onclick="renderCollectionDashboard(currentCollectionData, currentSubcollectionsData)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg> Refresh</button>
+                            <button class="dash-tool-btn" onclick="handleDashboardRefresh()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg> Refresh</button>
                             <button class="dash-tool-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg> Create Social Panel</button>
                             <button class="dash-tool-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg> Date Range</button>
                             <button class="dash-tool-btn" onclick="exportDashboardPNG()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg> Export</button>
@@ -612,6 +762,90 @@
                             </div>
                             <div class="chart-canvas-wrap" style="align-items: stretch;">
                                 <div id="word-cloud-display" class="word-cloud-container"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Variables View from CDIF (shown when 'Variables' view is selected) -->
+                <div id="variables-view" class="dashboard-container" style="display: none;">
+                    <div class="variables-card">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 15px;">
+                            <div>
+                                <h3 style="margin: 0; font-size: 1.15rem; font-weight: 700; color: #111827; display: flex; align-items: center; gap: 8px;">
+                                    <span>📋 CDIF Tabular Variables</span>
+                                    <span id="dash-var-count-badge" style="font-size: 0.78rem; font-weight: 600; padding: 2px 8px; border-radius: 12px; background: #e0f2fe; color: #0284c7;">Loading...</span>
+                                </h3>
+                                <div style="font-size: 0.82rem; color: #6b7280; margin-top: 4px;">
+                                    Variables extracted from tabular distribution files (CSV, STATA, Excel, TSV) and modeled in CDIF DDI-CDI format.
+                                </div>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <button class="dash-tool-btn" onclick="loadAndRenderVariables(true)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg> Refresh</button>
+                                <input type="text" id="dash-var-search" placeholder="Search variables, files, or types..." oninput="filterDashboardVariables()" style="padding: 6px 12px; font-size: 0.85rem; border: 1px solid #d1d5db; border-radius: 6px; width: 260px; outline: none;">
+                            </div>
+                        </div>
+
+                        <!-- Variables Stats Cards -->
+                        <div id="dash-var-stats-bar" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px;">
+                            <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px;">
+                                <div style="font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600;">Total Variables</div>
+                                <div id="dash-var-stat-total" style="font-size: 1.4rem; font-weight: 700; color: #0969da; margin-top: 2px;">-</div>
+                            </div>
+                            <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px;">
+                                <div style="font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600;">Tabular Files</div>
+                                <div id="dash-var-stat-files" style="font-size: 1.4rem; font-weight: 700; color: #10b981; margin-top: 2px;">-</div>
+                            </div>
+                            <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px;">
+                                <div style="font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600;">Numeric Variables</div>
+                                <div id="dash-var-stat-numeric" style="font-size: 1.4rem; font-weight: 700; color: #6366f1; margin-top: 2px;">-</div>
+                            </div>
+                            <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px;">
+                                <div style="font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600;">Text / Other</div>
+                                <div id="dash-var-stat-other" style="font-size: 1.4rem; font-weight: 700; color: #8b5cf6; margin-top: 2px;">-</div>
+                            </div>
+                        </div>
+
+                        <!-- Variables Table / Empty Container -->
+                        <div id="dash-var-table-container" style="overflow-x: auto; border: 1px solid #e5e7eb; border-radius: 8px;">
+                            <table class="variables-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 22%;">Variable Name</th>
+                                        <th style="width: 20%;">Display Label</th>
+                                        <th style="width: 12%;">Data Type</th>
+                                        <th style="width: 12%;">Unit</th>
+                                        <th style="width: 22%;">Source File</th>
+                                        <th style="width: 12%; text-align: center;">CDIF Export</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dash-var-table-body">
+                                    <tr><td colspan="6" style="text-align: center; padding: 25px; color: #6b7280;">Loading variables...</td></tr>
+                                </tbody>
+                            </table>
+                            <!-- Pagination Bar (100 per page) -->
+                            <div id="dash-var-pagination" class="var-pagination-wrap" style="display: none;">
+                                <div id="dash-var-page-info" style="font-weight: 500;">
+                                    Showing 1–100 of 100 variables
+                                </div>
+                                <div id="dash-var-page-controls" style="display: flex; align-items: center; gap: 6px;">
+                                    <!-- Buttons generated dynamically -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Empty state / Call to Analyze -->
+                        <div id="dash-var-empty" style="display: none; text-align: center; padding: 45px 20px; background: #f9fafb; border: 1px dashed #d1d5db; border-radius: 8px; margin-top: 15px;">
+                            <div style="font-size: 2.2rem; margin-bottom: 10px;">🔬</div>
+                            <h4 style="margin: 0 0 8px 0; color: #111827; font-size: 1.1rem;">No CDIF Variables Found Yet</h4>
+                            <p style="margin: 0 0 18px 0; color: #6b7280; font-size: 0.9rem; max-width: 500px; display: inline-block;">
+                                This collection contains tabular distribution files that haven't been analyzed yet. Run collection analysis to extract and index variable metadata into CDIF.
+                            </p>
+                            <div>
+                                <button onclick="openAnalyzeModal()" style="padding: 8px 18px; background: #007bff; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; display: inline-flex; align-items: center; gap: 6px;">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                                    Analyze Collection Now
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -818,22 +1052,261 @@
             currentViewMode = mode;
             const btnCards = document.getElementById('btn-view-cards');
             const btnDash = document.getElementById('btn-view-dashboard');
+            const btnVars = document.getElementById('btn-view-variables');
             const cardsView = document.getElementById('standard-materials-view');
             const dashView = document.getElementById('dashboard-view');
+            const varsView = document.getElementById('variables-view');
 
-            if (!cardsView || !dashView) return;
+            if (btnCards) btnCards.classList.remove('active');
+            if (btnDash) btnDash.classList.remove('active');
+            if (btnVars) btnVars.classList.remove('active');
+
+            if (cardsView) cardsView.style.display = 'none';
+            if (dashView) dashView.style.display = 'none';
+            if (varsView) varsView.style.display = 'none';
 
             if (mode === 'dashboard') {
-                if (btnCards) btnCards.classList.remove('active');
                 if (btnDash) btnDash.classList.add('active');
-                cardsView.style.display = 'none';
-                dashView.style.display = 'block';
+                if (dashView) dashView.style.display = 'block';
                 renderCollectionDashboard(currentCollectionData, currentSubcollectionsData);
+            } else if (mode === 'variables') {
+                if (btnVars) btnVars.classList.add('active');
+                if (varsView) varsView.style.display = 'block';
+                loadAndRenderVariables(false);
             } else {
-                if (btnDash) btnDash.classList.remove('active');
                 if (btnCards) btnCards.classList.add('active');
-                dashView.style.display = 'none';
-                cardsView.style.display = 'block';
+                if (cardsView) cardsView.style.display = 'block';
+            }
+        }
+
+        function handleDashboardRefresh() {
+            renderCollectionDashboard(currentCollectionData, currentSubcollectionsData);
+        }
+
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        async function loadAndRenderVariables(forceRefresh = false) {
+            const tableBody = document.getElementById('dash-var-table-body');
+            const tableContainer = document.getElementById('dash-var-table-container');
+            const emptyBox = document.getElementById('dash-var-empty');
+            const countBadge = document.getElementById('dash-var-count-badge');
+            const statTotal = document.getElementById('dash-var-stat-total');
+            const statFiles = document.getElementById('dash-var-stat-files');
+            const statNumeric = document.getElementById('dash-var-stat-numeric');
+            const statOther = document.getElementById('dash-var-stat-other');
+            const paginationBar = document.getElementById('dash-var-pagination');
+
+            if (!forceRefresh && cachedVariablesData) {
+                renderVariablesTable(cachedVariablesData);
+                return;
+            }
+
+            if (paginationBar) paginationBar.style.display = 'none';
+            if (tableBody) {
+                tableBody.innerHTML = `
+                    <tr>
+                        <td colspan="6" style="text-align: center; padding: 40px 20px; color: #4b5563;">
+                            <div style="display: inline-flex; align-items: center; gap: 10px; font-weight: 500; font-size: 0.95rem;">
+                                <span class="var-spinner"></span>
+                                <span>Loading CDIF variables from Elasticsearch...</span>
+                            </div>
+                            <div style="font-size: 0.8rem; color: #8c939f; margin-top: 6px;">Extracting and organizing variable metadata across tabular distribution files</div>
+                        </td>
+                    </tr>
+                `;
+            }
+            if (countBadge) countBadge.innerHTML = '<span class="var-spinner" style="width: 10px; height: 10px; border-width: 1.5px; vertical-align: middle; margin-right: 4px;"></span> Loading...';
+
+            try {
+                const res = await fetch(`/api/collections/${colId}/variables`);
+                if (!res.ok) {
+                    throw new Error(`Failed to load variables: ${res.status}`);
+                }
+                const data = await res.json();
+                cachedVariablesData = data;
+                renderVariablesTable(data);
+            } catch (err) {
+                console.error('Error fetching CDIF variables:', err);
+                if (tableBody) {
+                    tableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 25px; color: #dc3545;">Error loading variables: ${escapeHtml(err.message)}</td></tr>`;
+                }
+                if (countBadge) countBadge.textContent = 'Error';
+            }
+        }
+
+        function renderVariablesTable(data) {
+            const tableBody = document.getElementById('dash-var-table-body');
+            const tableContainer = document.getElementById('dash-var-table-container');
+            const emptyBox = document.getElementById('dash-var-empty');
+            const countBadge = document.getElementById('dash-var-count-badge');
+            const statTotal = document.getElementById('dash-var-stat-total');
+            const statFiles = document.getElementById('dash-var-stat-files');
+            const statNumeric = document.getElementById('dash-var-stat-numeric');
+            const statOther = document.getElementById('dash-var-stat-other');
+            const paginationBar = document.getElementById('dash-var-pagination');
+
+            const vars = (data && data.variables) ? data.variables : [];
+            const totalFiles = (data && data.total_files !== undefined) ? data.total_files : 0;
+            const totalVars = (data && data.total_variables !== undefined) ? data.total_variables : vars.length;
+
+            if (countBadge) countBadge.textContent = `${totalVars.toLocaleString()} variables (${totalFiles} files)`;
+            if (statTotal) statTotal.textContent = totalVars.toLocaleString();
+            if (statFiles) statFiles.textContent = totalFiles.toLocaleString();
+
+            let numCount = 0;
+            let otherCount = 0;
+            vars.forEach(v => {
+                const dt = (v.data_type || '').toLowerCase();
+                if (dt.includes('numeric') || dt.includes('int') || dt.includes('float') || dt.includes('double')) {
+                    numCount++;
+                } else {
+                    otherCount++;
+                }
+            });
+            if (statNumeric) statNumeric.textContent = numCount.toLocaleString();
+            if (statOther) statOther.textContent = otherCount.toLocaleString();
+
+            if (vars.length === 0) {
+                if (tableContainer) tableContainer.style.display = 'none';
+                if (paginationBar) paginationBar.style.display = 'none';
+                if (emptyBox) emptyBox.style.display = 'block';
+                return;
+            }
+
+            if (emptyBox) emptyBox.style.display = 'none';
+            if (tableContainer) tableContainer.style.display = 'block';
+
+            currentVarPage = 1;
+            filterDashboardVariables();
+        }
+
+        function filterDashboardVariables() {
+            const tableBody = document.getElementById('dash-var-table-body');
+            const paginationBar = document.getElementById('dash-var-pagination');
+            if (!tableBody || !cachedVariablesData) return;
+
+            const searchInput = document.getElementById('dash-var-search');
+            const query = (searchInput ? searchInput.value.trim().toLowerCase() : '');
+            const allVars = cachedVariablesData.variables || [];
+
+            filteredVariablesList = query ? allVars.filter(v => {
+                return (v.variable_name || '').toLowerCase().includes(query) ||
+                       (v.display_label || '').toLowerCase().includes(query) ||
+                       (v.data_type || '').toLowerCase().includes(query) ||
+                       (v.file_name || '').toLowerCase().includes(query) ||
+                       (v.description || '').toLowerCase().includes(query);
+            }) : allVars;
+
+            currentVarPage = 1;
+            renderVariablesPage();
+        }
+
+        function changeVarPage(delta) {
+            const totalPages = Math.ceil(filteredVariablesList.length / varPageSize) || 1;
+            const newPage = currentVarPage + delta;
+            if (newPage >= 1 && newPage <= totalPages) {
+                currentVarPage = newPage;
+                renderVariablesPage();
+            }
+        }
+
+        function goToVarPage(page) {
+            const totalPages = Math.ceil(filteredVariablesList.length / varPageSize) || 1;
+            if (page >= 1 && page <= totalPages) {
+                currentVarPage = page;
+                renderVariablesPage();
+            }
+        }
+
+        function renderVariablesPage() {
+            const tableBody = document.getElementById('dash-var-table-body');
+            const paginationBar = document.getElementById('dash-var-pagination');
+            const pageInfo = document.getElementById('dash-var-page-info');
+            const pageControls = document.getElementById('dash-var-page-controls');
+            if (!tableBody) return;
+
+            const total = filteredVariablesList.length;
+            if (total === 0) {
+                tableBody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 25px; color: #6b7280;">No variables match your search filter.</td></tr>';
+                if (paginationBar) paginationBar.style.display = 'none';
+                return;
+            }
+
+            const totalPages = Math.ceil(total / varPageSize) || 1;
+            if (currentVarPage > totalPages) currentVarPage = totalPages;
+            if (currentVarPage < 1) currentVarPage = 1;
+
+            const startIndex = (currentVarPage - 1) * varPageSize;
+            const endIndex = Math.min(startIndex + varPageSize, total);
+            const pageItems = filteredVariablesList.slice(startIndex, endIndex);
+
+            let rowsHtml = '';
+            pageItems.forEach(v => {
+                const rawType = (v.data_type || 'string').toLowerCase();
+                let typeClass = 'string';
+                if (rawType.includes('numeric') || rawType.includes('int') || rawType.includes('float') || rawType.includes('double')) {
+                    typeClass = 'numeric';
+                } else if (rawType.includes('date') || rawType.includes('time')) {
+                    typeClass = 'datetime';
+                }
+
+                const varName = escapeHtml(v.variable_name || '');
+                const displayLabel = escapeHtml(v.display_label || varName);
+                const desc = v.description && v.description !== v.variable_name ? `<div style="font-size: 0.78rem; color: #6b7280; margin-top: 2px;">${escapeHtml(v.description)}</div>` : '';
+                const unit = v.unit ? escapeHtml(v.unit) : '<span style="color: #9ca3af;">—</span>';
+                const fileName = escapeHtml(v.file_name || 'Tabular File');
+                const fileLink = v.file_url ? `<a href="${escapeHtml(v.file_url)}" target="_blank" rel="noopener noreferrer" style="color: #4b5563; text-decoration: none;" title="${fileName}">${fileName}</a>` : fileName;
+                const cdifLink = v.cdif_export_url ? `<a href="${escapeHtml(v.cdif_export_url)}" target="_blank" rel="noopener noreferrer" style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 0.78rem; font-weight: 500; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; border-radius: 4px; text-decoration: none;" title="Open CDIF JSON-LD for this file"><span>CDIF</span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></a>` : '<span style="color: #9ca3af;">—</span>';
+
+                rowsHtml += `
+                    <tr>
+                        <td style="font-weight: 600; color: #111827; font-family: monospace; font-size: 0.88rem;">${varName}</td>
+                        <td>${displayLabel}${desc}</td>
+                        <td><span class="var-type-badge ${typeClass}">${escapeHtml(v.data_type || 'unspecified')}</span></td>
+                        <td>${unit}</td>
+                        <td style="max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${fileLink}</td>
+                        <td style="text-align: center;">${cdifLink}</td>
+                    </tr>
+                `;
+            });
+
+            tableBody.innerHTML = rowsHtml;
+
+            // Render Pagination bar
+            if (paginationBar && pageInfo && pageControls) {
+                paginationBar.style.display = 'flex';
+                pageInfo.textContent = `Showing ${(startIndex + 1).toLocaleString()}–${endIndex.toLocaleString()} of ${total.toLocaleString()} variables (Page ${currentVarPage} of ${totalPages})`;
+
+                let ctrlHtml = `
+                    <button class="var-page-btn" onclick="goToVarPage(1)" ${currentVarPage === 1 ? 'disabled' : ''} title="First page">&laquo; First</button>
+                    <button class="var-page-btn" onclick="changeVarPage(-1)" ${currentVarPage === 1 ? 'disabled' : ''} title="Previous page">&lsaquo; Prev</button>
+                `;
+
+                // Page numbers window (up to 5 pages around current)
+                let startP = Math.max(1, currentVarPage - 2);
+                let endP = Math.min(totalPages, startP + 4);
+                if (endP - startP < 4) {
+                    startP = Math.max(1, endP - 4);
+                }
+
+                for (let p = startP; p <= endP; p++) {
+                    ctrlHtml += `<button class="var-page-btn ${p === currentVarPage ? 'active' : ''}" onclick="goToVarPage(${p})">${p}</button>`;
+                }
+
+                ctrlHtml += `
+                    <button class="var-page-btn" onclick="changeVarPage(1)" ${currentVarPage === totalPages ? 'disabled' : ''} title="Next page">Next &rsaquo;</button>
+                    <button class="var-page-btn" onclick="goToVarPage(${totalPages})" ${currentVarPage === totalPages ? 'disabled' : ''} title="Last page">Last &raquo;</button>
+                `;
+
+                pageControls.innerHTML = ctrlHtml;
             }
         }
 

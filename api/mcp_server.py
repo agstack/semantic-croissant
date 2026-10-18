@@ -7209,6 +7209,106 @@ Please answer the question based ONLY on the context provided above (including t
                 "results": results
             })
 
+        async def api_collections_variables(request):
+            """
+            Fetches all CDIF variables (InstanceVariable) extracted from tabular files
+            for this collection from the Elasticsearch 'cdif' index.
+            """
+            from starlette.responses import JSONResponse
+            import json, httpx, os
+
+            cid = request.path_params["id"]
+            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            
+            try:
+                # Query ES 'cdif' index for this collection with selective fields
+                payload = {
+                    "query": {"term": {"collection_id": cid}},
+                    "size": 1000,
+                    "_source": [
+                        "file_name", "file_url", "dataset_url", "cdif_export_url",
+                        "cdif_jsonld.DDICDIModels.@type",
+                        "cdif_jsonld.DDICDIModels.name",
+                        "cdif_jsonld.DDICDIModels.displayLabel",
+                        "cdif_jsonld.DDICDIModels.physicalDataType",
+                        "cdif_jsonld.DDICDIModels.dct:description",
+                        "cdif_jsonld.DDICDIModels.definition",
+                        "cdif_jsonld.DDICDIModels.schema:unitText"
+                    ]
+                }
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(f"{es_url}/cdif/_search", json=payload)
+                    if resp.status_code != 200:
+                        return JSONResponse({"collection_id": cid, "total_files": 0, "total_variables": 0, "variables": [], "files": []})
+
+                    hits = resp.json().get("hits", {}).get("hits", [])
+                    all_variables = []
+                    files_summary = []
+
+                    for h in hits:
+                        src = h.get("_source", {})
+                        fname = src.get("file_name", "")
+                        furl = src.get("file_url", "")
+                        durl = src.get("dataset_url", "")
+                        cdif_url = src.get("cdif_export_url", "")
+                        cdif_json = src.get("cdif_jsonld", {})
+                        models = cdif_json.get("DDICDIModels", [])
+                        
+                        file_var_count = 0
+                        for m in models:
+                            if isinstance(m, dict) and m.get("@type") == "InstanceVariable":
+                                file_var_count += 1
+                                raw_name = m.get("name", {})
+                                var_name = raw_name.get("name", "") if isinstance(raw_name, dict) else str(raw_name or "")
+                                
+                                raw_disp = m.get("displayLabel", {})
+                                loc_var = raw_disp.get("locationVariant", {}) if isinstance(raw_disp, dict) else {}
+                                disp_label = loc_var.get("entryValue", "") if isinstance(loc_var, dict) else str(loc_var or "")
+                                if not disp_label:
+                                    disp_label = var_name
+
+                                raw_dt = m.get("physicalDataType", {})
+                                data_type = raw_dt.get("entryValue", "") if isinstance(raw_dt, dict) else str(raw_dt or "")
+                                
+                                desc = m.get("dct:description") or ""
+                                if not desc:
+                                    raw_def = m.get("definition", {})
+                                    desc = raw_def.get("content", "") if isinstance(raw_def, dict) else str(raw_def or "")
+
+                                unit = m.get("schema:unitText") or ""
+
+                                all_variables.append({
+                                    "variable_name": var_name,
+                                    "display_label": disp_label,
+                                    "data_type": data_type or "unspecified",
+                                    "description": desc,
+                                    "unit": unit,
+                                    "file_name": fname,
+                                    "file_url": furl,
+                                    "dataset_url": durl,
+                                    "cdif_export_url": cdif_url
+                                })
+
+                        files_summary.append({
+                            "file_name": fname,
+                            "file_url": furl,
+                            "dataset_url": durl,
+                            "cdif_export_url": cdif_url,
+                            "variables_count": file_var_count
+                        })
+
+                    return JSONResponse({
+                        "collection_id": cid,
+                        "total_files": len(files_summary),
+                        "total_variables": len(all_variables),
+                        "variables": all_variables,
+                        "files": files_summary
+                    })
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                return JSONResponse({"error": str(e), "collection_id": cid, "total_variables": 0, "variables": []}, status_code=500)
+
         async def api_collections_delete(request):
 
             from starlette.responses import JSONResponse
@@ -8147,11 +8247,13 @@ Output a JSON object with:
                 return JSONResponse({"detail": str(e)}, status_code=500)
         
     if transport == "sse":
+        from starlette.middleware.gzip import GZipMiddleware
         starlette_app = Starlette(
             debug=True,
             lifespan=lifespan,
             middleware=[
                 Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]),
+                Middleware(GZipMiddleware, minimum_size=1000),
                 Middleware(StripCharsetMiddleware)
             ],
             routes=[
@@ -8190,6 +8292,7 @@ Output a JSON object with:
                 Route("/api/collections/{id}/resolved", endpoint=api_collections_get_resolved, methods=["GET"]),
                 Route("/api/collections/{id}/export", endpoint=api_collections_export_croissant, methods=["GET"]),
                 Route("/api/collections/{id}/analyze", endpoint=api_collections_analyze, methods=["GET", "POST"]),
+                Route("/api/collections/{id}/variables", endpoint=api_collections_variables, methods=["GET"]),
                 Route("/api/collections/{id}/ask", endpoint=api_collections_ask, methods=["POST"]),
                 Route("/api/collectionsindex/ask", endpoint=api_collections_index_ask, methods=["POST"]),
                 Route("/collections/{es_id}", endpoint=collection_es_doc_html),
