@@ -4730,9 +4730,10 @@ Please answer the question based ONLY on the context provided above (including t
                                 "status_code": stream_resp.status_code,
                             }, status_code=502)
 
-                        # Determine filename
-                        filename = None
-                        cd = stream_resp.headers.get("content-disposition", "")
+                        # Capture response headers before stream closes
+                        resp_headers = stream_resp.headers
+                        content_type_header = resp_headers.get("content-type", "").lower()
+                        cd = resp_headers.get("content-disposition", "")
                         if "filename=" in cd or "filename*=" in cd:
                             m = re.search(r"filename\*?=['\"]?(?:UTF-8'')?([^;'\"]+)", cd)
                             if m:
@@ -4782,7 +4783,6 @@ Please answer the question based ONLY on the context provided above (including t
 
                     # If file is a spreadsheet (.xlsx, .xls, .xlsm, .ods), convert to CSV so DDI-CDI studio can process it
                     spreadsheet_exts = [".xlsx", ".xls", ".xlsm", ".ods"]
-                    content_type_header = file_resp.headers.get("content-type", "").lower()
                     is_spreadsheet = any(filename.lower().endswith(ext) for ext in spreadsheet_exts) or "excel" in content_type_header or "spreadsheet" in content_type_header
                     if is_spreadsheet:
                         converted = False
@@ -4905,7 +4905,6 @@ Please answer the question based ONLY on the context provided above (including t
 
                     # If file is an SPSS file (.por, .sav, .zsav) or Stata (.dta) / SAS (.sas7bdat), convert using pyreadstat
                     spss_exts = [".por", ".sav", ".zsav", ".dta", ".sas7bdat", ".xpt"]
-                    content_type_header = file_resp.headers.get("content-type", "").lower()
                     is_spss_or_stat = any(filename.lower().endswith(ext) for ext in spss_exts) or "spss" in content_type_header or "stata" in content_type_header
                     if is_spss_or_stat:
                         try:
@@ -5069,7 +5068,7 @@ Please answer the question based ONLY on the context provided above (including t
                             print(f"Failed to auto-convert .npy with numpy: {npy_err}")
 
                     # If file is a ZIP archive, inspect and extract the first tabular/data file
-                    if not is_npz and (filename.lower().endswith(".zip") or "zip" in file_resp.headers.get("content-type", "").lower() or file_content.startswith(b"PK\x03\x04")):
+                    if not is_npz and (filename.lower().endswith(".zip") or "zip" in content_type_header or file_content.startswith(b"PK\x03\x04")):
                         try:
                             import zipfile, struct
                             with zipfile.ZipFile(io.BytesIO(file_content)) as z:
@@ -5145,7 +5144,7 @@ Please answer the question based ONLY on the context provided above (including t
                             print(f"Failed to extract tabular data from zip: {zip_err}")
 
                     # If file is a RAR archive (.rar or starts with Rar! magic bytes)
-                    is_rar = filename.lower().endswith(".rar") or "rar" in file_resp.headers.get("content-type", "").lower() or file_content.startswith(b"Rar!\x1a\x07")
+                    is_rar = filename.lower().endswith(".rar") or "rar" in content_type_header or file_content.startswith(b"Rar!\x1a\x07")
                     if is_rar:
                         try:
                             import subprocess, tempfile, shutil
