@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CDIF Variables Registry - Semantic Croissant AI Studio</title>
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --text-color: #333333;
+            --border-color: #e0e0e0;
+            --accent-color: #1a73e8;
+            --header-bg: #f8f9fa;
+            --button-bg: #f1f3f4;
+            --sidebar-bg: #f8f9fa;
+            --panel-bg: #ffffff;
+            --user-msg-bg: #e8f0fe;
+            --bot-msg-bg: #f8f9fa;
+        }
+
+        [data-theme="dark"] {
+            --bg-color: #1a1a1a;
+            --text-color: #e0e0e0;
+            --border-color: #333333;
+            --accent-color: #8ab4f8;
+            --header-bg: #2d2d2d;
+            --button-bg: #3c4043;
+            --sidebar-bg: #202124;
+            --panel-bg: #2d2d2d;
+            --user-msg-bg: #2d3748;
+            --bot-msg-bg: #1e1e1e;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+
+        /* Header styles matching collections index */
+        .header {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 96px;
+            background: var(--bg-color);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 20px 0 0;
+            justify-content: space-between;
+            z-index: 10;
+        }
+        
+        .theme-toggle {
+            cursor: pointer;
+            background: none;
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            padding: 5px 10px;
+            border-radius: 6px;
+        }
+
+        .nav-pill:hover {
+            background: rgba(0, 0, 0, 0.06);
+            color: var(--accent-color) !important;
+        }
+        [data-theme="dark"] .nav-pill:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+        [data-theme="dark"] .top-nav-bar {
+            background: rgba(255, 255, 255, 0.04) !important;
+        }
+
+        /* Container */
+        #variables-container {
+            margin-top: 116px;
+            padding: 20px;
+            margin-bottom: 60px;
+            max-width: 1400px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .variables-card {
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 22px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        }
+
+        .variables-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 0.88rem;
+        }
+        .variables-table th {
+            background: var(--header-bg);
+            color: var(--text-color);
+            font-weight: 600;
+            padding: 10px 14px;
+            text-align: left;
+            border-bottom: 2px solid var(--border-color);
+            font-size: 0.82rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .variables-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-color);
+            vertical-align: middle;
+        }
+        .variables-table tr:hover td {
+            background: var(--user-msg-bg);
+        }
+        .var-type-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            border-radius: 12px;
+            background: #eef2ff;
+            color: #4f46e5;
+            text-transform: lowercase;
+        }
+        .var-type-badge.numeric {
+            background: #ecfdf5;
+            color: #059669;
+        }
+        .var-type-badge.string {
+            background: #eff6ff;
+            color: #2563eb;
+        }
+        .var-type-badge.datetime {
+            background: #fef3c7;
+            color: #d97706;
+        }
+        .var-pagination-wrap {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: var(--header-bg);
+            border-top: 1px solid var(--border-color);
+            flex-wrap: wrap;
+            gap: 10px;
+            font-size: 0.85rem;
+            color: var(--text-color);
+        }
+        .var-page-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 5px 12px;
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 0.82rem;
+            color: var(--text-color);
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .var-page-btn:hover:not(:disabled) {
+            background: var(--button-bg);
+            border-color: var(--accent-color);
+        }
+        .var-page-btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+        .var-page-btn.active {
+            background: var(--accent-color);
+            color: #ffffff;
+            border-color: var(--accent-color);
+            font-weight: 600;
+        }
+        .var-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(26, 115, 232, 0.2);
+            border-radius: 50%;
+            border-top-color: var(--accent-color);
+            animation: var-spin 0.8s linear infinite;
+        }
+        @keyframes var-spin {
+            to { transform: rotate(360deg); }
+        }
+        .dash-tool-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 0.85rem;
+            color: var(--text-color);
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .dash-tool-btn:hover {
+            background: var(--button-bg);
+            border-color: var(--accent-color);
+        }
+        .alpha-link {
+            text-decoration: none;
+            color: var(--accent-color);
+            padding: 3px 6px;
+            border-radius: 3px;
+            font-weight: 500;
+            font-size: 0.85rem;
+        }
+        .alpha-link:hover, .alpha-link.active {
+            background: var(--accent-color);
+            color: white !important;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <div class="header">
+        <div style="width: 274px; padding: 0; height: 100%; border-right: 1px solid var(--border-color); display: flex; align-items: center; box-sizing: border-box;">
+            {{VAULT_LOGO_HTML}}
+        </div>
+        <div style="display:flex; gap:10px; align-items:center;">
+            <nav class="top-nav-bar" style="display: flex; align-items: center; gap: 4px; background: rgba(0, 0, 0, 0.03); border: 1px solid var(--border-color); padding: 3px 6px; border-radius: 20px; font-size: 0.82rem; margin-right: 10px;">
+                <a href="/collectionsindex" id="menu-collections" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Collections</a>
+                <a href="/variableindex" id="menu-variables" class="nav-pill active" style="color: #059669; background: #ecfdf5; text-decoration: none; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><circle cx="18" cy="17" r="2"/></svg> Variables</a>
+                <a href="/groups" id="menu-groups" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg> Groups</a>
+                <a href="/#vault" id="menu-vault" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg> Vault</a>
+                <a href="/#history" id="menu-history" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> History</a>
+            </nav>
+            <button class="theme-toggle" onclick="document.getElementById('add-text-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-text-input').focus(), 50);" style="background-color: #008855; color: white; border: none; font-weight: 500;">Add text</button>
+            <button class="theme-toggle" onclick="document.getElementById('add-resource-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-resource-input').focus(), 50);" style="background-color: #006bb3; color: white; border: none; font-weight: 500;">Add resource</button>
+            <input type="text" id="global-search" placeholder="Search across all collections..." style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); width: 280px; font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') window.location.href = '/?q=' + encodeURIComponent('Search Croissant datasets for: ' + this.value)">
+            <button class="theme-toggle" onclick="window.location.href='/'" style="background-color: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); font-weight: 500;">Back to App</button>
+            {{LOGIN_BUTTON_HTML}}
+        </div>
+    </div>
+
+    <div id="variables-container">
+        <!-- Main Variables View -->
+        <div class="variables-card">
+            <!-- Header bar with Title, Live Badge, Search and AI Ask -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 15px; border-bottom: 1px solid var(--border-color); padding-bottom: 15px;">
+                <div>
+                    <h2 style="margin: 0; display: flex; align-items: center; gap: 10px; color: var(--text-color); font-size: 1.4rem;">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><circle cx="18" cy="17" r="2"/></svg>
+                        <span>CDIF Variables Registry</span>
+                        <span id="var-count-badge" style="font-size: 0.8rem; background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; padding: 2px 10px; border-radius: 12px; font-weight: 600;">
+                            <span class="var-spinner" style="width: 10px; height: 10px; border-width: 1.5px; vertical-align: middle; margin-right: 4px;"></span> Loading...
+                        </span>
+                    </h2>
+                    <div style="font-size: 0.85rem; color: #6b7280; margin-top: 5px;">
+                        All Cross-Domain Interoperability Framework (CDIF / DDI-CDI) InstanceVariables indexed from tabular distribution files across datasets.
+                    </div>
+                </div>
+
+                <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                    <!-- Search Box -->
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <input type="text" id="var-search-input" placeholder="Search variable name, label, file, type..." oninput="handleSearchInput()" style="padding: 7px 12px; font-size: 0.88rem; border: 1px solid var(--border-color); border-radius: 6px; width: 260px; outline: none; background: var(--bg-color); color: var(--text-color);">
+                    </div>
+
+                    <!-- Refresh Button -->
+                    <button class="dash-tool-btn" onclick="loadVariablesData(true)">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                        Refresh
+                    </button>
+
+                    <!-- Ask on variables input form -->
+                    <form id="var-ask-form" onsubmit="handleVarAskSubmit(event)" style="display: flex; align-items: center; gap: 6px; margin: 0;">
+                        <input type="text" id="var-ask-input" placeholder="Ask AI on all variables, e.g. climate or geospatial data..." style="padding: 7px 12px; font-size: 0.88rem; border: 1px solid #008855; border-radius: 6px; width: 330px; outline: none; background: var(--bg-color); color: var(--text-color);">
+                        <button type="submit" id="var-ask-btn" style="padding: 7px 15px; background: #008855; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.88rem; font-weight: 500; display: inline-flex; align-items: center; gap: 5px;">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                            <span>Ask</span>
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Variables AI Ask Response Panel -->
+            <div id="var-qa-result" style="display: none; margin-bottom: 20px; padding: 16px 20px; background: var(--user-msg-bg); border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95rem; color: var(--text-color); position: relative;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px; gap: 10px; flex-wrap: wrap;">
+                    <strong style="color: var(--accent-color); display: flex; align-items: center; gap: 6px;">
+                        <span>🤖 AI Variable Analysis</span>
+                    </strong>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <button id="var-qa-copy-btn" onclick="copyVarQaResult()" title="Copy response to clipboard" style="padding: 4px 10px; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 5px; color: var(--text-color); cursor: pointer; font-size: 0.8rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            <span>Copy</span>
+                        </button>
+                        <span style="color: var(--border-color); font-size: 0.85rem;">|</span>
+                        <div class="export-dropdown-wrapper" style="position: relative; display: inline-block;">
+                            <button onclick="toggleVarExportMenu(event)" title="Export response" style="padding: 4px 10px; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 5px; color: var(--text-color); cursor: pointer; font-size: 0.8rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                <span>Export</span>
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                            </button>
+                            <div id="var-export-dropdown" style="display: none; position: absolute; right: 0; top: 100%; margin-top: 4px; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.12); z-index: 100; min-width: 170px; padding: 4px 0;">
+                                <a href="javascript:void(0)" onclick="exportVarQaMarkdown()" style="display: flex; align-items: center; gap: 8px; padding: 7px 12px; color: var(--text-color); text-decoration: none; font-size: 0.82rem; font-weight: 500;">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                                    <span>Markdown (.md)</span>
+                                </a>
+                                <a href="javascript:void(0)" onclick="exportVarQaGoogleDocs()" style="display: flex; align-items: center; gap: 8px; padding: 7px 12px; color: var(--text-color); text-decoration: none; font-size: 0.82rem; font-weight: 500;">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                                    <span>Google Docs</span>
+                                </a>
+                            </div>
+                        </div>
+                        <button onclick="document.getElementById('var-qa-result').style.display='none'" title="Close" style="background: transparent; border: none; font-size: 1.25rem; color: var(--text-color); cursor: pointer; line-height: 1; padding: 0 4px; margin-left: 4px;">&times;</button>
+                    </div>
+                </div>
+                <div id="var-qa-content" style="line-height: 1.6;"></div>
+            </div>
+
+            <!-- Stats Bar -->
+            <div id="var-stats-bar" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px;">
+                <div style="background: var(--header-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px;">
+                    <div style="font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600;">Total Variables</div>
+                    <div id="stat-total" style="font-size: 1.4rem; font-weight: 700; color: #0969da; margin-top: 2px;">-</div>
+                </div>
+                <div style="background: var(--header-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px;">
+                    <div style="font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600;">Tabular Files</div>
+                    <div id="stat-files" style="font-size: 1.4rem; font-weight: 700; color: #10b981; margin-top: 2px;">-</div>
+                </div>
+                <div style="background: var(--header-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px;">
+                    <div style="font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600;">Numeric Variables</div>
+                    <div id="stat-numeric" style="font-size: 1.4rem; font-weight: 700; color: #6366f1; margin-top: 2px;">-</div>
+                </div>
+                <div style="background: var(--header-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 12px 16px;">
+                    <div style="font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600;">Text / Other</div>
+                    <div id="stat-other" style="font-size: 1.4rem; font-weight: 700; color: #8b5cf6; margin-top: 2px;">-</div>
+                </div>
+            </div>
+
+            <!-- Alphabet filter bar -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; background: var(--header-bg); padding: 10px 14px; border-radius: 6px; border: 1px solid var(--border-color); flex-wrap: wrap; gap: 10px;">
+                <div id="alpha-filter-container" style="display: flex; gap: 4px; flex-wrap: wrap; align-items: center;">
+                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-color); margin-right: 6px;">Filter by letter:</span>
+                    <a href="javascript:void(0)" class="alpha-link active" onclick="filterByLetter('ALL', this)">All</a>
+                    <!-- A-Z inserted via script -->
+                </div>
+                <div style="font-size: 0.85rem; color: #6b7280;">
+                    <span id="filtered-matches-count">0</span> variables matched
+                </div>
+            </div>
+
+            <!-- Table Container -->
+            <div id="var-table-container" style="overflow-x: auto; border: 1px solid var(--border-color); border-radius: 8px;">
+                <!-- Top Pagination Bar -->
+                <div id="var-pagination-top" class="var-pagination-wrap" style="border-top: none; border-bottom: 1px solid var(--border-color);">
+                    <div id="var-page-info-top" style="font-weight: 500;">Showing 0 variables</div>
+                    <div id="var-page-controls-top" style="display: flex; align-items: center; gap: 6px;"></div>
+                </div>
+
+                <table class="variables-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 20%;">Variable Name</th>
+                            <th style="width: 22%;">Display Label</th>
+                            <th style="width: 12%;">Data Type</th>
+                            <th style="width: 10%;">Unit</th>
+                            <th style="width: 20%;">Source File</th>
+                            <th style="width: 8%; text-align: center;">Dataset</th>
+                            <th style="width: 8%; text-align: center;">CDIF Export</th>
+                        </tr>
+                    </thead>
+                    <tbody id="var-table-body">
+                        <tr>
+                            <td colspan="7" style="text-align: center; padding: 40px 20px; color: #6b7280;">
+                                <div style="display: inline-flex; align-items: center; gap: 10px; font-weight: 500; font-size: 0.95rem;">
+                                    <span class="var-spinner"></span>
+                                    <span>Loading CDIF variables from Elasticsearch...</span>
+                                </div>
+                                <div style="font-size: 0.8rem; color: #8c939f; margin-top: 6px;">Extracting and organizing variable metadata across all tabular files</div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <!-- Bottom Pagination Bar -->
+                <div id="var-pagination-bottom" class="var-pagination-wrap">
+                    <div id="var-page-info-bottom" style="font-weight: 500;">Showing 0 variables</div>
+                    <div id="var-page-controls-bottom" style="display: flex; align-items: center; gap: 6px;"></div>
+                </div>
+            </div>
+
+            <!-- Empty state -->
+            <div id="var-empty-box" style="display: none; text-align: center; padding: 45px 20px; background: var(--header-bg); border: 1px dashed var(--border-color); border-radius: 8px; margin-top: 15px;">
+                <div style="font-size: 2.2rem; margin-bottom: 10px;">🔬</div>
+                <h4 style="margin: 0 0 8px 0; color: var(--text-color); font-size: 1.1rem;">No CDIF Variables Found</h4>
+                <p style="margin: 0; color: #6b7280; font-size: 0.9rem;">
+                    No variables matched your search filters or no CDIF variables have been indexed in Elasticsearch yet.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="add-text-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">
+        <div style="background: var(--bg-color); padding: 20px; border-radius: 8px; width: 600px; max-width: 90%; border: 1px solid var(--border-color);">
+            <h3 style="margin-top: 0; color: var(--text-color);">Add Text</h3>
+            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-color);">Paste the text you want to ingest into the vault:</p>
+            <textarea id="add-text-input" placeholder="Enter text here..." style="width: 100%; height: 300px; padding: 8px; margin-bottom: 15px; border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; background: var(--panel-bg); color: var(--text-color); font-family: inherit; font-size: 14px;"></textarea>
+            <div id="add-text-error" style="color: red; display: none; margin-bottom: 10px; font-size: 14px;"></div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button onclick="document.getElementById('add-text-modal').style.display='none'" class="theme-toggle">Cancel</button>
+                <button id="add-text-submit" onclick="submitAddText()" style="background-color: #008855; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="add-resource-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">
+        <div style="background: var(--bg-color); padding: 20px; border-radius: 8px; width: 500px; max-width: 90%; border: 1px solid var(--border-color);">
+            <h3 style="margin-top: 0; color: var(--text-color);">Add Resource URL</h3>
+            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-color);">Enter the URL of the resource to ingest:</p>
+            <input type="text" id="add-resource-input" placeholder="https://example.com/data.csv or https://doi.org/..." style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; background: var(--panel-bg); color: var(--text-color); font-family: inherit; font-size: 14px;">
+            <div id="add-resource-error" style="color: red; display: none; margin-bottom: 10px; font-size: 14px;"></div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button onclick="document.getElementById('add-resource-modal').style.display='none'" class="theme-toggle">Cancel</button>
+                <button id="add-resource-submit" onclick="submitAddResource()" style="background-color: #006bb3; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div style="text-align: center; font-size: 0.85rem; color: #888; margin-top: auto; padding: 20px; border-top: 1px solid var(--border-color); display: flex; align-items: center; justify-content: center; gap: 10px;">
+        {{VAULT_FOOTER_HTML}}
+    </div>
+
+    <script>
+        // State
+        let rawVariablesData = null;
+        let filteredVariablesList = [];
+        let currentVarPage = 1;
+        const varPageSize = 100;
+        let activeLetter = 'ALL';
+        let lastVarQaRawAnswer = '';
+
+        // Build alphabet links
+        const alphaContainer = document.getElementById('alpha-filter-container');
+        if (alphaContainer) {
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").forEach(letter => {
+                const a = document.createElement('a');
+                a.href = 'javascript:void(0)';
+                a.className = 'alpha-link';
+                a.textContent = letter;
+                a.onclick = function() { filterByLetter(letter, this); };
+                alphaContainer.appendChild(a);
+            });
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        async function loadVariablesData(forceRefresh = false) {
+            const tableBody = document.getElementById('var-table-body');
+            const countBadge = document.getElementById('var-count-badge');
+            
+            if (forceRefresh) {
+                rawVariablesData = null;
+            }
+
+            if (tableBody) {
+                tableBody.innerHTML = `
+                    <tr>
+                        <td colspan="7" style="text-align: center; padding: 40px 20px; color: #6b7280;">
+                            <div style="display: inline-flex; align-items: center; gap: 10px; font-weight: 500; font-size: 0.95rem;">
+                                <span class="var-spinner"></span>
+                                <span>Loading CDIF variables from Elasticsearch...</span>
+                            </div>
+                            <div style="font-size: 0.8rem; color: #8c939f; margin-top: 6px;">Extracting and organizing variable metadata across all tabular files</div>
+                        </td>
+                    </tr>
+                `;
+            }
+            if (countBadge) {
+                countBadge.innerHTML = '<span class="var-spinner" style="width: 10px; height: 10px; border-width: 1.5px; vertical-align: middle; margin-right: 4px;"></span> Loading...';
+            }
+
+            try {
+                const res = await fetch('/api/variableindex/data');
+                if (!res.ok) {
+                    throw new Error(`Server returned HTTP ${res.status}`);
+                }
+                const data = await res.json();
+                rawVariablesData = data;
+                renderDashboardSummary(data);
+                applyFilters();
+            } catch (err) {
+                console.error('Error fetching CDIF variables:', err);
+                if (tableBody) {
+                    tableBody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 25px; color: #dc3545;">Error loading variables: ${escapeHtml(err.message)}</td></tr>`;
+                }
+                if (countBadge) countBadge.textContent = 'Error';
+            }
+        }
+
+        function renderDashboardSummary(data) {
+            const vars = (data && data.variables) ? data.variables : [];
+            const totalFiles = (data && data.total_files !== undefined) ? data.total_files : 0;
+            const totalVars = (data && data.total_variables !== undefined) ? data.total_variables : vars.length;
+
+            const countBadge = document.getElementById('var-count-badge');
+            const statTotal = document.getElementById('stat-total');
+            const statFiles = document.getElementById('stat-files');
+            const statNumeric = document.getElementById('stat-numeric');
+            const statOther = document.getElementById('stat-other');
+
+            if (countBadge) countBadge.textContent = `${totalVars.toLocaleString()} variables (${totalFiles} files)`;
+            if (statTotal) statTotal.textContent = totalVars.toLocaleString();
+            if (statFiles) statFiles.textContent = totalFiles.toLocaleString();
+
+            let numCount = 0;
+            let otherCount = 0;
+            vars.forEach(v => {
+                const dt = (v.data_type || '').toLowerCase();
+                if (dt.includes('numeric') || dt.includes('int') || dt.includes('float') || dt.includes('double')) {
+                    numCount++;
+                } else {
+                    otherCount++;
+                }
+            });
+
+            if (statNumeric) statNumeric.textContent = numCount.toLocaleString();
+            if (statOther) statOther.textContent = otherCount.toLocaleString();
+        }
+
+        function handleSearchInput() {
+            applyFilters();
+        }
+
+        function filterByLetter(letter, element) {
+            activeLetter = letter;
+            document.querySelectorAll('.alpha-link').forEach(el => el.classList.remove('active'));
+            if (element) element.classList.add('active');
+            applyFilters();
+        }
+
+        function applyFilters() {
+            if (!rawVariablesData) return;
+            const allVars = rawVariablesData.variables || [];
+            const searchInput = document.getElementById('var-search-input');
+            const query = (searchInput ? searchInput.value.trim().toLowerCase() : '');
+
+            filteredVariablesList = allVars.filter(v => {
+                const vName = (v.variable_name || '').toLowerCase();
+                const vLabel = (v.display_label || '').toLowerCase();
+                const vType = (v.data_type || '').toLowerCase();
+                const vFile = (v.file_name || '').toLowerCase();
+                const vDesc = (v.description || '').toLowerCase();
+                const vDs = (v.dataset_title || '').toLowerCase();
+
+                // Letter filter
+                if (activeLetter !== 'ALL') {
+                    const firstChar = (v.variable_name || '').trim().charAt(0).toUpperCase();
+                    if (firstChar !== activeLetter) return false;
+                }
+
+                // Text filter
+                if (query) {
+                    return vName.includes(query) ||
+                           vLabel.includes(query) ||
+                           vType.includes(query) ||
+                           vFile.includes(query) ||
+                           vDesc.includes(query) ||
+                           vDs.includes(query);
+                }
+                return true;
+            });
+
+            const matchCountEl = document.getElementById('filtered-matches-count');
+            if (matchCountEl) matchCountEl.textContent = filteredVariablesList.length.toLocaleString();
+
+            currentVarPage = 1;
+            renderVariablesPage();
+        }
+
+        function changeVarPage(delta) {
+            const totalPages = Math.ceil(filteredVariablesList.length / varPageSize) || 1;
+            const newPage = currentVarPage + delta;
+            if (newPage >= 1 && newPage <= totalPages) {
+                currentVarPage = newPage;
+                renderVariablesPage();
+            }
+        }
+
+        function goToVarPage(page) {
+            const totalPages = Math.ceil(filteredVariablesList.length / varPageSize) || 1;
+            if (page >= 1 && page <= totalPages) {
+                currentVarPage = page;
+                renderVariablesPage();
+            }
+        }
+
+        function renderVariablesPage() {
+            const tableBody = document.getElementById('var-table-body');
+            const tableContainer = document.getElementById('var-table-container');
+            const emptyBox = document.getElementById('var-empty-box');
+
+            const pageInfoTop = document.getElementById('var-page-info-top');
+            const pageControlsTop = document.getElementById('var-page-controls-top');
+            const pageInfoBottom = document.getElementById('var-page-info-bottom');
+            const pageControlsBottom = document.getElementById('var-page-controls-bottom');
+
+            if (!tableBody) return;
+
+            const total = filteredVariablesList.length;
+            if (total === 0) {
+                if (tableContainer) tableContainer.style.display = 'none';
+                if (emptyBox) emptyBox.style.display = 'block';
+                return;
+            }
+
+            if (emptyBox) emptyBox.style.display = 'none';
+            if (tableContainer) tableContainer.style.display = 'block';
+
+            const totalPages = Math.ceil(total / varPageSize) || 1;
+            if (currentVarPage > totalPages) currentVarPage = totalPages;
+            if (currentVarPage < 1) currentVarPage = 1;
+
+            const startIndex = (currentVarPage - 1) * varPageSize;
+            const endIndex = Math.min(startIndex + varPageSize, total);
+            const pageItems = filteredVariablesList.slice(startIndex, endIndex);
+
+            let rowsHtml = '';
+            pageItems.forEach(v => {
+                const rawType = (v.data_type || 'string').toLowerCase();
+                let typeClass = 'string';
+                if (rawType.includes('numeric') || rawType.includes('int') || rawType.includes('float') || rawType.includes('double')) {
+                    typeClass = 'numeric';
+                } else if (rawType.includes('date') || rawType.includes('time')) {
+                    typeClass = 'datetime';
+                }
+
+                const varName = escapeHtml(v.variable_name || '');
+                const displayLabel = escapeHtml(v.display_label || varName);
+                const desc = v.description && v.description !== v.variable_name ? `<div style="font-size: 0.78rem; color: #6b7280; margin-top: 2px;">${escapeHtml(v.description)}</div>` : '';
+                const unit = v.unit ? escapeHtml(v.unit) : '<span style="color: #9ca3af;">—</span>';
+                const fileName = escapeHtml(v.file_name || 'Tabular File');
+                const fileLink = v.file_url ? `<a href="${escapeHtml(v.file_url)}" target="_blank" rel="noopener noreferrer" style="color: #4b5563; text-decoration: none;" title="${fileName}">${fileName}</a>` : fileName;
+                
+                // Dataset Download / Vault button with download pictogram
+                let datasetVaultLink = '<span style="color: #9ca3af;">—</span>';
+                const rawTitle = v.dataset_title || (v.dataset_url ? v.dataset_url.replace(/^https?:\/\/doi\.org\//, 'doi:') : 'Dataverse Dataset');
+                const dsEscapedTitle = escapeHtml(rawTitle);
+
+                if (v.dataset_id) {
+                    datasetVaultLink = `<a href="/vault/doc/${encodeURIComponent(v.dataset_id)}" target="_blank" rel="noopener noreferrer" style="display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 6px; background: #f3f4f6; color: #0969da; border: 1px solid #d1d5db; transition: all 0.15s ease;" title="${dsEscapedTitle}" onmouseover="this.style.background='#e5edff'; this.style.borderColor='#93c5fd';" onmouseout="this.style.background='#f3f4f6'; this.style.borderColor='#d1d5db';"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></a>`;
+                } else if (v.dataset_url) {
+                    datasetVaultLink = `<a href="${escapeHtml(v.dataset_url)}" target="_blank" rel="noopener noreferrer" style="display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 6px; background: #f3f4f6; color: #0969da; border: 1px solid #d1d5db; transition: all 0.15s ease;" title="${dsEscapedTitle}" onmouseover="this.style.background='#e5edff'; this.style.borderColor='#93c5fd';" onmouseout="this.style.background='#f3f4f6'; this.style.borderColor='#d1d5db';"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></a>`;
+                }
+
+                const cdifLink = v.cdif_export_url ? `<a href="${escapeHtml(v.cdif_export_url)}" target="_blank" rel="noopener noreferrer" style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 0.78rem; font-weight: 500; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; border-radius: 4px; text-decoration: none;" title="Open CDIF JSON-LD for this file"><span>CDIF</span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></a>` : '<span style="color: #9ca3af;">—</span>';
+
+                rowsHtml += `
+                    <tr>
+                        <td style="font-weight: 600; color: var(--text-color); font-family: monospace; font-size: 0.88rem;">${varName}</td>
+                        <td>${displayLabel}${desc}</td>
+                        <td><span class="var-type-badge ${typeClass}">${escapeHtml(v.data_type || 'unspecified')}</span></td>
+                        <td>${unit}</td>
+                        <td style="max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${fileLink}</td>
+                        <td style="text-align: center;">${datasetVaultLink}</td>
+                        <td style="text-align: center;">${cdifLink}</td>
+                    </tr>
+                `;
+            });
+
+            tableBody.innerHTML = rowsHtml;
+
+            // Render pagination
+            const showingText = `Showing ${(startIndex + 1).toLocaleString()}–${endIndex.toLocaleString()} of ${total.toLocaleString()} variables (Page ${currentVarPage} of ${totalPages})`;
+
+            let ctrlHtml = `
+                <button class="var-page-btn" onclick="goToVarPage(1)" ${currentVarPage === 1 ? 'disabled' : ''} title="First page">&laquo; First</button>
+                <button class="var-page-btn" onclick="changeVarPage(-1)" ${currentVarPage === 1 ? 'disabled' : ''} title="Previous page">&lsaquo; Prev</button>
+            `;
+
+            let startP = Math.max(1, currentVarPage - 2);
+            let endP = Math.min(totalPages, startP + 4);
+            if (endP - startP < 4) {
+                startP = Math.max(1, endP - 4);
+            }
+
+            for (let p = startP; p <= endP; p++) {
+                ctrlHtml += `<button class="var-page-btn ${p === currentVarPage ? 'active' : ''}" onclick="goToVarPage(${p})">${p}</button>`;
+            }
+
+            ctrlHtml += `
+                <button class="var-page-btn" onclick="changeVarPage(1)" ${currentVarPage === totalPages ? 'disabled' : ''} title="Next page">Next &rsaquo;</button>
+                <button class="var-page-btn" onclick="goToVarPage(${totalPages})" ${currentVarPage === totalPages ? 'disabled' : ''} title="Last page">Last &raquo;</button>
+            `;
+
+            if (pageInfoTop && pageControlsTop) {
+                pageInfoTop.textContent = showingText;
+                pageControlsTop.innerHTML = ctrlHtml;
+            }
+            if (pageInfoBottom && pageControlsBottom) {
+                pageInfoBottom.textContent = showingText;
+                pageControlsBottom.innerHTML = ctrlHtml;
+            }
+        }
+
+        // AI Ask
+        async function handleVarAskSubmit(event) {
+            event.preventDefault();
+            const input = document.getElementById('var-ask-input');
+            const btn = document.getElementById('var-ask-btn');
+            const resultBox = document.getElementById('var-qa-result');
+            const contentBox = document.getElementById('var-qa-content');
+            const query = (input ? input.value : '').trim();
+
+            if (!query) return;
+
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<span class="var-spinner" style="width: 12px; height: 12px; border-width: 1.5px; border-top-color: #fff;"></span> Analyzing...';
+            }
+
+            if (resultBox) resultBox.style.display = 'block';
+            if (contentBox) {
+                contentBox.innerHTML = '<div style="display: flex; align-items: center; gap: 8px; color: #4b5563;"><span class="var-spinner"></span> <span>Consulting AI on CDIF variable metadata across all datasets...</span></div>';
+            }
+
+            try {
+                const res = await fetch('/api/variableindex/ask', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({query: query})
+                });
+
+                if (!res.ok) {
+                    throw new Error(`Server returned HTTP ${res.status}`);
+                }
+
+                const data = await res.json();
+                const answerText = data.answer || 'No response returned from the model.';
+                lastVarQaRawAnswer = answerText;
+
+                if (contentBox) {
+                    if (typeof marked !== 'undefined') {
+                        contentBox.innerHTML = marked.parse(answerText);
+                    } else {
+                        contentBox.innerText = answerText;
+                    }
+                }
+            } catch (err) {
+                if (contentBox) {
+                    contentBox.innerHTML = `<span style="color: #dc3545;">Error analyzing variables: ${escapeHtml(err.message)}</span>`;
+                }
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> <span>Ask</span>';
+                }
+            }
+        }
+
+        function copyVarQaResult() {
+            if (!lastVarQaRawAnswer) return;
+            navigator.clipboard.writeText(lastVarQaRawAnswer).then(() => {
+                const btn = document.getElementById('var-qa-copy-btn');
+                if (btn) {
+                    const orig = btn.innerHTML;
+                    btn.innerHTML = '<span>✓ Copied!</span>';
+                    setTimeout(() => btn.innerHTML = orig, 2000);
+                }
+            });
+        }
+
+        function toggleVarExportMenu(event) {
+            event.stopPropagation();
+            const dd = document.getElementById('var-export-dropdown');
+            if (dd) {
+                dd.style.display = (dd.style.display === 'block') ? 'none' : 'block';
+            }
+        }
+
+        document.addEventListener('click', () => {
+            const dd = document.getElementById('var-export-dropdown');
+            if (dd) dd.style.display = 'none';
+        });
+
+        function exportVarQaMarkdown() {
+            if (!lastVarQaRawAnswer) return;
+            const blob = new Blob([lastVarQaRawAnswer], { type: 'text/markdown;charset=utf-8;' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `cdif_variables_qa_${new Date().toISOString().slice(0,10)}.md`;
+            link.click();
+        }
+
+        function exportVarQaGoogleDocs() {
+            if (!lastVarQaRawAnswer) return;
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = 'https://docs.google.com/document/create';
+            form.target = '_blank';
+            window.open('https://docs.google.com/document/create', '_blank');
+        }
+
+        function submitAddText() {
+            const btn = document.getElementById('add-text-submit');
+            const text = document.getElementById('add-text-input').value;
+            if(!text) return;
+            btn.disabled = true;
+            btn.innerText = 'Processing... (takes ~2 mins)';
+            document.getElementById('add-text-error').style.display = 'none';
+            fetch('/api/text/process', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: text })
+            })
+            .then(r => r.json().then(data => ({ok: r.ok, data})))
+            .then(res => {
+                if(res.ok && res.data.redirect_url) {
+                    window.location.href = res.data.redirect_url;
+                } else {
+                    throw new Error(res.data.detail || 'Failed to process text');
+                }
+            })
+            .catch(e => {
+                btn.disabled = false;
+                btn.innerText = 'Ingest';
+                document.getElementById('add-text-error').innerText = e.message;
+                document.getElementById('add-text-error').style.display = 'block';
+            });
+        }
+
+        function submitAddResource() {
+            const btn = document.getElementById('add-resource-submit');
+            const url = document.getElementById('add-resource-input').value;
+            if(!url) return;
+            btn.disabled = true;
+            btn.innerText = 'Processing...';
+            document.getElementById('add-resource-error').style.display = 'none';
+            fetch('/api/generic/process', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url })
+            })
+            .then(r => r.json().then(data => ({ok: r.ok, data})))
+            .then(res => {
+                if(res.ok && res.data.redirect_url) {
+                    window.location.href = res.data.redirect_url;
+                } else {
+                    throw new Error(res.data.detail || 'Failed to process resource');
+                }
+            })
+            .catch(e => {
+                btn.disabled = false;
+                btn.innerText = 'Ingest';
+                document.getElementById('add-resource-error').innerText = e.message;
+                document.getElementById('add-resource-error').style.display = 'block';
+            });
+        }
+
+        // Initialize
+        loadVariablesData();
+    </script>
+</body>
+</html>

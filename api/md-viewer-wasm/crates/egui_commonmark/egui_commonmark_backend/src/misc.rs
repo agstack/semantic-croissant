@@ -1,0 +1,2698 @@
+use crate::alerts::AlertBundle;
+use crate::typography::TypographyConfig;
+use egui::{RichText, TextStyle, Ui, text::LayoutJob};
+use std::collections::HashMap;
+#[cfg(feature = "math")]
+use std::collections::HashSet;
+#[cfg(any(
+    feature = "better_syntax_highlighting",
+    feature = "mermaid",
+    feature = "math"
+))]
+use std::sync::Arc;
+
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+#[cfg(any(feature = "mermaid", feature = "math"))]
+use std::sync::mpsc;
+#[cfg(feature = "math")]
+use std::sync::Mutex as StdMutex;
+
+use crate::pulldown::ScrollableCache;
+
+#[cfg(feature = "better_syntax_highlighting")]
+use syntect::{
+    easy::HighlightLines,
+    highlighting::{Theme, ThemeSet},
+    parsing::{SyntaxDefinition, SyntaxSet},
+    util::LinesWithEndings,
+};
+
+#[cfg(any(feature = "better_syntax_highlighting", feature = "mermaid", feature = "math"))]
+use std::sync::LazyLock;
+
+#[cfg(feature = "better_syntax_highlighting")]
+static GLOBAL_SYNTAX_SET: LazyLock<Arc<SyntaxSet>> =
+    LazyLock::new(|| Arc::new(SyntaxSet::load_defaults_newlines()));
+
+
+#[cfg(feature = "better_syntax_highlighting")]
+const DEFAULT_THEME_LIGHT: &str = "base16-ocean.light";
+#[cfg(feature = "better_syntax_highlighting")]
+const DEFAULT_THEME_DARK: &str = "base16-ocean.dark";
+
+pub struct CommonMarkOptions<'f> {
+    pub indentation_spaces: usize,
+    pub max_image_width: Option<usize>,
+    pub show_alt_text_on_hover: bool,
+    pub default_width: Option<usize>,
+    /// Width bound for tables, independent of `default_width`. Tables may
+    /// exceed the reading column: when set, markdown and HTML tables scroll
+    /// horizontally within this width instead of the `default_width` cap, so
+    /// wide tables use the full content pane while prose stays at the reading
+    /// width (#64). `None` falls back to `max_width`.
+    pub table_max_width: Option<usize>,
+    #[cfg(feature = "better_syntax_highlighting")]
+    pub theme_light: String,
+    #[cfg(feature = "better_syntax_highlighting")]
+    pub theme_dark: String,
+    pub use_explicit_uri_scheme: bool,
+    pub default_implicit_uri_scheme: String,
+    pub alerts: AlertBundle,
+    /// Whether to present a mutable ui for things like checkboxes
+    pub mutable: bool,
+    pub math_fn: Option<&'f crate::RenderMathFn>,
+    pub html_fn: Option<&'f crate::RenderHtmlFn>,
+    /// Typography configuration for line height and spacing
+    pub typography: TypographyConfig,
+    /// Opt into using the named strong font family. Callers must register
+    /// `STRONG_FONT_FAMILY` in egui before enabling this to avoid lookup panics.
+    pub use_strong_font_family: bool,
+    /// Opt into parsing a leading `---` block as YAML frontmatter and rendering
+    /// it as a key/value table. Off by default: enabling it changes how a
+    /// document that starts with `---` is *parsed*, not just painted, so it
+    /// must not silently alter existing consumers' output.
+    pub render_frontmatter: bool,
+    /// Size of rendered formulas, as a multiple of the resolved Body font size.
+    ///
+    /// `1.0` renders math at the same point size as body text. Math glyphs and
+    /// dense fractions read as perceptually smaller than prose at equal point
+    /// size, so a value slightly above 1.0 is often more legible. Application
+    /// zoom is not a substitute: it scales the whole UI, leaving the formula
+    /// and its surrounding text in the same ratio.
+    pub math_scale: f32,
+}
+
+impl std::fmt::Debug for CommonMarkOptions<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("CommonMarkOptions");
+
+        s.field("indentation_spaces", &self.indentation_spaces)
+            .field("max_image_width", &self.max_image_width)
+            .field("show_alt_text_on_hover", &self.show_alt_text_on_hover)
+            .field("default_width", &self.default_width)
+            .field("table_max_width", &self.table_max_width);
+
+        #[cfg(feature = "better_syntax_highlighting")]
+        s.field("theme_light", &self.theme_light)
+            .field("theme_dark", &self.theme_dark);
+
+        s.field("use_explicit_uri_scheme", &self.use_explicit_uri_scheme)
+            .field(
+                "default_implicit_uri_scheme",
+                &self.default_implicit_uri_scheme,
+            )
+            .field("alerts", &self.alerts)
+            .field("mutable", &self.mutable)
+            .field("typography", &self.typography)
+            .field("use_strong_font_family", &self.use_strong_font_family)
+            .field("render_frontmatter", &self.render_frontmatter)
+            .field("math_scale", &self.math_scale)
+            .finish()
+    }
+}
+
+impl Default for CommonMarkOptions<'_> {
+    fn default() -> Self {
+        Self {
+            indentation_spaces: 4,
+            max_image_width: None,
+            show_alt_text_on_hover: true,
+            default_width: None,
+            table_max_width: None,
+            #[cfg(feature = "better_syntax_highlighting")]
+            theme_light: DEFAULT_THEME_LIGHT.to_owned(),
+            #[cfg(feature = "better_syntax_highlighting")]
+            theme_dark: DEFAULT_THEME_DARK.to_owned(),
+            use_explicit_uri_scheme: false,
+            default_implicit_uri_scheme: "file://".to_owned(),
+            alerts: AlertBundle::gfm(),
+            mutable: false,
+            math_fn: None,
+            html_fn: None,
+            typography: TypographyConfig::default(),
+            use_strong_font_family: false,
+            render_frontmatter: false,
+            math_scale: 1.0,
+        }
+    }
+}
+
+impl CommonMarkOptions<'_> {
+    #[cfg(feature = "better_syntax_highlighting")]
+    pub fn curr_theme(&self, ui: &Ui) -> &str {
+        if ui.style().visuals.dark_mode {
+            &self.theme_dark
+        } else {
+            &self.theme_light
+        }
+    }
+
+    pub fn max_width(&self, ui: &Ui) -> f32 {
+        let available_width = ui.available_width();
+
+        // Use default_width as the preferred width, but never exceed available_width
+        // This ensures text wraps properly when the window is narrower than default_width
+        if let Some(default_width) = self.default_width {
+            (default_width as f32).min(available_width)
+        } else {
+            available_width
+        }
+    }
+}
+
+/// Font family name used for Markdown strong text when the app registers a bold face.
+pub const STRONG_FONT_FAMILY: &str = "MarkdownStrong";
+
+/// Stable cache key for a heading position, derived from its source byte offset.
+/// This does not depend on formatting, emoji expansion, or duplicate titles.
+pub fn header_position_key(source_start: usize) -> String {
+    format!("heading-source:{source_start}")
+}
+
+#[derive(Default, Clone)]
+pub struct Style {
+    pub heading: Option<u8>,
+    pub strong: bool,
+    pub emphasis: bool,
+    pub strikethrough: bool,
+    pub quote: bool,
+    pub code: bool,
+}
+
+impl Style {
+    pub fn to_richtext(&self, ui: &Ui, text: &str) -> RichText {
+        self.to_richtext_with_typography(ui, text, None)
+    }
+
+    pub fn to_richtext_with_options(
+        &self,
+        ui: &Ui,
+        text: &str,
+        options: &CommonMarkOptions,
+    ) -> RichText {
+        // Keep renderer formatting decisions in one path so caller-level
+        // opt-in options apply consistently to markdown text fragments.
+        self.to_richtext_internal(
+            ui,
+            text,
+            Some(&options.typography),
+            options.use_strong_font_family,
+        )
+    }
+
+    pub fn to_richtext_with_typography(
+        &self,
+        ui: &Ui,
+        text: &str,
+        typography: Option<&TypographyConfig>,
+    ) -> RichText {
+        // Public low-level helper remains safe by default for library users
+        // who did not register md-viewer's named strong font family.
+        self.to_richtext_internal(ui, text, typography, false)
+    }
+
+    fn to_richtext_internal(
+        &self,
+        ui: &Ui,
+        text: &str,
+        typography: Option<&TypographyConfig>,
+        use_strong_font_family: bool,
+    ) -> RichText {
+        let mut rich_text = RichText::new(text);
+
+        // Get the base font size for resolving typography measurements
+        let base_font_size = ui
+            .style()
+            .text_styles
+            .get(&TextStyle::Body)
+            .map_or(14.0, |d| d.size);
+        let mut selected_font_size = base_font_size;
+
+        if let Some(level) = self.heading {
+            // Evidence-based heading scale using Major Third ratio (1.25×)
+            // Research: Nielsen Norman Group "layer-cake" scanning pattern requires distinct hierarchy
+            // H1: 2× base (32px), H2: 1.6× (26px), H3: 1.25× (20px), H4: 1.125× (18px)
+            let (size, is_bold) = match level {
+                0 => (base_font_size * 2.0, true),      // H1: 32px (2×)
+                1 => (base_font_size * 1.6, true),     // H2: 26px (1.6×)
+                2 => (base_font_size * 1.25, true),    // H3: 20px (1.25×)
+                3 => (base_font_size * 1.125, true),   // H4: 18px (1.125×)
+                4 => (base_font_size, false),          // H5: 16px (base, no bold)
+                _ => (base_font_size * 0.875, false),  // H6: 14px (0.875×, no bold)
+            };
+
+            rich_text = rich_text.size(size);
+            selected_font_size = size;
+            if is_bold {
+                rich_text = rich_text.strong();
+            }
+            if level == 0 {
+                rich_text = rich_text.heading();
+            }
+
+            // Apply heading-specific line height (tighter than body per research)
+            // Headings use 1.2-1.3× line height vs 1.5× for body text
+            if let Some(typo) = typography {
+                if let Some(line_height) = typo.line_height {
+                    let heading_line_height = match line_height {
+                        crate::typography::Measurement::Multiplier(m) => {
+                            // Scale down: 1.5× body → 1.3× heading
+                            let heading_multiplier = 1.0 + (m - 1.0) * 0.6;
+                            crate::typography::Measurement::Multiplier(heading_multiplier)
+                        }
+                        crate::typography::Measurement::Pixels(p) => {
+                            crate::typography::Measurement::Pixels(p * 0.8)
+                        }
+                    };
+                    rich_text = rich_text.line_height(Some(heading_line_height.resolve(size)));
+                }
+            }
+        } else {
+            // Apply line height for body text
+            if let Some(typo) = typography {
+                if let Some(resolved) = typo.resolve_line_height(base_font_size) {
+                    rich_text = rich_text.line_height(Some(resolved));
+                }
+            }
+        }
+
+        if self.quote {
+            rich_text = rich_text.weak();
+        }
+
+        if self.strong {
+            // Always keep egui's strong styling hint. Only md-viewer opts into
+            // the named bold font after registering it; inline code keeps the
+            // monospace family applied later by `RichText::code()`.
+            rich_text = rich_text.strong();
+            if use_strong_font_family && !self.code {
+                rich_text = rich_text.font(egui::FontId::new(
+                    selected_font_size,
+                    egui::FontFamily::Name(STRONG_FONT_FAMILY.into()),
+                ));
+            }
+        }
+
+        if self.emphasis {
+            // FIXME: Might want to add some space between the next text
+            rich_text = rich_text.italics();
+        }
+
+        if self.strikethrough {
+            rich_text = rich_text.strikethrough();
+        }
+
+        if self.code {
+            // `RichText::code()` sets the Monospace text style, which carries its
+            // own (smaller, 14px) size — so inline code rendered smaller than the
+            // surrounding 16px body text and sat raised off the shared baseline
+            // (issue #46). Pin the size to the current context (body, or the
+            // heading size when code is inside a heading) so code keeps the
+            // monospace family + code background but aligns with adjacent text.
+            rich_text = rich_text.code().size(selected_font_size);
+        }
+
+        rich_text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn first_text_format(ui: &Ui, rich_text: RichText) -> egui::TextFormat {
+        // Convert RichText into the same LayoutJob format path widgets use so
+        // tests can inspect formatting decisions without depending on pixels.
+        let mut layout_job = LayoutJob::default();
+        rich_text.append_to(
+            &mut layout_job,
+            ui.style(),
+            egui::FontSelection::Default,
+            egui::Align::LEFT,
+        );
+        layout_job
+            .sections
+            .into_iter()
+            .next()
+            .expect("RichText should append one text section")
+            .format
+    }
+
+    #[test]
+    fn default_strong_style_does_not_select_markdown_strong_family() {
+        // Generic egui_commonmark consumers have not registered the md-viewer
+        // named family, so the backend default must stay on egui's built-in
+        // strong styling instead of emitting an unregistered font family.
+        egui::__run_test_ui(|ui| {
+            let plain_format = first_text_format(ui, Style::default().to_richtext(ui, "text"));
+            let strong_format = first_text_format(
+                ui,
+                Style {
+                    strong: true,
+                    ..Default::default()
+                }
+                .to_richtext(ui, "text"),
+            );
+
+            assert_eq!(
+                strong_format.font_id, plain_format.font_id,
+                "default strong markdown should not require a named font family; plain={plain_format:?}, strong={strong_format:?}"
+            );
+            assert_ne!(
+                strong_format.font_id.family,
+                egui::FontFamily::Name(STRONG_FONT_FAMILY.into()),
+                "default strong markdown must not emit the md-viewer-only font family"
+            );
+        });
+    }
+
+    #[test]
+    fn opt_in_strong_style_selects_distinct_markdown_strong_font() {
+        // Issue #39: md-viewer opts into a registered bold face so markdown
+        // strong/bold produces an inspectable font formatting change.
+        egui::__run_test_ui(|ui| {
+            let mut options = CommonMarkOptions::default();
+            options.use_strong_font_family = true;
+
+            let plain_format = first_text_format(ui, Style::default().to_richtext(ui, "text"));
+            let strong_format = first_text_format(
+                ui,
+                Style {
+                    strong: true,
+                    ..Default::default()
+                }
+                .to_richtext_with_options(ui, "text", &options),
+            );
+
+            assert_ne!(
+                strong_format.font_id, plain_format.font_id,
+                "opt-in strong markdown should select a bold/strong font; plain={plain_format:?}, strong={strong_format:?}"
+            );
+            assert_eq!(
+                strong_format.font_id.family,
+                egui::FontFamily::Name(STRONG_FONT_FAMILY.into()),
+                "opt-in strong markdown should use the registered md-viewer strong family"
+            );
+        });
+    }
+
+    #[cfg(feature = "math")]
+    #[test]
+    fn renders_amsmath_named_operators() {
+        let formulas = [
+            r#"r_{\text{dir}}=r_{61.2s}\operatorname{sign}(\text{event value})."#,
+            r#"\operatorname*{arg\,max}_{x} f(x)"#,
+        ];
+
+        for latex in formulas {
+            let rendered = render_math_formula(
+                latex,
+                false,
+                egui::Color32::BLACK,
+                egui::Color32::WHITE,
+                16.0,
+            )
+            .unwrap_or_else(|error| panic!("failed to render {latex:?}: {error}"));
+
+            assert!(rendered.size.x > 0.0);
+            assert!(rendered.size.y > 0.0);
+        }
+    }
+
+    #[cfg(feature = "math")]
+    #[test]
+    fn math_cache_key_includes_exact_colors() {
+        let base = math_cache_hash(
+            "x + y",
+            false,
+            egui::Color32::BLACK,
+            egui::Color32::WHITE,
+            16.0,
+        );
+        assert_ne!(
+            base,
+            math_cache_hash(
+                "x + y",
+                false,
+                egui::Color32::DARK_GRAY,
+                egui::Color32::WHITE,
+                16.0,
+            )
+        );
+        assert_ne!(
+            base,
+            math_cache_hash(
+                "x + y",
+                false,
+                egui::Color32::BLACK,
+                egui::Color32::LIGHT_GRAY,
+                16.0,
+            )
+        );
+    }
+
+    #[cfg(feature = "math")]
+    #[test]
+    fn math_cache_key_includes_the_point_size() {
+        // Without this, the first rendered size is served for every later
+        // scale and changing the setting appears to do nothing.
+        let at = |pt| math_cache_hash("x + y", true, egui::Color32::BLACK, egui::Color32::WHITE, pt);
+        assert_ne!(at(16.0), at(20.0));
+        assert_ne!(at(16.0), at(16.5));
+    }
+
+    #[cfg(feature = "math")]
+    #[test]
+    fn math_cache_key_absorbs_sub_hundredth_size_jitter() {
+        // The size derives from a resolved font height, which fluctuates in the
+        // last float digits between frames. Re-keying on that would recompile
+        // every formula through typst on every paint.
+        let at = |pt| math_cache_hash("x + y", true, egui::Color32::BLACK, egui::Color32::WHITE, pt);
+        assert_eq!(at(16.0), at(16.0001));
+    }
+
+    #[cfg(feature = "math")]
+    #[test]
+    fn math_worker_returns_rendered_formula() {
+        let math_job_tx = start_math_workers(1, 1);
+        let (result_tx, result_rx) = mpsc::channel();
+        assert_eq!(
+            enqueue_math_job(
+                &math_job_tx,
+                MathJob {
+                    hash: 42,
+                    latex: "x + y".to_owned(),
+                    is_inline: true,
+                    fg: egui::Color32::BLACK,
+                    bg: egui::Color32::WHITE,
+                    size_pt: 16.0,
+                    result_tx,
+                },
+            ),
+            MathEnqueueStatus::Queued
+        );
+
+        let result = result_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("math worker should return a result");
+        assert_eq!(result.hash, 42);
+        assert!(result.result.is_ok());
+    }
+
+    #[cfg(feature = "math")]
+    #[test]
+    fn full_math_queue_is_reported_for_retry() {
+        let (math_job_tx, _math_job_rx) = mpsc::sync_channel(1);
+        let new_job = |hash| {
+            let (result_tx, _result_rx) = mpsc::channel();
+            MathJob {
+                hash,
+                latex: "x + y".to_owned(),
+                is_inline: true,
+                fg: egui::Color32::BLACK,
+                bg: egui::Color32::WHITE,
+                size_pt: 16.0,
+                result_tx,
+            }
+        };
+
+        assert_eq!(
+            enqueue_math_job(&math_job_tx, new_job(1)),
+            MathEnqueueStatus::Queued
+        );
+        assert_eq!(
+            enqueue_math_job(&math_job_tx, new_job(2)),
+            MathEnqueueStatus::Full
+        );
+    }
+
+    #[cfg(feature = "math")]
+    #[test]
+    fn cjk_text_in_math_uses_real_glyphs_when_system_fallback_exists() {
+        if !MATH_FONTS
+            .iter()
+            .any(|font| font.ttf().glyph_index('在').is_some())
+        {
+            return;
+        }
+
+        let render = |latex| {
+            render_math_formula(
+                latex,
+                true,
+                egui::Color32::BLACK,
+                egui::Color32::WHITE,
+                16.0,
+            )
+            .unwrap()
+            .image
+        };
+        let first = render(r"\text{在}");
+        let second = render(r"\text{中}");
+
+        assert_ne!(
+            first.pixels, second.pixels,
+            "different CJK characters must not render as the same missing-glyph box"
+        );
+    }
+    #[cfg(feature = "math")]
+    #[test]
+    fn inline_fraction_raster_keeps_vertical_ink_margin() {
+        let bg = egui::Color32::BLACK;
+        let rendered = render_math_formula(
+            r"-\frac15\sum_{l=1}^5 P_{a,l}",
+            true,
+            egui::Color32::WHITE,
+            bg,
+            16.0,
+        )
+        .unwrap();
+        let [width, height] = rendered.image.size;
+        let ink_rows: Vec<usize> = (0..height)
+            .filter(|y| {
+                rendered.image.pixels[y * width..(y + 1) * width]
+                    .iter()
+                    .any(|pixel| *pixel != bg)
+            })
+            .collect();
+        let top = *ink_rows.first().expect("formula has ink");
+        let bottom = *ink_rows.last().expect("formula has ink");
+
+        assert!(top >= 3, "top ink margin too small: {top}px");
+        assert!(
+            height - 1 - bottom >= 3,
+            "bottom ink margin too small: {}px",
+            height - 1 - bottom
+        );
+    }
+
+    #[test]
+    fn strong_code_keeps_monospace_font_family() {
+        // Even with md-viewer's strong-font opt-in, strong inline code should
+        // keep the same monospace/code font family as normal inline code.
+        egui::__run_test_ui(|ui| {
+            let mut options = CommonMarkOptions::default();
+            options.use_strong_font_family = true;
+
+            let code_format = first_text_format(
+                ui,
+                Style {
+                    code: true,
+                    ..Default::default()
+                }
+                .to_richtext_with_options(ui, "code", &options),
+            );
+            let strong_code_format = first_text_format(
+                ui,
+                Style {
+                    strong: true,
+                    code: true,
+                    ..Default::default()
+                }
+                .to_richtext_with_options(ui, "code", &options),
+            );
+
+            assert_eq!(
+                strong_code_format.font_id.family, code_format.font_id.family,
+                "strong inline code should preserve code font family; code={code_format:?}, strong_code={strong_code_format:?}"
+            );
+        });
+    }
+}
+
+#[derive(Default)]
+pub struct Link {
+    pub destination: String,
+    pub text: Vec<RichText>,
+}
+
+impl Link {
+    pub fn end(self, ui: &mut Ui, cache: &mut CommonMarkCache) {
+        let Self { destination, text } = self;
+
+        let mut layout_job = LayoutJob::default();
+        for t in text {
+            t.append_to(
+                &mut layout_job,
+                ui.style(),
+                egui::FontSelection::Default,
+                egui::Align::LEFT,
+            );
+        }
+
+        // Apply underline and hyperlink color to all sections for better visibility
+        let link_color = ui.visuals().hyperlink_color;
+        for section in &mut layout_job.sections {
+            section.format.underline = egui::Stroke::new(1.0_f32, link_color);
+            section.format.color = link_color;
+            // Remove extra line height to bring underline closer to text
+            section.format.line_height = None;
+        }
+
+        // Use clickable label to preserve our custom underline styling
+        let response = ui.add(
+            egui::Label::new(layout_job)
+                .selectable(false)
+                .sense(egui::Sense::click()),
+        );
+
+        let is_hook = cache.link_hooks().contains_key(&destination);
+
+        // Right-click copies the destination (issue #169). Clicking a link
+        // hands it to the desktop's URL handler, which may open a browser
+        // instance without the reader's session — so the address has to be
+        // obtainable without following it.
+        //
+        // Both link kinds get the item, and both copy `destination` exactly as
+        // the document spells it. For an external link that is the URL. For a
+        // link this viewer resolves itself, the source spelling is the honest
+        // answer: the resolved path depends on which document is open, so
+        // copying it would hand out something the author never wrote and that
+        // means nothing pasted elsewhere.
+        //
+        // The label is deliberately the browser wording, since that is where
+        // the gesture is learned.
+        {
+            let destination = destination.clone();
+            response.context_menu(|ui| {
+                if ui.button("Copy Link Address").clicked() {
+                    ui.ctx().copy_text(destination.clone());
+                    ui.close();
+                }
+            });
+        }
+
+        if response.clicked() || response.middle_clicked() {
+            if is_hook {
+                cache.link_hooks_mut().insert(destination.clone(), true);
+            } else {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(&destination));
+            }
+        }
+
+        // Show pointer cursor and URL on hover
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            if !is_hook {
+                response.on_hover_text(&destination);
+            }
+        }
+    }
+}
+
+pub struct Image {
+    pub uri: String,
+    pub alt_text: Vec<RichText>,
+}
+
+impl Image {
+    // FIXME: string conversion
+    pub fn new(uri: &str, options: &CommonMarkOptions) -> Self {
+        let has_scheme = uri.contains("://") || uri.starts_with("data:");
+        let uri = if options.use_explicit_uri_scheme || has_scheme {
+            uri.to_string()
+        } else if uri.starts_with('/') {
+            // Absolute path — use file:// directly
+            format!("file://{uri}")
+        } else {
+            // Relative path — prepend configured base URI
+            format!("{}{uri}", options.default_implicit_uri_scheme)
+        };
+
+        Self {
+            uri,
+            alt_text: Vec::new(),
+        }
+    }
+
+    pub fn end(self, ui: &mut Ui, cache: &mut CommonMarkCache, options: &CommonMarkOptions) {
+        let response = ui.add(
+            egui::Image::from_uri(&self.uri)
+                .fit_to_original_size(1.0)
+                .max_width(options.max_width(ui))
+                .sense(egui::Sense::click()),
+        );
+        cache.observe_image_size(&self.uri, response.rect.size());
+
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+
+        if response.clicked() {
+            let load = ui.ctx().try_load_texture(
+                &self.uri,
+                egui::TextureOptions::default(),
+                egui::load::SizeHint::default(),
+            );
+            if let Ok(egui::load::TexturePoll::Ready { texture }) = load {
+                cache.clicked_image = Some((texture.id, texture.size));
+            }
+        }
+
+        if !self.alt_text.is_empty() && options.show_alt_text_on_hover {
+            response.on_hover_ui_at_pointer(|ui| {
+                for alt in self.alt_text {
+                    ui.label(alt);
+                }
+            });
+        }
+    }
+}
+
+pub struct CodeBlock {
+    pub lang: Option<String>,
+    pub content: String,
+}
+
+impl CodeBlock {
+    pub fn end(
+        &self,
+        ui: &mut Ui,
+        cache: &mut CommonMarkCache,
+        options: &CommonMarkOptions,
+        max_width: f32,
+        id: egui::Id,
+    ) {
+        #[cfg(feature = "mermaid")]
+        if self.lang.as_deref() == Some("mermaid") {
+            self.render_mermaid(ui, cache, options, max_width);
+            return;
+        }
+
+        ui.scope(|ui| {
+            Self::pre_syntax_highlighting(cache, options, ui);
+
+            // Calculate code line height from typography config
+            let mono_font_size = ui.text_style_height(&TextStyle::Monospace);
+            let code_line_height = options.typography.resolve_code_line_height(mono_font_size);
+
+            // Cache key for the LayoutJob, hashing every input that affects
+            // the rendered output: content text, language tag, theme, font
+            // size, and the resolved line height (which depends on
+            // typography config + mono_font_size).
+            let cache_key = {
+                let mut h = DefaultHasher::new();
+                self.content.hash(&mut h);
+                self.lang.hash(&mut h);
+                ui.style().visuals.dark_mode.hash(&mut h);
+                mono_font_size.to_bits().hash(&mut h);
+                code_line_height.map(f32::to_bits).hash(&mut h);
+                h.finish()
+            };
+
+            // Build (or retrieve) the LayoutJob for syntax highlighting.
+            // Cache hit: clone the stored LayoutJob (cheap — egui's LayoutJob
+            // is just text + Vec<LayoutSection>). Cache miss: run syntect,
+            // store, and return. With viewport virtualization (C8), only the
+            // visible code blocks ever pay the syntect cost.
+            let mut job = if let Some(cached) = cache.syntax_layouts.get(&cache_key).cloned() {
+                cached
+            } else {
+                let job = if let Some(lang) = &self.lang {
+                    self.syntax_highlighting(
+                        cache,
+                        options,
+                        lang,
+                        ui,
+                        &self.content,
+                        code_line_height,
+                    )
+                } else {
+                    plain_highlighting(ui, &self.content, code_line_height)
+                };
+                cache.syntax_layouts.insert(cache_key, job.clone());
+                job
+            };
+
+            // Don't wrap code block text - use horizontal scroll instead
+            job.wrap.max_width = f32::INFINITY;
+
+            crate::elements::code_block(ui, &self.content, job, max_width, id);
+        });
+    }
+}
+
+#[cfg(feature = "mermaid")]
+enum MermaidState {
+    /// Background thread is rendering this diagram
+    Rendering,
+    /// Rendered and ready to display (texture is 2x for crisp lightbox zoom)
+    Ready {
+        texture: egui::TextureHandle,
+        size: egui::Vec2,
+    },
+    /// Rendering failed
+    Error(String),
+}
+
+#[cfg(feature = "mermaid")]
+struct MermaidRenderResult {
+    hash: u64,
+    result: Result<MermaidRendered, String>,
+}
+
+#[cfg(feature = "mermaid")]
+struct MermaidRendered {
+    image: egui::ColorImage,
+    size: egui::Vec2,
+}
+
+#[cfg(feature = "mermaid")]
+static MERMAID_FONTDB: LazyLock<Arc<resvg::usvg::fontdb::Database>> = LazyLock::new(|| {
+    let mut db = resvg::usvg::fontdb::Database::new();
+    db.load_system_fonts();
+    Arc::new(db)
+});
+
+#[cfg(feature = "mermaid")]
+fn fix_double_escaped_xml_entities(svg: &str) -> String {
+    // merman's escape_xml_text double-escapes text that mermaid has already
+    // entity-escaped for HTML foreignObject content.
+    // e.g. "a > b" → mermaid "a &gt; b" → escape_xml_text "a &amp;gt; b"
+    // Fix: revert the second escaping so resvg renders the intended character.
+    svg.replace("&amp;lt;", "&lt;")
+        .replace("&amp;gt;", "&gt;")
+        .replace("&amp;amp;", "&amp;")
+        .replace("&amp;quot;", "&quot;")
+        .replace("&amp;apos;", "&apos;")
+}
+
+#[cfg(feature = "mermaid")]
+fn rasterize_mermaid_svg(svg_bytes: &[u8]) -> Option<(egui::ColorImage, egui::Vec2)> {
+    let opts = resvg::usvg::Options {
+        fontdb: Arc::clone(&MERMAID_FONTDB),
+        ..Default::default()
+    };
+    let tree = resvg::usvg::Tree::from_data(svg_bytes, &opts).ok()?;
+    let svg_size = tree.size();
+
+    // Rasterize at 2x for crisp lightbox zoom (matches LightboxState::new)
+    let scale = 2.0_f32;
+    let w = (svg_size.width() * scale) as u32;
+    let h = (svg_size.height() * scale) as u32;
+    if w == 0 || h == 0 {
+        return None;
+    }
+
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h)?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+
+    // Convert premultiplied RGBA → straight RGBA for egui
+    let pixels = pixmap.data();
+    let mut rgba = Vec::with_capacity(pixels.len());
+    for chunk in pixels.chunks_exact(4) {
+        let a = chunk[3] as f32 / 255.0;
+        if a > 0.0 {
+            rgba.push((chunk[0] as f32 / a).min(255.0) as u8);
+            rgba.push((chunk[1] as f32 / a).min(255.0) as u8);
+            rgba.push((chunk[2] as f32 / a).min(255.0) as u8);
+        } else {
+            rgba.push(0);
+            rgba.push(0);
+            rgba.push(0);
+        }
+        rgba.push(chunk[3]);
+    }
+
+    let image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+    let size = egui::vec2(svg_size.width(), svg_size.height());
+    Some((image, size))
+}
+
+#[cfg(feature = "mermaid")]
+impl CodeBlock {
+    fn render_mermaid(
+        &self,
+        ui: &mut Ui,
+        cache: &mut CommonMarkCache,
+        options: &CommonMarkOptions,
+        max_width: f32,
+    ) {
+        let mut hasher = DefaultHasher::new();
+        self.content.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        // Poll for completed background renders
+        let mut received_any = false;
+        while let Ok(result) = cache.mermaid_rx.try_recv() {
+            received_any = true;
+            // Clear the rendering slot if this result is from the active thread
+            if cache.mermaid_rendering == Some(result.hash) {
+                cache.mermaid_rendering = None;
+            }
+            match result.result {
+                Ok(rendered) => {
+                    let texture = ui.ctx().load_texture(
+                        format!("mermaid_{}", result.hash),
+                        rendered.image,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    cache.mermaid_states.insert(
+                        result.hash,
+                        MermaidState::Ready {
+                            texture,
+                            size: rendered.size,
+                        },
+                    );
+                }
+                Err(err) => {
+                    cache.mermaid_states.insert(result.hash, MermaidState::Error(err));
+                }
+            }
+        }
+        if received_any {
+            cache.mark_layout_changed();
+            ui.ctx().request_repaint();
+        }
+
+        // First encounter: insert as Rendering placeholder, spawn only if slot is free
+        if !cache.mermaid_states.contains_key(&hash) {
+            cache.mermaid_states.insert(hash, MermaidState::Rendering);
+
+            if cache.mermaid_rendering.is_none() {
+                Self::spawn_mermaid_render(hash, &self.content, cache);
+            }
+        }
+
+        // Promote: if this diagram is waiting and no thread is active, spawn now.
+        // Since egui processes blocks in document order, the first Rendering block
+        // encountered after the slot clears is always the topmost waiting one.
+        if matches!(cache.mermaid_states.get(&hash), Some(MermaidState::Rendering))
+            && cache.mermaid_rendering.is_none()
+        {
+            Self::spawn_mermaid_render(hash, &self.content, cache);
+        }
+
+        // Display based on current state
+        let mut clicked: Option<(egui::TextureHandle, egui::Vec2)> = None;
+
+        match cache.mermaid_states.get(&hash) {
+            Some(MermaidState::Rendering) => {
+                // Placeholder with loading text
+                let w = max_width.min(options.max_width(ui));
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(w, 200.0), egui::Sense::hover());
+                if ui.is_rect_visible(rect) {
+                    ui.painter()
+                        .rect_filled(rect, 4.0, ui.visuals().faint_bg_color);
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Rendering diagram\u{2026}",
+                        egui::FontId::proportional(14.0),
+                        ui.visuals().text_color().gamma_multiply(0.5),
+                    );
+                }
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(100));
+            }
+            Some(MermaidState::Ready { texture, size }) => {
+                let sized_texture = egui::load::SizedTexture::new(texture.id(), *size);
+                let response = ui.add(
+                    egui::Image::new(egui::ImageSource::Texture(sized_texture))
+                        .fit_to_original_size(1.0)
+                        .max_width(options.max_width(ui).min(max_width))
+                        .sense(egui::Sense::click()),
+                );
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if response.clicked() {
+                    clicked = Some((texture.clone(), *size));
+                }
+            }
+            Some(MermaidState::Error(err_msg)) => {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    format!("Mermaid render error: {err_msg}"),
+                );
+            }
+            None => unreachable!(),
+        }
+
+        if let Some(data) = clicked {
+            cache.clicked_mermaid = Some(data);
+        }
+    }
+
+    /// Spawn a background thread to render a mermaid diagram and mark it as active.
+    fn spawn_mermaid_render(hash: u64, content: &str, cache: &mut CommonMarkCache) {
+        cache.mermaid_rendering = Some(hash);
+        let content = content.to_owned();
+        let tx = cache.mermaid_tx.clone();
+        let renderer = cache.mermaid_renderer.clone();
+
+        std::thread::spawn(move || {
+            let result = match renderer.render_svg_readable_sync(&content) {
+                Ok(Some(svg_string)) => {
+                    let svg_string = fix_double_escaped_xml_entities(&svg_string);
+                    let svg_string = CodeBlock::sanitize_svg_font_family(&svg_string);
+                    let svg_string = CodeBlock::strip_stroke_text(&svg_string);
+                    let svg_string = CodeBlock::wrap_fallback_text(&svg_string);
+                    let svg_bytes = svg_string.into_bytes();
+
+                    match rasterize_mermaid_svg(&svg_bytes) {
+                        Some((image, size)) => Ok(MermaidRendered { image, size }),
+                        None => Err("Failed to rasterize SVG".to_string()),
+                    }
+                }
+                Ok(None) => Err("Unknown diagram type".to_string()),
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = tx.send(MermaidRenderResult { hash, result });
+        });
+    }
+
+    /// Sanitize SVG font-family values for resvg compatibility.
+    /// Handles both XML attributes (`font-family="..."`) and CSS properties
+    /// (`font-family: ...;`) since merman outputs fonts in CSS format.
+    /// Replaces web fonts (Arial, Trebuchet MS, etc.) that may not be installed
+    /// with concrete system font names common on Linux. Also sets a default
+    /// font-family on the root `<svg>` element for text that lacks one
+    /// (e.g. sequence diagram labels).
+    fn sanitize_svg_font_family(svg: &str) -> String {
+        // DejaVu Sans first — it has the widest Unicode coverage (including →, ←, etc.)
+        // which prevents resvg from falling back to a monospace/bold font for missing glyphs.
+        let safe_attr = "DejaVu Sans, Noto Sans, Liberation Sans";
+        // Use single quotes — double quotes would break style="..." XML attributes
+        let safe_css = "'DejaVu Sans', 'Noto Sans', 'Liberation Sans', sans-serif";
+
+        let mut result = String::with_capacity(svg.len());
+        let mut remaining = svg;
+
+        while let Some(pos) = remaining.find("font-family") {
+            result.push_str(&remaining[..pos]);
+            let after = &remaining[pos + "font-family".len()..];
+
+            if let Some(after_eq) = after.strip_prefix("=\"") {
+                // XML attribute: font-family="..."
+                result.push_str("font-family=\"");
+                result.push_str(safe_attr);
+                result.push('"');
+                // Skip old value — find closing `"` (followed by `>`, ` `, `/`, or EOF)
+                let bytes = after_eq.as_bytes();
+                let mut end = after_eq.len();
+                for i in 0..bytes.len() {
+                    if bytes[i] == b'"' {
+                        match bytes.get(i + 1) {
+                            Some(b'>') | Some(b' ') | Some(b'/') | None => {
+                                end = i + 1;
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                remaining = &after_eq[end..];
+            } else if after.starts_with(':') {
+                // CSS property: font-family: ...; or font-family:...;
+                result.push_str("font-family: ");
+                result.push_str(safe_css);
+                // Skip colon, optional whitespace, and value until ; or }
+                let after_colon = &after[1..];
+                let trimmed = after_colon.trim_start();
+                if let Some(end) = trimmed.find(|c: char| c == ';' || c == '}') {
+                    remaining = &trimmed[end..];
+                } else {
+                    remaining = "";
+                }
+            } else {
+                // Not a font-family declaration we recognize
+                result.push_str("font-family");
+                remaining = after;
+            }
+        }
+        result.push_str(remaining);
+
+        // Set default font-family on root <svg> so text without explicit
+        // font-family (e.g. sequence diagram labels) inherits a consistent font.
+        if let Some(svg_pos) = result.find("<svg ") {
+            if !result[svg_pos..].starts_with(&format!("<svg font-family")) {
+                let insert_pos = svg_pos + 5; // after "<svg "
+                result.insert_str(insert_pos, &format!("font-family=\"{}\" ", safe_attr));
+            }
+        }
+
+        result
+    }
+
+    /// Remove stroke-outline `<text>` elements from fallback groups.
+    /// merman duplicates each label with `stroke="#fff" stroke-width="3"` for
+    /// readability on colored backgrounds, but this makes text look bold/fat
+    /// when rendered by resvg on white node backgrounds.
+    fn strip_stroke_text(svg: &str) -> String {
+        if !svg.contains("stroke=\"#fff\"") {
+            return svg.to_owned();
+        }
+        let mut result = String::with_capacity(svg.len());
+        let mut remaining = svg;
+
+        while let Some(pos) = remaining.find("<text ") {
+            let tag_end = remaining[pos..].find('>').map(|p| pos + p + 1);
+            let Some(tag_end) = tag_end else {
+                break;
+            };
+            let tag = &remaining[pos..tag_end];
+
+            if tag.contains("stroke=\"#fff\"") {
+                // Copy everything before this <text>, skip the element entirely
+                result.push_str(&remaining[..pos]);
+                if let Some(close) = remaining[pos..].find("</text>") {
+                    remaining = &remaining[pos + close + 7..];
+                } else {
+                    remaining = &remaining[tag_end..];
+                }
+            } else {
+                // Keep this text element — copy up to and including the tag
+                result.push_str(&remaining[..tag_end]);
+                remaining = &remaining[tag_end..];
+            }
+        }
+        result.push_str(remaining);
+        result
+    }
+
+    /// Word-wrap long fallback text in merman's readable SVG output.
+    /// merman places all node label text on a single line in the fallback `<text>` elements,
+    /// but the node rects are sized for wrapped text. This causes overflow when text is long.
+    /// We split long labels into multiple `<tspan>` lines to fit within nodes.
+    fn wrap_fallback_text(svg: &str) -> String {
+        const FALLBACK_MARKER: &str = "data-merman-foreignobject=\"fallback\"";
+        if !svg.contains(FALLBACK_MARKER) {
+            return svg.to_owned();
+        }
+
+        // Average char width at 16px for Noto Sans ≈ 8.5px; node rects cap at ~260px
+        // Use ~28 chars as the wrap threshold
+        const MAX_CHARS: usize = 28;
+
+        let mut result = String::with_capacity(svg.len() + 512);
+        let mut remaining = svg;
+
+        while let Some(marker_pos) = remaining.find(FALLBACK_MARKER) {
+            // Find the <g that starts this fallback group
+            let g_start = remaining[..marker_pos].rfind('<').unwrap_or(marker_pos);
+            // Copy everything before this group
+            result.push_str(&remaining[..g_start]);
+
+            // Find </g> end
+            let after_marker = &remaining[marker_pos..];
+            if let Some(g_end_rel) = after_marker.find("</g>") {
+                let g_end = marker_pos + g_end_rel + 4;
+                let group = &remaining[g_start..g_end];
+
+                // Process: find <tspan ...>TEXT</tspan> patterns and wrap long ones
+                let processed = Self::wrap_tspans_in_group(group, MAX_CHARS);
+                result.push_str(&processed);
+
+                remaining = &remaining[g_end..];
+            } else {
+                result.push_str(&remaining[g_start..]);
+                remaining = "";
+            }
+        }
+        result.push_str(remaining);
+        result
+    }
+
+    /// Process a single fallback `<g>` group: wrap long tspan text, then
+    /// recalculate all dy values so visual lines are evenly spaced and centered.
+    ///
+    /// Each visual line is emitted as its own `<text>` element with a single
+    /// `<tspan dy="...">` so that dy is always relative to the text element's
+    /// base y (not to a previous tspan).
+    fn wrap_tspans_in_group(group: &str, max_chars: usize) -> String {
+        const LINE_SPACING: f32 = 16.0; // matches font-size 16px
+
+        // --- Pass 1: collect <text> elements and wrap their tspan content ---
+
+        // We need: the open tag template (for style/attrs), x value, and visual lines.
+        let mut open_tag_template = String::new();
+        let mut x_val = String::new();
+        let mut all_visual_lines: Vec<String> = Vec::new();
+
+        let mut remaining = group;
+
+        // Prefix: everything before the first <text
+        let prefix = if let Some(pos) = remaining.find("<text") {
+            let p = remaining[..pos].to_string();
+            remaining = &remaining[pos..];
+            p
+        } else {
+            return group.to_owned();
+        };
+
+        while let Some(text_start) = remaining.find("<text") {
+            let text_rest = &remaining[text_start..];
+            let Some(open_end) = text_rest.find('>') else { break };
+
+            // Capture the first <text ...> tag as template (all share same attrs)
+            if open_tag_template.is_empty() {
+                open_tag_template = text_rest[..=open_end].to_string();
+            }
+
+            let inner = &text_rest[open_end + 1..];
+            let Some(close_pos) = inner.find("</text>") else { break };
+            let inner_content = &inner[..close_pos];
+
+            // Extract tspan content
+            let mut tspan_remaining = inner_content;
+            while let Some(ts) = tspan_remaining.find("<tspan") {
+                let ts_rest = &tspan_remaining[ts..];
+                let Some(ts_close) = ts_rest.find("</tspan>") else { break };
+                let full_tspan = &ts_rest[..ts_close + 8];
+
+                if x_val.is_empty() {
+                    x_val = Self::extract_attr(full_tspan, "x").to_string();
+                }
+
+                let content_start = full_tspan.find('>').map(|p| p + 1).unwrap_or(0);
+                let content = &full_tspan[content_start..ts_close];
+
+                if content.trim().len() > max_chars {
+                    all_visual_lines.extend(Self::word_wrap(content.trim(), max_chars));
+                } else {
+                    all_visual_lines.push(content.to_string());
+                }
+
+                tspan_remaining = &ts_rest[ts_close + 8..];
+            }
+
+            // Advance past </text>
+            remaining = &remaining[text_start + open_end + 1 + close_pos + 7..];
+        }
+
+        let suffix = remaining;
+
+        if all_visual_lines.is_empty() {
+            return group.to_owned();
+        }
+
+        // --- Pass 2: emit one <text> per visual line with centered dy ---
+        let total = all_visual_lines.len();
+        let mut result = String::with_capacity(group.len() + 512);
+        result.push_str(&prefix);
+
+        for (i, line) in all_visual_lines.iter().enumerate() {
+            let dy = if total <= 1 {
+                0.0
+            } else {
+                -(total as f32 - 1.0) * LINE_SPACING * 0.5 + i as f32 * LINE_SPACING
+            };
+            result.push_str(&open_tag_template);
+            result.push_str(&format!(
+                "<tspan x=\"{}\" dy=\"{}\">{}</tspan></text>",
+                x_val, dy, line
+            ));
+        }
+
+        result.push_str(suffix);
+        result
+    }
+
+    /// Extract an XML attribute value by name.
+    fn extract_attr<'a>(tag: &'a str, name: &str) -> &'a str {
+        let needle = format!("{}=\"", name);
+        if let Some(start) = tag.find(&needle) {
+            let val = &tag[start + needle.len()..];
+            if let Some(end) = val.find('"') {
+                return &val[..end];
+            }
+        }
+        ""
+    }
+
+    /// Word-wrap text at word boundaries, keeping lines under max_chars.
+    fn word_wrap(text: &str, max_chars: usize) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut current_line = String::new();
+
+        for word in text.split_whitespace() {
+            if current_line.is_empty() {
+                current_line = word.to_string();
+            } else if current_line.len() + 1 + word.len() <= max_chars {
+                current_line.push(' ');
+                current_line.push_str(word);
+            } else {
+                lines.push(std::mem::take(&mut current_line));
+                current_line = word.to_string();
+            }
+        }
+        if !current_line.is_empty() {
+            lines.push(current_line);
+        }
+        lines
+    }
+}
+
+// ── Math rendering (LaTeX → typst+mitex → SVG → rasterize) ─────────────────
+
+#[cfg(feature = "math")]
+enum MathState {
+    /// Background thread is rendering this formula
+    Rendering,
+    /// Rendered and ready to display
+    Ready {
+        texture: egui::TextureHandle,
+        size: egui::Vec2,
+        /// Baseline position as a fraction of image height from the top
+        /// (0 = top, 1 = bottom). Used to align inline math to the text baseline.
+        baseline_ratio: f32,
+    },
+    /// Rendering failed - show styled fallback
+    Error(String),
+}
+
+#[cfg(feature = "math")]
+struct MathRenderResult {
+    hash: u64,
+    result: Result<MathRendered, String>,
+}
+
+#[cfg(feature = "math")]
+struct MathRendered {
+    image: egui::ColorImage,
+    size: egui::Vec2,
+    /// Baseline position as a fraction of image height from the top.
+    baseline_ratio: f32,
+}
+
+#[cfg(feature = "math")]
+struct MathJob {
+    hash: u64,
+    latex: String,
+    is_inline: bool,
+    fg: egui::Color32,
+    bg: egui::Color32,
+    /// Resolved point size. Travels with the job because the worker thread has
+    /// no `Ui` to ask, and must match the size that produced `hash`.
+    size_pt: f32,
+    result_tx: mpsc::Sender<MathRenderResult>,
+}
+
+#[cfg(feature = "math")]
+#[derive(Debug, Eq, PartialEq)]
+enum MathEnqueueStatus {
+    Queued,
+    Full,
+    Disconnected,
+}
+
+#[cfg(feature = "math")]
+fn start_math_workers(worker_count: usize, queue_capacity: usize) -> mpsc::SyncSender<MathJob> {
+    let (tx, rx) = mpsc::sync_channel::<MathJob>(queue_capacity);
+    let rx = Arc::new(StdMutex::new(rx));
+    for worker in 0..worker_count {
+        let rx = Arc::clone(&rx);
+        if std::thread::Builder::new()
+            .name(format!("markdown-math-{worker}"))
+            .spawn(move || loop {
+                let job = match rx.lock() {
+                    Ok(receiver) => match receiver.recv() {
+                        Ok(job) => job,
+                        Err(_) => break,
+                    },
+                    Err(_) => break,
+                };
+                let result =
+                    render_math_formula(&job.latex, job.is_inline, job.fg, job.bg, job.size_pt);
+                let _ = job.result_tx.send(MathRenderResult {
+                    hash: job.hash,
+                    result,
+                });
+            })
+            .is_err()
+        {
+            break;
+        }
+    }
+    tx
+}
+
+#[cfg(feature = "math")]
+fn enqueue_math_job(sender: &mpsc::SyncSender<MathJob>, job: MathJob) -> MathEnqueueStatus {
+    match sender.try_send(job) {
+        Ok(()) => MathEnqueueStatus::Queued,
+        Err(mpsc::TrySendError::Full(_)) => MathEnqueueStatus::Full,
+        Err(mpsc::TrySendError::Disconnected(_)) => MathEnqueueStatus::Disconnected,
+    }
+}
+
+/// Shared bounded worker pool. Formula compilation is CPU-heavy, so creating
+/// a fresh OS thread for every formula adds avoidable latency and memory use.
+#[cfg(feature = "math")]
+static MATH_JOB_TX: LazyLock<mpsc::SyncSender<MathJob>> =
+    LazyLock::new(|| start_math_workers(math_concurrency(), 64));
+
+/// Typst preamble defining mitex helper functions needed to compile mitex output.
+/// These map mitex's custom function names to standard Typst math functions.
+#[cfg(feature = "math")]
+const MITEX_PREAMBLE: &str = r#"
+#let mitexmathbf(it) = math.bold(math.upright(it))
+#let mitexsqrt(..args) = {
+  if args.pos().len() == 1 { $sqrt(#args.pos().at(0))$ }
+  else if args.pos().len() == 2 { $root(#args.pos().at(0), #args.pos().at(1))$ }
+}
+#let mitexdisplay(it) = math.display(it)
+#let mitexinline(it) = math.inline(it)
+#let mitexscript(it) = math.script(it)
+#let mitexsscript(it) = math.sscript(it)
+#let mitexbold(it) = math.bold(math.upright(it))
+#let mitexupright(it) = math.upright(it)
+#let mitexitalic(it) = math.italic(it)
+#let mitexsans(it) = math.sans(it)
+#let mitexnot(it) = math.cancel(angle: 20deg, it)
+#let mitexlabel(it) = none
+#let mitexcaption(it) = none
+#let pmatrix = math.mat.with(delim: "(")
+#let bmatrix = math.mat.with(delim: "[")
+#let Bmatrix = math.mat.with(delim: "{")
+#let vmatrix = math.mat.with(delim: "|")
+#let Vmatrix = math.mat.with(delim: "||")
+#let aligned(..args) = args.pos().first()
+#let gathered(..args) = args.pos().first()
+#let mitexunderbrace(it) = math.underbrace(it)
+#let mitexoverbrace(it) = math.overbrace(it)
+#let stackrel(top, base) = math.attach(base, t: top)
+#let overset(top, base) = math.attach(base, t: top)
+#let textmath(it) = text(it)
+#let textbf(it) = text(weight: "bold", it)
+#let textit(it) = text(style: "italic", it)
+#let textrm(it) = text(it)
+// amsmath named operators emitted by mitex's standard command specification.
+#let operatorname(it) = math.op(math.upright(it))
+#let operatornamewithlimits(it) = math.op(limits: true, math.upright(it))
+// amsmath fraction/box/spacing commands mitex emits but does not map to typst:
+//   \tfrac/\dfrac -> tfrac(..)/dfrac(..), \boxed -> boxed(..), \! -> negthinspace
+#let tfrac(num, denom) = math.inline(math.frac(num, denom))
+#let dfrac(num, denom) = math.display(math.frac(num, denom))
+#let boxed(it) = box(stroke: 0.6pt, inset: (x: 4pt, y: 3pt), $it$)
+#let negthinspace = h(-0.16667em)
+#let xrightarrow(label) = $attach(arrow.r.long, t: #label)$
+#let xleftarrow(label) = $attach(arrow.l.long, t: #label)$
+"#;
+
+/// System fonts, searched and loaded once, then reused for every formula.
+///
+/// The original code called `search_fonts_with(Default::default())` while
+/// building a fresh engine *per formula*. That system-font disk scan dominated
+/// math rendering — ~3.1 s/formula on a dev box with many fonts, so a doc with
+/// hundreds of formulas took minutes. Searching once and reusing the loaded
+/// `Vec<Font>` drops per-formula cost to tens of ms (~71× on a 30-formula
+/// sample). `Font` is `Arc`-backed, so cloning the slice into each engine is
+/// cheap and thread-safe (each render thread builds its own engine).
+#[cfg(feature = "math")]
+static MATH_FONTS: LazyLock<Vec<typst::text::Font>> = LazyLock::new(|| {
+    // Load ONLY typst's embedded default fonts (New Computer Modern + NCM Math +
+    // Libertinus Serif + DejaVu Sans Mono), which are compiled into the binary.
+    // Math formulas only ever use these, so there's no need to scan or load the
+    // system font set — doing so cost ~13 s of first-formula latency for fonts
+    // no formula renders with. Embedded fonts load from memory in milliseconds.
+    let mut searcher = typst_kit::fonts::Fonts::searcher();
+    searcher
+        .include_system_fonts(false)
+        .include_embedded_fonts(true);
+    let mut fonts: Vec<_> = searcher
+        .search()
+        .fonts
+        .iter()
+        .filter_map(|slot| slot.get())
+        .collect();
+
+    // `\text{...}` inside formulas can contain CJK prose. Typst's embedded
+    // math fonts cover Latin and mathematical glyphs but not CJK, which would
+    // otherwise render as identical tofu boxes. Ask fontconfig for one generic
+    // Chinese sans-serif fallback and load only that file. This keeps startup
+    // fast and portable across Linux distributions without hard-coding a Noto,
+    // Source Han, WenQuanYi, or distro-specific font path/name.
+    let fallback_path = std::process::Command::new("fc-match")
+        .args(["-f", "%{file}\n", "sans-serif:lang=zh-cn"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .next()
+                .filter(|path| !path.is_empty())
+                .map(str::to_owned)
+        });
+    if let Some(path) = fallback_path {
+        if let Ok(data) = std::fs::read(path) {
+            fonts.extend(typst::text::Font::iter(typst::foundations::Bytes::new(data)));
+        }
+    }
+
+    fonts
+});
+
+/// Number of formulas to render (and fonts to load) concurrently. typst
+/// compilation is CPU-bound, so we cap at the core count (bounded to keep
+/// transient memory reasonable on low-RAM machines).
+#[cfg(feature = "math")]
+fn math_concurrency() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2)
+        .clamp(1, 6)
+}
+
+/// Force the one-time system-font search now (e.g. from a background thread at
+/// startup) so the first rendered formula doesn't pay the full search latency.
+#[cfg(feature = "math")]
+pub fn warm_math_fonts() {
+    LazyLock::force(&MATH_FONTS);
+}
+
+/// Find the math baseline within a rendered page, as a fraction of the page
+/// height from the top. typst doesn't set a baseline on the *page* frame, but
+/// the frame *contains* positioned glyph runs and a run's y-position is its
+/// baseline. The base-size symbols of an equation sit on the equation baseline
+/// (super/subscripts are smaller and offset), so we take the y of the
+/// largest-font-size text run. Recurses into transformed groups.
+#[cfg(feature = "math")]
+fn math_baseline_ratio(page: &typst::layout::Page) -> f32 {
+    let h = page.frame.height().to_pt();
+    if h <= 0.0 {
+        return 0.8;
+    }
+
+    // Preferred: typst sets a real baseline on the inline equation's own frame.
+    // The page frame doesn't carry it, but a nested group's frame does — find the
+    // first frame with an explicit baseline and use it (plus its y offset).
+    fn find_baseline(frame: &typst::layout::Frame, y_off: f64) -> Option<f64> {
+        if frame.has_baseline() {
+            return Some(y_off + frame.baseline().to_pt());
+        }
+        for (pos, item) in frame.items() {
+            if let typst::layout::FrameItem::Group(g) = item {
+                let gy = y_off + pos.y.to_pt() + g.transform.ty.to_pt();
+                if let Some(b) = find_baseline(&g.frame, gy) {
+                    return Some(b);
+                }
+            }
+        }
+        None
+    }
+    if let Some(b) = find_baseline(&page.frame, 0.0) {
+        return (b / h).clamp(0.0, 1.0) as f32;
+    }
+
+    // Fallback (block equations / no baseline set): average the baselines of the
+    // largest-font text runs. A single symbol gives its own baseline; a fraction
+    // (numerator + denominator, same size, above and below the bar) averages to
+    // the axis so it straddles the text line.
+    fn collect(frame: &typst::layout::Frame, y_off: f64, runs: &mut Vec<(f64, f64)>) {
+        for (pos, item) in frame.items() {
+            let y = y_off + pos.y.to_pt();
+            match item {
+                typst::layout::FrameItem::Text(t) => runs.push((t.size.to_pt(), y)),
+                typst::layout::FrameItem::Group(g) => {
+                    collect(&g.frame, y + g.transform.ty.to_pt(), runs);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut runs = Vec::new();
+    collect(&page.frame, 0.0, &mut runs);
+    let max_sz = runs.iter().fold(0.0f64, |m, &(s, _)| m.max(s));
+    let base: Vec<f64> = runs
+        .iter()
+        .filter(|&&(s, _)| s > max_sz - 0.01)
+        .map(|&(_, y)| y)
+        .collect();
+    if base.is_empty() {
+        return 0.8;
+    }
+    (base.iter().sum::<f64>() / base.len() as f64 / h).clamp(0.0, 1.0) as f32
+}
+
+/// Render a LaTeX math formula: convert via mitex, compile via typst, rasterize directly.
+#[cfg(feature = "math")]
+fn render_math_formula(
+    latex: &str,
+    is_inline: bool,
+    fg: egui::Color32,
+    bg: egui::Color32,
+    size_pt: f32,
+) -> Result<MathRendered, String> {
+    // 0. Decode common HTML entities that OCR/conversion tools may leave in math
+    let latex = latex
+        .replace("&#124;", "|")
+        .replace("&#x26;", "&")
+        .replace("&#38;", "&")
+        .replace("&#x3C;", "<")
+        .replace("&#60;", "<")
+        .replace("&#x3E;", ">")
+        .replace("&#62;", ">")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">");
+
+    // 1. Convert LaTeX → Typst math via mitex
+    let typst_math = mitex::convert_math(&latex, None).map_err(|e| format!("mitex: {e}"))?;
+
+    // 2. Build Typst source — render with transparent background so we get a clean
+    // alpha mask, then composite with egui colors in the pixel loop below.
+    // Inline: no horizontal margin — the surrounding text already provides word
+    // spacing, so a baked-in x-margin would double the gap around short symbols
+    // (`$w$`, `$z$`) and read as "weird spacing". Keep a little vertical margin
+    // so glyph extents (e.g. accents, descenders) aren't clipped.
+    // Inline vs display style. Whitespace inside `$ … $` makes typst render a
+    // *block* equation (displaystyle: bigger operators, centered, no inline
+    // baseline). `$…$` with no surrounding whitespace is *inline* (textstyle:
+    // correctly-sized for running text, and the equation carries a baseline we
+    // can read back). Use inline for `$…$` formulas, block for `$$…$$`.
+    let equation = if is_inline {
+        format!("${typst_math}$")
+    } else {
+        format!("$ {typst_math} $")
+    };
+
+    let source = format!(
+        r#"{preamble}
+#set page(width: auto, height: auto, margin: 0pt, fill: none)
+#set text(size: {size_pt}pt, fill: black)
+{equation}"#,
+        preamble = MITEX_PREAMBLE,
+        equation = equation,
+        size_pt = size_pt,
+    );
+
+    // 3. Compile with typst. Reuse the embedded fonts (see MATH_FONTS) instead
+    // of re-scanning the font directories per formula.
+    let engine = typst_as_lib::TypstEngine::builder()
+        .main_file(source)
+        .fonts(MATH_FONTS.iter().cloned())
+        .build();
+
+    let result = engine.compile::<typst::layout::PagedDocument>();
+    let doc = result.output.map_err(|e| format!("typst: {e}"))?;
+
+    let mut page = doc.pages.first().ok_or("typst: no pages")?.clone();
+
+    // Auto-sized Typst pages collapse to layout bounds, but math glyph ink can
+    // extend beyond those bounds. Expand and translate the vector frame before
+    // rasterization so fractions, limits, accents, and descenders are retained.
+    let (pad_left, pad_top, pad_right, pad_bottom) = if is_inline {
+        (
+            typst::layout::Abs::zero(),
+            typst::layout::Abs::pt(6.0),
+            typst::layout::Abs::zero(),
+            typst::layout::Abs::pt(9.0),
+        )
+    } else {
+        (
+            typst::layout::Abs::pt(8.0),
+            typst::layout::Abs::pt(6.0),
+            typst::layout::Abs::pt(8.0),
+            typst::layout::Abs::pt(6.0),
+        )
+    };
+    let original_size = page.frame.size();
+    page.frame
+        .translate(typst::layout::Point::new(pad_left, pad_top));
+    page.frame.set_size(typst::layout::Size::new(
+        original_size.x + pad_left + pad_right,
+        original_size.y + pad_top + pad_bottom,
+    ));
+
+    let baseline_ratio = math_baseline_ratio(&page);
+
+    // 4. Render directly to pixels via typst-render (no SVG intermediary)
+    let pixel_per_pt = 3.0_f32;
+    let pixmap = typst_render::render(&page, pixel_per_pt);
+
+    let w = pixmap.width() as usize;
+    let h = pixmap.height() as usize;
+    if w == 0 || h == 0 {
+        return Err("Empty render".into());
+    }
+
+    // Transparent background: typst-render outputs premultiplied RGBA.
+    // The alpha channel cleanly separates "ink" from "no ink".
+    // We boost alpha via pow(0.6) so thin strokes (like numerals) appear
+    // more solid, then composite fg over bg using the boosted alpha.
+    //
+    // Alpha is a u8, so there are only 256 possible boosted values. Precompute
+    // the composited fg/bg color for every alpha once (a 256-entry LUT) instead
+    // of running a powf + 3 lerps per pixel — the per-pixel loop was the single
+    // largest render cost (~90 ms/formula, more on big display equations).
+    let mut lut = [bg; 256];
+    for (a, slot) in lut.iter_mut().enumerate() {
+        if a >= 3 {
+            let boosted = (a as f32 / 255.0).powf(0.6).min(1.0);
+            let inv = 1.0 - boosted;
+            *slot = egui::Color32::from_rgb(
+                (fg.r() as f32 * boosted + bg.r() as f32 * inv) as u8,
+                (fg.g() as f32 * boosted + bg.g() as f32 * inv) as u8,
+                (fg.b() as f32 * boosted + bg.b() as f32 * inv) as u8,
+            );
+        }
+    }
+    let pixels = pixmap.data();
+    let colors: Vec<egui::Color32> = pixels
+        .chunks_exact(4)
+        .map(|c| lut[c[3] as usize])
+        .collect();
+
+    let image = egui::ColorImage {
+        size: [w, h],
+        pixels: colors,
+        source_size: egui::Vec2::new(w as f32, h as f32),
+    };
+    // Size in logical points (divide pixel size by scale)
+    let size = egui::vec2(w as f32 / pixel_per_pt, h as f32 / pixel_per_pt);
+    Ok(MathRendered {
+        image,
+        size,
+        baseline_ratio,
+    })
+}
+
+/// Return the rendered height of an inline formula once its asynchronous
+/// raster is cached. Fixed-height containers can grow on the next repaint.
+#[cfg(feature = "math")]
+pub fn cached_inline_math_height(
+    ui: &egui::Ui,
+    cache: &CommonMarkCache,
+    latex: &str,
+    options: &CommonMarkOptions,
+) -> Option<f32> {
+    // Key must match what the render pipeline stores (exact colors, like #92,
+    // and the same point size — see `math_size_pt`).
+    let hash = math_cache_hash(
+        latex,
+        true,
+        ui.visuals().text_color(),
+        ui.visuals().panel_fill,
+        math_size_pt(ui, options),
+    );
+    match cache.math_states.get(&hash) {
+        Some(MathState::Ready { size, .. }) => Some(size.y),
+        _ => None,
+    }
+}
+
+/// Public function to render math from the callback. Called from the `render_math_fn` closure.
+/// Handles caching and background rendering following the mermaid pattern.
+#[cfg(feature = "math")]
+pub fn render_math(
+    ui: &mut egui::Ui,
+    cache: &mut CommonMarkCache,
+    latex: &str,
+    is_inline: bool,
+    options: &CommonMarkOptions,
+) {
+    render_math_with_layout(ui, cache, latex, is_inline, true, options);
+}
+
+/// Render inline math in a vertically centered fixed-height table cell.
+#[cfg(feature = "math")]
+pub fn render_math_in_table(
+    ui: &mut egui::Ui,
+    cache: &mut CommonMarkCache,
+    latex: &str,
+    options: &CommonMarkOptions,
+) {
+    render_math_with_layout(ui, cache, latex, true, false, options);
+}
+
+#[cfg(feature = "math")]
+fn render_math_with_layout(
+    ui: &mut egui::Ui,
+    cache: &mut CommonMarkCache,
+    latex: &str,
+    is_inline: bool,
+    align_to_text_baseline: bool,
+    options: &CommonMarkOptions,
+) {
+    let bg = ui.visuals().panel_fill;
+    let fg = ui.visuals().text_color();
+    let size_pt = math_size_pt(ui, options);
+
+    let hash = math_cache_hash(latex, is_inline, fg, bg, size_pt);
+
+    // Poll for completed background renders
+    let mut received_any = false;
+    while let Ok(result) = cache.math_rx.try_recv() {
+        received_any = true;
+        cache.math_rendering.remove(&result.hash);
+        match result.result {
+            Ok(rendered) => {
+                let texture = ui.ctx().load_texture(
+                    format!("math_{}", result.hash),
+                    rendered.image,
+                    egui::TextureOptions::LINEAR,
+                );
+                cache.math_states.insert(
+                    result.hash,
+                    MathState::Ready {
+                        texture,
+                        size: rendered.size,
+                        baseline_ratio: rendered.baseline_ratio,
+                    },
+                );
+            }
+            Err(err) => {
+                cache.math_states.insert(result.hash, MathState::Error(err));
+            }
+        }
+    }
+    // A render just finished, freeing a concurrency slot. Repaint immediately so
+    // the next formula spawns now instead of waiting for the 100ms placeholder
+    // tick — otherwise throughput is capped at slots-per-100ms, not render speed.
+    if received_any {
+        cache.mark_layout_changed();
+        ui.ctx().request_repaint();
+    }
+
+    // First encounter: insert placeholder
+    if !cache.math_states.contains_key(&hash) {
+        cache.math_states.insert(hash, MathState::Rendering);
+    }
+
+    // Spawn if this formula is still waiting, isn't already being rendered, and
+    // a concurrency slot is free. Multiple formulas render in parallel.
+    if matches!(cache.math_states.get(&hash), Some(MathState::Rendering))
+        && !cache.math_rendering.contains(&hash)
+        && cache.math_rendering.len() < math_concurrency()
+    {
+        if spawn_math_render(hash, latex, is_inline, fg, bg, size_pt, cache)
+            == MathEnqueueStatus::Full
+        {
+            // The shared queue is bounded. Retry promptly after workers have
+            // had a chance to drain it instead of silently waiting for an
+            // unrelated UI event to revisit this formula.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(16));
+        }
+    }
+
+    // Display based on current state
+    match cache.math_states.get(&hash) {
+        Some(MathState::Rendering) => {
+            if is_inline && align_to_text_baseline {
+                // Inline: small placeholder
+                ui.spinner();
+            } else {
+                // Display: placeholder box
+                let w = ui.available_width().min(400.0);
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(w, 40.0), egui::Sense::hover());
+                if ui.is_rect_visible(rect) {
+                    ui.painter()
+                        .rect_filled(rect, 4.0, ui.visuals().faint_bg_color);
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "Rendering formula\u{2026}",
+                        egui::FontId::proportional(12.0),
+                        ui.visuals().text_color().gamma_multiply(0.5),
+                    );
+                }
+            }
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        Some(MathState::Ready {
+            texture,
+            size,
+            baseline_ratio,
+        }) => {
+            let sized_texture = egui::load::SizedTexture::new(texture.id(), *size);
+            if is_inline && align_to_text_baseline {
+                // Align the formula's own baseline to the text baseline. Inline
+                // content lays out bottom-aligned, so by default the image bottom
+                // sits at the line bottom and the formula's baseline (at a
+                // shape-dependent height inside the image — `baseline_ratio` from
+                // `math_baseline_ratio`) lands wherever.
+                //
+                // To raise the baseline by `lift` we DON'T paint the image shifted
+                // outside its allocated box (that gets clipped in dense paragraphs
+                // — the "cut off" bug). Instead we allocate a box that is `lift`
+                // taller and paint the image at its TOP, leaving transparent
+                // padding below. Bottom-alignment then drops the padding to the
+                // line bottom and lifts the formula's baseline by exactly `lift`,
+                // while the image stays fully inside its box.
+                //
+                // lift = text_descent − image_descent. `image_descent` is exact
+                // per formula; `text_descent` is the body-font descent below the
+                // line box, a shape-independent fraction of line height.
+                let img = egui::Image::new(egui::ImageSource::Texture(sized_texture));
+                // Compute the text descent EXACTLY from egui's own metrics
+                // instead of a tuned constant. epaint places a glyph's baseline
+                // at `font_ascent` below the row top and adds the line-height
+                // leading *below* the baseline, so the descent from the baseline
+                // to the line-box bottom is `line_height − font_ascent`. The
+                // body line height is `font_size × 1.5` (TypographyConfig default
+                // `line_height: Multiplier(1.5)`); `text_style_height` returns the
+                // font's *natural* height (≈1.2× size), which is why using it
+                // left formulas ~1px low.
+                let body_font = egui::TextStyle::Body.resolve(ui.style());
+                let font_size = body_font.size;
+                let line_height = font_size * 1.5;
+                let ref_galley =
+                    ui.painter()
+                        .layout_no_wrap("x".to_owned(), body_font, egui::Color32::WHITE);
+                let font_ascent = ref_galley
+                    .rows
+                    .first()
+                    .and_then(|r| r.row.glyphs.first())
+                    .map_or(font_size * 0.8, |g| g.font_ascent);
+                let text_descent = line_height - font_ascent;
+                let image_descent = (1.0 - *baseline_ratio) * size.y;
+                let lift = (text_descent - image_descent).max(0.0);
+                let (rect, _) = ui
+                    .allocate_exact_size(egui::vec2(size.x, size.y + lift), egui::Sense::hover());
+                img.paint_at(ui, egui::Rect::from_min_size(rect.min, *size));
+            } else if is_inline {
+                ui.add(egui::Image::new(egui::ImageSource::Texture(sized_texture)));
+            } else {
+                ui.add_space(8.0);
+                ui.vertical_centered(|ui| {
+                    ui.add(
+                        egui::Image::new(egui::ImageSource::Texture(sized_texture))
+                            .fit_to_original_size(1.0)
+                            .max_width(ui.available_width()),
+                    );
+                });
+                ui.add_space(8.0);
+            }
+        }
+        Some(MathState::Error(err_msg)) => {
+            // Styled fallback: show LaTeX source in a colored box
+            let frame = egui::Frame::new()
+                .inner_margin(4.0)
+                .corner_radius(2.0)
+                .fill(ui.visuals().faint_bg_color);
+            frame.show(ui, |ui| {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    format!("LaTeX error: {err_msg}"),
+                );
+                ui.monospace(latex);
+            });
+        }
+        None => unreachable!(),
+    }
+}
+
+#[cfg(feature = "math")]
+fn math_cache_hash(
+    latex: &str,
+    is_inline: bool,
+    fg: egui::Color32,
+    bg: egui::Color32,
+    size_pt: f32,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    latex.hash(&mut hasher);
+    is_inline.hash(&mut hasher);
+    fg.hash(&mut hasher);
+    bg.hash(&mut hasher);
+    // Quantized to 0.01 pt: the rendered bitmap differs at any size the eye can
+    // tell apart, but per-frame float resolution of the body height must not
+    // spawn a fresh typst compile every paint.
+    ((size_pt * 100.0).round() as i64).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Point size to render formulas at, given the ui's Body style and the
+/// configured scale.
+///
+/// Kept in one place because the render path and the height-lookup path
+/// compute the cache key independently — if they disagree by so much as a
+/// rounding step, the lookup misses a key that was just stored.
+pub fn math_size_pt(ui: &egui::Ui, options: &CommonMarkOptions) -> f32 {
+    let body = ui
+        .style()
+        .text_styles
+        .get(&egui::TextStyle::Body)
+        .map(|f| f.size)
+        .unwrap_or(16.0);
+    (body * options.math_scale).max(1.0)
+}
+
+#[cfg(feature = "math")]
+fn spawn_math_render(
+    hash: u64,
+    latex: &str,
+    is_inline: bool,
+    fg: egui::Color32,
+    bg: egui::Color32,
+    size_pt: f32,
+    cache: &mut CommonMarkCache,
+) -> MathEnqueueStatus {
+    let job = MathJob {
+        hash,
+        latex: latex.to_owned(),
+        is_inline,
+        fg,
+        size_pt,
+        bg,
+        result_tx: cache.math_tx.clone(),
+    };
+    let status = enqueue_math_job(&MATH_JOB_TX, job);
+    match status {
+        MathEnqueueStatus::Queued => {
+            cache.math_rendering.insert(hash);
+        }
+        MathEnqueueStatus::Full => {}
+        MathEnqueueStatus::Disconnected => {
+            cache.math_states.insert(
+                hash,
+                MathState::Error("math renderer workers are unavailable".to_owned()),
+            );
+        }
+    }
+    status
+}
+
+#[cfg(not(feature = "better_syntax_highlighting"))]
+impl CodeBlock {
+    fn pre_syntax_highlighting(
+        _cache: &mut CommonMarkCache,
+        _options: &CommonMarkOptions,
+        ui: &mut Ui,
+    ) {
+        ui.style_mut().visuals.extreme_bg_color = ui.visuals().extreme_bg_color;
+    }
+
+    fn syntax_highlighting(
+        &self,
+        _cache: &mut CommonMarkCache,
+        _options: &CommonMarkOptions,
+        extension: &str,
+        ui: &Ui,
+        text: &str,
+        code_line_height: Option<f32>,
+    ) -> egui::text::LayoutJob {
+        simple_highlighting(ui, text, extension, code_line_height)
+    }
+}
+
+#[cfg(feature = "better_syntax_highlighting")]
+impl CodeBlock {
+    fn pre_syntax_highlighting(
+        cache: &mut CommonMarkCache,
+        options: &CommonMarkOptions,
+        ui: &mut Ui,
+    ) {
+        let curr_theme = cache.curr_theme(ui, options);
+        let style = ui.style_mut();
+
+        style.visuals.extreme_bg_color = curr_theme
+            .settings
+            .background
+            .map(syntect_color_to_egui)
+            .unwrap_or(style.visuals.extreme_bg_color);
+
+        if let Some(color) = curr_theme.settings.selection_foreground {
+            style.visuals.selection.bg_fill = syntect_color_to_egui(color);
+        }
+    }
+
+    fn syntax_highlighting(
+        &self,
+        cache: &CommonMarkCache,
+        options: &CommonMarkOptions,
+        extension: &str,
+        ui: &Ui,
+        text: &str,
+        code_line_height: Option<f32>,
+    ) -> egui::text::LayoutJob {
+        if let Some(syntax) = cache.ps.find_syntax_by_extension(extension) {
+            let mut job = egui::text::LayoutJob::default();
+            let mut h = HighlightLines::new(syntax, cache.curr_theme(ui, options));
+
+            for line in LinesWithEndings::from(text) {
+                let ranges = h.highlight_line(line, &cache.ps).unwrap();
+                for v in ranges {
+                    let front = v.0.foreground;
+                    let mut format = egui::TextFormat::simple(
+                        TextStyle::Monospace.resolve(ui.style()),
+                        syntect_color_to_egui(front),
+                    );
+                    // Apply code line height if configured
+                    if let Some(line_height) = code_line_height {
+                        format.line_height = Some(line_height);
+                    }
+                    job.append(v.1, 0.0, format);
+                }
+            }
+
+            job
+        } else {
+            simple_highlighting(ui, text, extension, code_line_height)
+        }
+    }
+}
+
+fn simple_highlighting(ui: &Ui, text: &str, extension: &str, code_line_height: Option<f32>) -> egui::text::LayoutJob {
+    let mut job = egui_extras::syntax_highlighting::highlight(
+        ui.ctx(),
+        ui.style(),
+        &egui_extras::syntax_highlighting::CodeTheme::from_style(ui.style()),
+        text,
+        extension,
+    );
+    // Apply code line height to all sections if configured
+    if let Some(line_height) = code_line_height {
+        for section in &mut job.sections {
+            section.format.line_height = Some(line_height);
+        }
+    }
+    job
+}
+
+fn plain_highlighting(ui: &Ui, text: &str, code_line_height: Option<f32>) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let mut format = egui::TextFormat::simple(
+        TextStyle::Monospace.resolve(ui.style()),
+        ui.style().visuals.text_color(),
+    );
+    // Apply code line height if configured
+    if let Some(line_height) = code_line_height {
+        format.line_height = Some(line_height);
+    }
+    job.append(text, 0.0, format);
+    job
+}
+
+#[cfg(feature = "better_syntax_highlighting")]
+fn syntect_color_to_egui(color: syntect::highlighting::Color) -> egui::Color32 {
+    egui::Color32::from_rgb(color.r, color.g, color.b)
+}
+
+#[cfg(feature = "better_syntax_highlighting")]
+fn default_theme(ui: &Ui) -> &str {
+    if ui.style().visuals.dark_mode {
+        DEFAULT_THEME_DARK
+    } else {
+        DEFAULT_THEME_LIGHT
+    }
+}
+
+/// A cache used for storing content such as images.
+pub struct CommonMarkCache {
+    // Everything stored in `CommonMarkCache` must take into account that
+    // the cache is for multiple `CommonMarkviewer`s with different source_ids.
+    #[cfg(feature = "better_syntax_highlighting")]
+    ps: Arc<SyntaxSet>,
+
+    #[cfg(feature = "better_syntax_highlighting")]
+    ts: ThemeSet,
+
+    link_hooks: HashMap<String, bool>,
+
+    scroll: HashMap<egui::Id, ScrollableCache>,
+
+    /// Cached parsed markdown events to avoid re-parsing every frame.
+    /// Keyed by a hash of the source text. Cleared when cache is reset.
+    cached_events: Option<(u64, Vec<(pulldown_cmark::Event<'static>, std::ops::Range<usize>)>)>,
+
+    /// Cached syntect LayoutJobs for code blocks, keyed by
+    /// (content_hash, lang, theme_is_dark, mono_font_size).
+    /// Avoids re-running syntect on every paint of an already-rendered block.
+    /// Theme/zoom changes naturally key in new entries; old ones become dead
+    /// weight until the cache is reset on file load.
+    syntax_layouts: HashMap<u64, LayoutJob>,
+    pub(self) has_installed_loaders: bool,
+
+    /// Stores the y-position of each header (by normalized title) for scroll navigation.
+    /// Populated during rendering, cleared on content change.
+    header_positions: HashMap<String, f32>,
+    /// Current scroll offset, set before rendering to calculate content-relative positions.
+    current_scroll_offset: f32,
+
+    /// Byte ranges of search matches in the source content. Renderer paints a background
+    /// color on overlapping text events. Sorted ascending by start.
+    search_ranges: Vec<std::ops::Range<usize>>,
+    /// Active match — gets a stronger highlight color.
+    active_search_range: Option<std::ops::Range<usize>>,
+    /// Content-relative y position recorded by the renderer when the active match
+    /// is painted. Used by the app for precise scroll-into-view, since line-ratio
+    /// estimates are unreliable in image-heavy documents.
+    active_search_y: Option<f32>,
+
+    /// Incremented whenever asynchronous content changes the document layout.
+    layout_revision: u64,
+
+    /// Mermaid diagram render states: content hash → rendering/ready/error
+    #[cfg(feature = "mermaid")]
+    mermaid_states: HashMap<u64, MermaidState>,
+
+    /// Channel sender for background mermaid render results
+    #[cfg(feature = "mermaid")]
+    mermaid_tx: mpsc::Sender<MermaidRenderResult>,
+
+    /// Channel receiver for background mermaid render results
+    #[cfg(feature = "mermaid")]
+    mermaid_rx: mpsc::Receiver<MermaidRenderResult>,
+
+    /// Mermaid renderer instance (reused across renders)
+    #[cfg(feature = "mermaid")]
+    mermaid_renderer: merman::render::HeadlessRenderer,
+
+    /// Set when a mermaid diagram is clicked (texture + logical size for lightbox)
+    #[cfg(feature = "mermaid")]
+    clicked_mermaid: Option<(egui::TextureHandle, egui::Vec2)>,
+
+    /// Set when a regular image is clicked (texture id + intrinsic size for lightbox).
+    /// Texture lifetime is owned by egui's loader, so we only carry the id.
+    clicked_image: Option<(egui::TextureId, egui::Vec2)>,
+
+    /// Last allocated size per ordinary image URI. Loader completion can
+    /// replace a placeholder with a differently sized image.
+    image_sizes: HashMap<String, egui::Vec2>,
+
+    /// Hash of the diagram that currently has an active background thread.
+    /// Only one diagram renders at a time so they appear top-to-bottom.
+    #[cfg(feature = "mermaid")]
+    mermaid_rendering: Option<u64>,
+
+    /// Math formula render states: content hash → rendering/ready/error
+    #[cfg(feature = "math")]
+    math_states: HashMap<u64, MathState>,
+
+    /// Channel sender for background math render results
+    #[cfg(feature = "math")]
+    math_tx: mpsc::Sender<MathRenderResult>,
+
+    /// Channel receiver for background math render results
+    #[cfg(feature = "math")]
+    math_rx: mpsc::Receiver<MathRenderResult>,
+
+    /// Hashes of formulas that currently have an active background render
+    /// thread (bounded by `math_concurrency()`).
+    #[cfg(feature = "math")]
+    math_rendering: HashSet<u64>,
+}
+
+impl std::fmt::Debug for CommonMarkCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("CommonMarkCache");
+        s.field("link_hooks", &self.link_hooks)
+            .field("scroll", &self.scroll)
+            .field("has_installed_loaders", &self.has_installed_loaders)
+            .field("header_positions", &self.header_positions)
+            .field("current_scroll_offset", &self.current_scroll_offset)
+            .field("search_ranges_count", &self.search_ranges.len())
+            .field("active_search_range", &self.active_search_range);
+        #[cfg(feature = "mermaid")]
+        s.field("mermaid_states_count", &self.mermaid_states.len());
+        #[cfg(feature = "mermaid")]
+        s.field("clicked_mermaid", &self.clicked_mermaid.is_some());
+        s.field("clicked_image", &self.clicked_image.is_some());
+        #[cfg(feature = "math")]
+        s.field("math_states_count", &self.math_states.len());
+        s.finish()
+    }
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for CommonMarkCache {
+    fn default() -> Self {
+        #[cfg(feature = "mermaid")]
+        let (mermaid_tx, mermaid_rx) = mpsc::channel();
+        #[cfg(feature = "math")]
+        let (math_tx, math_rx) = mpsc::channel();
+
+        Self {
+            #[cfg(feature = "better_syntax_highlighting")]
+            ps: Arc::clone(&GLOBAL_SYNTAX_SET),
+            #[cfg(feature = "better_syntax_highlighting")]
+            ts: ThemeSet::load_defaults(),
+            link_hooks: HashMap::new(),
+            scroll: Default::default(),
+            has_installed_loaders: false,
+            header_positions: HashMap::new(),
+            current_scroll_offset: 0.0,
+            search_ranges: Vec::new(),
+            active_search_range: None,
+            active_search_y: None,
+            layout_revision: 0,
+            #[cfg(feature = "mermaid")]
+            mermaid_states: HashMap::new(),
+            #[cfg(feature = "mermaid")]
+            mermaid_tx,
+            #[cfg(feature = "mermaid")]
+            mermaid_rx,
+            #[cfg(feature = "mermaid")]
+            mermaid_renderer: merman::render::HeadlessRenderer::new()
+                .with_text_measurer(Arc::new(merman::render::DeterministicTextMeasurer {
+                    // Wider than default (0.55) to accommodate Noto Sans/DejaVu Sans
+                    // which are wider than the vendored Trebuchet MS metrics.
+                    // 0.65 prevents text overlap in complex flowcharts with long labels.
+                    char_width_factor: 0.65,
+                    line_height_factor: 0.0, // use internal default
+                })),
+            #[cfg(feature = "mermaid")]
+            clicked_mermaid: None,
+            clicked_image: None,
+            image_sizes: HashMap::new(),
+            #[cfg(feature = "mermaid")]
+            mermaid_rendering: None,
+            #[cfg(feature = "math")]
+            math_states: HashMap::new(),
+            #[cfg(feature = "math")]
+            math_tx,
+            #[cfg(feature = "math")]
+            math_rx,
+            #[cfg(feature = "math")]
+            math_rendering: HashSet::new(),
+            cached_events: None,
+            syntax_layouts: HashMap::new(),
+        }
+    }
+}
+
+impl CommonMarkCache {
+    #[cfg(feature = "better_syntax_highlighting")]
+    pub fn add_syntax_from_folder(&mut self, path: &str) {
+        let mut builder = (*self.ps).clone().into_builder();
+        let _ = builder.add_from_folder(path, true);
+        self.ps = Arc::new(builder.build());
+    }
+
+    #[cfg(feature = "better_syntax_highlighting")]
+    pub fn add_syntax_from_str(&mut self, s: &str, fallback_name: Option<&str>) {
+        let mut builder = (*self.ps).clone().into_builder();
+        let _ = SyntaxDefinition::load_from_str(s, true, fallback_name).map(|d| builder.add(d));
+        self.ps = Arc::new(builder.build());
+    }
+
+    #[cfg(feature = "better_syntax_highlighting")]
+    /// Add more color themes for code blocks(.tmTheme files). Set the color theme with
+    /// [`syntax_theme_dark`](CommonMarkViewer::syntax_theme_dark) and
+    /// [`syntax_theme_light`](CommonMarkViewer::syntax_theme_light)
+    pub fn add_syntax_themes_from_folder(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<(), syntect::LoadingError> {
+        self.ts.add_from_folder(path)
+    }
+
+    #[cfg(feature = "better_syntax_highlighting")]
+    /// Add color theme for code blocks(.tmTheme files). Set the color theme with
+    /// [`syntax_theme_dark`](CommonMarkViewer::syntax_theme_dark) and
+    /// [`syntax_theme_light`](CommonMarkViewer::syntax_theme_light)
+    pub fn add_syntax_theme_from_bytes(
+        &mut self,
+        name: impl Into<String>,
+        bytes: &[u8],
+    ) -> Result<(), syntect::LoadingError> {
+        let mut cursor = std::io::Cursor::new(bytes);
+        self.ts
+            .themes
+            .insert(name.into(), ThemeSet::load_from_reader(&mut cursor)?);
+        Ok(())
+    }
+
+    /// Take the clicked mermaid texture and size (if any). Returns `Some` once per click.
+    /// The texture is pre-rasterized at 2x resolution for crisp lightbox zoom.
+    #[cfg(feature = "mermaid")]
+    pub fn take_clicked_mermaid(&mut self) -> Option<(egui::TextureHandle, egui::Vec2)> {
+        self.clicked_mermaid.take()
+    }
+
+    /// Take the clicked image texture id and size (if any). Returns `Some` once per click.
+    /// The texture is owned by egui's loader; the id is valid for as long as it stays loaded.
+    pub fn take_clicked_image(&mut self) -> Option<(egui::TextureId, egui::Vec2)> {
+        self.clicked_image.take()
+    }
+
+    /// Clear the cache for all scrollable elements
+    pub fn clear_scrollable(&mut self) {
+        self.scroll.clear();
+    }
+
+    /// Clear the cache for a specific scrollable viewer. Returns false if the
+    /// id was not in the cache.
+    pub fn clear_scrollable_with_id(&mut self, source_id: impl std::hash::Hash) -> bool {
+        self.scroll.remove(&egui::Id::new(source_id)).is_some()
+    }
+
+    /// If the user clicks on a link in the markdown render that has `name` as a link. The hook
+    /// specified with this method will be set to true. It's status can be acquired
+    /// with [`get_link_hook`](Self::get_link_hook). Be aware that all hook state is reset once
+    /// [`CommonMarkViewer::show`] gets called
+    ///
+    /// # Why use link hooks
+    ///
+    /// egui provides a method for checking links afterwards so why use this instead?
+    ///
+    /// ```rust
+    /// # use egui::__run_test_ctx;
+    /// # __run_test_ctx(|ctx| {
+    /// ctx.output_mut(|o| for command in &o.commands {
+    ///     matches!(command, egui::OutputCommand::OpenUrl(_));
+    /// });
+    /// # });
+    /// ```
+    ///
+    /// The main difference is that link hooks allows egui_commonmark to check for link hooks
+    /// while rendering. Normally when hovering over a link, egui_commonmark will display the full
+    /// url. With link hooks this feature is disabled, but to do that all hooks must be known.
+    // Works when displayed through egui_commonmark
+    #[allow(rustdoc::broken_intra_doc_links)]
+    pub fn add_link_hook<S: Into<String>>(&mut self, name: S) {
+        self.link_hooks.insert(name.into(), false);
+    }
+
+    /// Returns None if the link hook could not be found. Returns the last known status of the
+    /// hook otherwise.
+    pub fn remove_link_hook(&mut self, name: &str) -> Option<bool> {
+        self.link_hooks.remove(name)
+    }
+
+    /// Get status of link. Returns true if it was clicked
+    pub fn get_link_hook(&self, name: &str) -> Option<bool> {
+        self.link_hooks.get(name).copied()
+    }
+
+    /// Remove all link hooks
+    pub fn link_hooks_clear(&mut self) {
+        self.link_hooks.clear();
+    }
+
+    /// All link hooks
+    pub fn link_hooks(&self) -> &HashMap<String, bool> {
+        &self.link_hooks
+    }
+
+    /// Raw access to link hooks
+    pub fn link_hooks_mut(&mut self) -> &mut HashMap<String, bool> {
+        &mut self.link_hooks
+    }
+
+    /// Set all link hooks to false
+    fn deactivate_link_hooks(&mut self) {
+        for v in self.link_hooks.values_mut() {
+            *v = false;
+        }
+    }
+
+    #[cfg(feature = "better_syntax_highlighting")]
+    fn curr_theme(&self, ui: &Ui, options: &CommonMarkOptions) -> &Theme {
+        self.ts
+            .themes
+            .get(options.curr_theme(ui))
+            // Since we have called load_defaults, the default theme *should* always be available..
+            .unwrap_or_else(|| &self.ts.themes[default_theme(ui)])
+    }
+
+    /// Set the current scroll offset before rendering.
+    /// This is used to calculate content-relative header positions.
+    pub fn set_scroll_offset(&mut self, offset: f32) {
+        self.current_scroll_offset = offset;
+    }
+
+    /// Record the y-position of a header for scroll navigation.
+    /// Converts viewport-relative position to content-relative using scroll offset.
+    /// Always updates to reflect current layout (e.g. after zoom changes the content width).
+    /// The `normalized_key` should be a pre-computed lowercase key for the header title.
+    pub fn record_header_position(&mut self, normalized_key: &str, viewport_y: f32) {
+        let content_y = self.current_scroll_offset + viewport_y;
+        self.header_positions.insert(normalized_key.to_string(), content_y);
+    }
+
+    /// Record a header's already-content-relative y directly (no offset addition).
+    /// The bootstrap path uses this with `y = cursor.y - ui.min_rect().top()`,
+    /// which is invariant under scroll (cursor and min_rect both shift with
+    /// `state.offset.y`). The other entry point — `record_header_position` —
+    /// is for `show_viewport`, whose cursor is already viewport-relative so
+    /// the offset addition is needed.
+    pub fn record_header_content_y(&mut self, normalized_key: &str, content_y: f32) {
+        self.header_positions.insert(normalized_key.to_string(), content_y);
+    }
+
+    /// Same as `record_header_content_y` but only stores if the key isn't
+    /// already recorded. Subsequent paints can produce drifted y values
+    /// (image-load completion, font-metric resolution, etc.) — pinning the
+    /// first sighting keeps the cache stable and matches what the user sees
+    /// in the layout that was first painted. Reflow events invalidate via
+    /// `clear_header_positions`.
+    pub fn record_header_content_y_if_absent(&mut self, normalized_key: &str, content_y: f32) {
+        self.header_positions
+            .entry(normalized_key.to_string())
+            .or_insert(content_y);
+    }
+
+    /// Get the y-position of a header by its normalized title (content-relative).
+    /// Returns None if the header hasn't been rendered yet.
+    /// The `normalized_key` should be a pre-computed lowercase key for the header title.
+    pub fn get_header_position(&self, normalized_key: &str) -> Option<f32> {
+        self.header_positions.get(normalized_key).copied()
+    }
+
+    /// Clear all recorded header positions.
+    /// Should be called when content changes.
+    pub fn clear_header_positions(&mut self) {
+        self.header_positions.clear();
+    }
+
+    /// Replace the set of search-match byte ranges. Renderer paints a background color
+    /// on text events that overlap these ranges. Ranges should be sorted by start and
+    /// non-overlapping; the caller is responsible for that invariant.
+    pub fn set_search_ranges(&mut self, ranges: Vec<std::ops::Range<usize>>) {
+        self.search_ranges = ranges;
+    }
+
+    /// Set the currently active match. Renderer uses a stronger highlight color for it.
+    /// Resets the recorded y position; the renderer will re-record on next paint.
+    pub fn set_active_search_range(&mut self, range: Option<std::ops::Range<usize>>) {
+        if self.active_search_range != range {
+            self.active_search_y = None;
+        }
+        self.active_search_range = range;
+    }
+
+    /// Clear all search-match state.
+    pub fn clear_search_ranges(&mut self) {
+        self.search_ranges.clear();
+        self.active_search_range = None;
+        self.active_search_y = None;
+    }
+
+    /// Record the actual content-relative y position of the active match.
+    /// Called by the renderer when an Active highlight is emitted.
+    /// `viewport_y` is the cursor y inside `show_viewport`; converted to
+    /// content-relative by adding the scroll offset.
+    pub fn record_active_search_y_viewport(&mut self, viewport_y: f32) {
+        self.active_search_y = Some(self.current_scroll_offset + viewport_y);
+    }
+
+    /// Record an active search position already expressed in document space.
+    pub fn record_active_search_content_y(&mut self, content_y: f32) {
+        self.active_search_y = Some(content_y);
+    }
+
+    /// Get the recorded content-relative y of the active match, if it has rendered
+    /// at least once since the active range was set. Used for precise scroll-into-view.
+    pub fn active_search_y(&self) -> Option<f32> {
+        self.active_search_y
+    }
+
+    pub fn layout_revision(&self) -> u64 {
+        self.layout_revision
+    }
+
+    pub fn mark_layout_changed(&mut self) {
+        self.layout_revision = self.layout_revision.wrapping_add(1);
+    }
+
+    fn observe_image_size(&mut self, uri: &str, size: egui::Vec2) {
+        match self.image_sizes.insert(uri.to_owned(), size) {
+            // A later size change invalidates measurements taken against the
+            // previous one.
+            Some(previous) if (previous - size).length_sq() > 0.25 => {
+                self.mark_layout_changed();
+            }
+            // `HashMap::insert` returns `None` the first time a key is written.
+            // Images load asynchronously, so the first paint measured any row
+            // containing this image with no size available; that measurement is
+            // now stale and has to be redone. Without this arm the row keeps the
+            // height it was given before the image existed (#124).
+            None => {
+                self.mark_layout_changed();
+            }
+            _ => {}
+        }
+    }
+
+    /// Seed an observed image size without painting. Test-only: production
+    /// code must go through the paint path so `layout_revision` is maintained.
+    #[doc(hidden)]
+    pub fn observe_image_size_for_test(&mut self, uri: &str, size: egui::Vec2) {
+        self.observe_image_size(uri, size);
+    }
+
+    /// Size of an image as last painted, if it has been painted at least once.
+    ///
+    /// Returns `None` before the first paint of that URI — callers must fall
+    /// back rather than assume zero, or a row will collapse on the frame before
+    /// the image loads.
+    pub fn observed_image_size(&self, uri: &str) -> Option<egui::Vec2> {
+        self.image_sizes.get(uri).copied()
+    }
+
+    /// Read-only view of stored search ranges (used by the renderer).
+    pub fn search_ranges(&self) -> &[std::ops::Range<usize>] {
+        &self.search_ranges
+    }
+
+    /// Read-only view of the active search range (used by the renderer).
+    pub fn active_search_range(&self) -> Option<&std::ops::Range<usize>> {
+        self.active_search_range.as_ref()
+    }
+
+    /// Get cached parsed events if the content hash matches.
+    pub fn get_cached_events(&self, content_hash: u64) -> Option<&[(pulldown_cmark::Event<'static>, std::ops::Range<usize>)]> {
+        self.cached_events.as_ref().and_then(|(hash, events)| {
+            if *hash == content_hash {
+                Some(events.as_slice())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Store parsed events in the cache.
+    pub fn set_cached_events(&mut self, content_hash: u64, events: Vec<(pulldown_cmark::Event<'static>, std::ops::Range<usize>)>) {
+        self.cached_events = Some((content_hash, events));
+    }
+}
+
+pub fn scroll_cache<'a>(cache: &'a mut CommonMarkCache, id: &egui::Id) -> &'a mut ScrollableCache {
+    if !cache.scroll.contains_key(id) {
+        cache.scroll.insert(*id, Default::default());
+    }
+    cache.scroll.get_mut(id).unwrap()
+}
+
+/// Should be called before any rendering
+pub fn prepare_show(cache: &mut CommonMarkCache, ctx: &egui::Context) {
+    if !cache.has_installed_loaders {
+        // Even though the install function can be called multiple times, its not the cheapest
+        // so we ensure that we only call it once.
+        // This could be done at the creation of the cache, however it is better to keep the
+        // cache free from egui's Ui and Context types as this allows it to be created before
+        // any egui instances. It also keeps the API similar to before the introduction of the
+        // image loaders.
+        #[cfg(feature = "embedded_image")]
+        crate::data_url_loader::install_loader(ctx);
+
+        egui_extras::install_image_loaders(ctx);
+        cache.has_installed_loaders = true;
+    }
+
+    cache.deactivate_link_hooks();
+}

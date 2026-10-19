@@ -1,0 +1,701 @@
+//! A commonmark viewer for egui
+//!
+//! # Example
+//!
+//! ```
+//! # use egui_commonmark_extended::*;
+//! # use egui::__run_test_ui;
+//! let markdown =
+//! r"# Hello world
+//!
+//! * A list
+//! * [ ] Checkbox
+//! ";
+//!
+//! # __run_test_ui(|ui| {
+//! let mut cache = CommonMarkCache::default();
+//! CommonMarkViewer::new().show(ui, &mut cache, markdown);
+//! # });
+//!
+//! ```
+//!
+//! Remember to opt into the image formats you want to use!
+//!
+//! ```toml
+//! image = { version = "0.25", default-features = false, features = ["png"] }
+//! ```
+//! # FAQ
+//!
+//! ## URL is not displayed when hovering over a link
+//!
+//! By default egui does not show urls when you hover hyperlinks. To enable it,
+//! you can do the following before calling any ui related functions:
+//!
+//! ```
+//! # use egui::__run_test_ui;
+//! # __run_test_ui(|ui| {
+//! ui.style_mut().url_in_tooltip = true;
+//! # });
+//! ```
+//!
+//!
+//! # Compile time evaluation of markdown
+//!
+//! If you want to embed markdown directly the binary then you can enable the `macros` feature.
+//! This will do the parsing of the markdown at compile time and output egui widgets.
+//!
+//! ## Example
+//!
+//! ```
+//! # // The macro only exists with the `macros` feature. rustdoc compiles a
+//! # // doctest with the crate's own cfgs, so gating keeps this compiled and run
+//! # // when the feature is on and trivially empty when it is off — rather than
+//! # // failing a plain `cargo test` with `cannot find macro` (issue #122).
+//! # #[cfg(feature = "macros")]
+//! # fn main() {
+//! use egui_commonmark_extended::{CommonMarkCache, commonmark};
+//! # egui::__run_test_ui(|ui| {
+//! let mut cache = CommonMarkCache::default();
+//! let _response = commonmark!(ui, &mut cache, "# ATX Heading Level 1");
+//! # });
+//! # }
+//! # #[cfg(not(feature = "macros"))]
+//! # fn main() {}
+//! ```
+//!
+//! Alternatively you can embed a file
+//!
+//!
+//! ## Example
+//!
+//! ```rust,ignore
+//! use egui_commonmark_extended::{CommonMarkCache, commonmark_str};
+//! # egui::__run_test_ui(|ui| {
+//! let mut cache = CommonMarkCache::default();
+//! commonmark_str!(ui, &mut cache, "content.md");
+//! # });
+//! ```
+//!
+//! For more information check out the documentation for
+//! [egui_commonmark_macros_extended](https://docs.rs/crate/egui_commonmark_macros_extended/latest)
+#![cfg_attr(feature = "document-features", doc = "# Features")]
+#![cfg_attr(feature = "document-features", doc = document_features::document_features!())]
+
+use egui::{self, Id};
+use egui_commonmark_backend_extended::elements::{
+    paint_list_marker, reserve_list_marker, ListMarkerKind, ListMarkerSlot,
+};
+
+#[cfg(feature = "svg")]
+mod mime_svg_loader;
+mod parsers;
+
+pub use egui_commonmark_backend_extended::RenderHtmlFn;
+pub use egui_commonmark_backend_extended::RenderMathFn;
+pub use egui_commonmark_backend_extended::alerts::{Alert, AlertBundle};
+pub use egui_commonmark_backend_extended::misc::{
+    header_position_key, CommonMarkCache, STRONG_FONT_FAMILY,
+};
+pub use egui_commonmark_backend_extended::typography::{Measurement, TypographyConfig};
+#[cfg(feature = "math")]
+pub use egui_commonmark_backend_extended::{
+    cached_inline_math_height, render_math, render_math_in_table,
+};
+#[cfg(feature = "math")]
+pub use egui_commonmark_backend_extended::warm_math_fonts;
+
+#[cfg(feature = "macros")]
+pub use egui_commonmark_macros_extended::*;
+
+#[cfg(feature = "macros")]
+// Do not rely on this directly!
+#[doc(hidden)]
+pub use egui_commonmark_backend_extended;
+
+use egui_commonmark_backend_extended::*;
+
+fn prepare_show(cache: &mut CommonMarkCache, ctx: &egui::Context) {
+    egui_commonmark_backend_extended::prepare_show(cache, ctx);
+    #[cfg(feature = "svg")]
+    mime_svg_loader::install(ctx);
+}
+
+#[derive(Debug, Default)]
+pub struct CommonMarkViewer<'f> {
+    options: CommonMarkOptions<'f>,
+    /// Caller-provided content version. When `Some`, the renderer uses this
+    /// as the per-document cache key instead of hashing the entire text on
+    /// every frame. Bump this counter on every load/reload.
+    content_version: Option<u64>,
+    /// Vertical scroll offset to apply this frame. Set this in place of the
+    /// caller's old `ScrollArea::vertical_scroll_offset` — when the renderer
+    /// owns the ScrollArea (via `show_scrollable`) the caller can no longer
+    /// configure it directly.
+    pending_scroll_offset: Option<f32>,
+    /// Whether this frame must paint the complete document instead of a
+    /// viewport slice. Navigation to an already measured Y does not need it.
+    force_full_render: bool,
+    /// Scroll source config for the renderer-owned ScrollArea. Useful when
+    /// the caller needs to disable drag-scroll (e.g. to keep text selection
+    /// working) while preserving wheel-scroll.
+    scroll_source: Option<egui::scroll_area::ScrollSource>,
+}
+
+impl<'f> CommonMarkViewer<'f> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The amount of spaces a bullet point is indented. By default this is 4
+    /// spaces.
+    pub fn indentation_spaces(mut self, spaces: usize) -> Self {
+        self.options.indentation_spaces = spaces;
+        self
+    }
+
+    /// The maximum size images are allowed to be. They will be scaled down if
+    /// they are larger
+    pub fn max_image_width(mut self, width: Option<usize>) -> Self {
+        self.options.max_image_width = width;
+        self
+    }
+
+    /// The default width of the ui. This is only respected if this is larger than
+    /// the [`max_image_width`](Self::max_image_width)
+    pub fn default_width(mut self, width: Option<usize>) -> Self {
+        self.options.default_width = width;
+        self
+    }
+
+    /// Independent width bound for tables (markdown and HTML). Lets wide
+    /// tables use the full content pane while prose stays at the reading
+    /// column set by [`default_width`](Self::default_width).
+    pub fn table_max_width(mut self, width: Option<usize>) -> Self {
+        self.options.table_max_width = width;
+        self
+    }
+
+    /// Show alt text when hovering over images. By default this is enabled.
+    pub fn show_alt_text_on_hover(mut self, show: bool) -> Self {
+        self.options.show_alt_text_on_hover = show;
+        self
+    }
+
+    /// Allows changing the default implicit `file://` uri scheme.
+    /// This does nothing if [`explicit_image_uri_scheme`](`Self::explicit_image_uri_scheme`) is enabled
+    ///
+    /// # Example
+    /// ```
+    /// # use egui_commonmark_extended::CommonMarkViewer;
+    /// CommonMarkViewer::new().default_implicit_uri_scheme("https://example.org/");
+    /// ```
+    pub fn default_implicit_uri_scheme<S: Into<String>>(mut self, scheme: S) -> Self {
+        self.options.default_implicit_uri_scheme = scheme.into();
+        self
+    }
+
+    /// By default any image without a uri scheme such as `foo://` is assumed to
+    /// be of the type `file://`. This assumption can sometimes be wrong or be done
+    /// incorrectly, so if you want to always be explicit with the scheme then set
+    /// this to `true`
+    pub fn explicit_image_uri_scheme(mut self, use_explicit: bool) -> Self {
+        self.options.use_explicit_uri_scheme = use_explicit;
+        self
+    }
+
+    #[cfg(feature = "better_syntax_highlighting")]
+    /// Set the syntax theme to be used inside code blocks in light mode
+    pub fn syntax_theme_light<S: Into<String>>(mut self, theme: S) -> Self {
+        self.options.theme_light = theme.into();
+        self
+    }
+
+    #[cfg(feature = "better_syntax_highlighting")]
+    /// Set the syntax theme to be used inside code blocks in dark mode
+    pub fn syntax_theme_dark<S: Into<String>>(mut self, theme: S) -> Self {
+        self.options.theme_dark = theme.into();
+        self
+    }
+
+    /// Specify what kind of alerts are supported. This can also be used to localize alerts.
+    ///
+    /// By default [github flavoured markdown style alerts](https://docs.github.com/en/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax#alerts)
+    /// are used
+    pub fn alerts(mut self, alerts: AlertBundle) -> Self {
+        self.options.alerts = alerts;
+        self
+    }
+
+    /// Allows rendering math. This has to be done manually as you might want a different
+    /// implementation for the web and native.
+    ///
+    /// The example is template code for rendering a svg image. Make sure to enable the
+    /// `egui_extras/svg` feature for the result to show up.
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// # use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+    /// # use egui_commonmark_extended::CommonMarkViewer;
+    /// let mut math_images = Rc::new(RefCell::new(HashMap::new()));
+    /// CommonMarkViewer::new()
+    ///     .render_math_fn(Some(&move |ui, math, inline| {
+    ///         let mut map = math_images.borrow_mut();
+    ///         let svg = map
+    ///             .entry(math.to_string())
+    ///             .or_insert_with(|| {
+    ///                 if inline {
+    ///                     // render as inline
+    ///                     // dummy data for the example
+    ///                     Arc::new([0])
+    ///                 } else {
+    ///                     Arc::new([0])
+    ///                 }
+    ///             });
+    ///
+    ///     let uri = format!("{}.svg", egui::Id::from(math.to_string()).value());
+    ///     ui.add(
+    ///          egui::Image::new(egui::ImageSource::Bytes {
+    ///             uri: uri.into(),
+    ///             bytes: egui::load::Bytes::Shared(svg.clone()),
+    ///          })
+    ///          .fit_to_original_size(1.0),
+    ///     );
+    ///     }));
+    /// ```
+    pub fn render_math_fn(mut self, func: Option<&'f RenderMathFn>) -> Self {
+        self.options.math_fn = func;
+        self
+    }
+
+    /// Allows custom handling of html. Enabling this will disable plain text rendering
+    /// of html blocks. Nodes are included in the provided text
+    pub fn render_html_fn(mut self, func: Option<&'f RenderHtmlFn>) -> Self {
+        self.options.html_fn = func;
+        self
+    }
+
+    // ========== Typography Methods ==========
+
+    /// Opt into the named font family used for markdown strong text.
+    ///
+    /// Callers must register `STRONG_FONT_FAMILY` with egui before enabling
+    /// this option. The default stays off so generic library consumers do not
+    /// emit an unregistered font family for `**strong**` spans.
+    pub fn use_strong_font_family(mut self, enabled: bool) -> Self {
+        self.options.use_strong_font_family = enabled;
+        self
+    }
+
+    /// Parse a leading `---` block as YAML frontmatter and render it as a
+    /// key/value table instead of as document content.
+    ///
+    /// Off by default. This changes how the document is *parsed*, not only how
+    /// it is painted: with it off, `---` opens a thematic break and the
+    /// metadata lines become an ordinary paragraph. Enabling it by default
+    /// would therefore change existing consumers' output.
+    pub fn render_frontmatter(mut self, enabled: bool) -> Self {
+        self.options.render_frontmatter = enabled;
+        self
+    }
+
+    /// Size of rendered formulas as a multiple of the resolved Body font size.
+    ///
+    /// `1.0` (the default) renders math at the same point size as body text.
+    /// Math glyphs and dense fractions read as perceptually smaller than prose
+    /// at equal point size, so a value slightly above 1.0 is often more
+    /// legible. Application zoom is not a substitute — it scales the whole UI,
+    /// leaving formulas and their surrounding text in the same ratio.
+    ///
+    /// Values are clamped to at least 1pt.
+    pub fn math_scale(mut self, scale: f32) -> Self {
+        self.options.math_scale = scale;
+        self
+    }
+
+    /// Set line height as a multiplier of font size.
+    ///
+    /// Recommended value: 1.5 (per WCAG 2.1 SC 1.4.12)
+    ///
+    /// # Example
+    /// ```
+    /// # use egui_commonmark_extended::CommonMarkViewer;
+    /// CommonMarkViewer::new().line_height(1.5); // 150% of font size
+    /// ```
+    pub fn line_height(mut self, multiplier: f32) -> Self {
+        self.options.typography.line_height = Some(Measurement::Multiplier(multiplier));
+        self
+    }
+
+    /// Set line height as absolute pixels.
+    ///
+    /// # Example
+    /// ```
+    /// # use egui_commonmark_extended::CommonMarkViewer;
+    /// CommonMarkViewer::new().line_height_px(24.0); // 24 pixels
+    /// ```
+    pub fn line_height_px(mut self, pixels: f32) -> Self {
+        self.options.typography.line_height = Some(Measurement::Pixels(pixels));
+        self
+    }
+
+    /// Set paragraph spacing as a multiplier of font size.
+    ///
+    /// This adds extra space between paragraphs beyond the default.
+    ///
+    /// # Example
+    /// ```
+    /// # use egui_commonmark_extended::CommonMarkViewer;
+    /// CommonMarkViewer::new().paragraph_spacing(1.5); // 150% of font size
+    /// ```
+    pub fn paragraph_spacing(mut self, multiplier: f32) -> Self {
+        self.options.typography.paragraph_spacing = Some(Measurement::Multiplier(multiplier));
+        self
+    }
+
+    /// Set paragraph spacing as absolute pixels.
+    ///
+    /// # Example
+    /// ```
+    /// # use egui_commonmark_extended::CommonMarkViewer;
+    /// CommonMarkViewer::new().paragraph_spacing_px(24.0); // 24 pixels
+    /// ```
+    pub fn paragraph_spacing_px(mut self, pixels: f32) -> Self {
+        self.options.typography.paragraph_spacing = Some(Measurement::Pixels(pixels));
+        self
+    }
+
+    /// Set spacing above headings as a multiplier of font size.
+    ///
+    /// Recommended value: 2.0
+    ///
+    /// # Example
+    /// ```
+    /// # use egui_commonmark_extended::CommonMarkViewer;
+    /// CommonMarkViewer::new().heading_spacing_above(2.0); // 200% of font size
+    /// ```
+    pub fn heading_spacing_above(mut self, multiplier: f32) -> Self {
+        self.options.typography.heading_spacing_above = Some(Measurement::Multiplier(multiplier));
+        self
+    }
+
+    /// Set spacing above headings as absolute pixels.
+    ///
+    /// # Example
+    /// ```
+    /// # use egui_commonmark_extended::CommonMarkViewer;
+    /// CommonMarkViewer::new().heading_spacing_above_px(32.0); // 32 pixels
+    /// ```
+    pub fn heading_spacing_above_px(mut self, pixels: f32) -> Self {
+        self.options.typography.heading_spacing_above = Some(Measurement::Pixels(pixels));
+        self
+    }
+
+    /// Set spacing below headings as a multiplier of font size.
+    ///
+    /// Recommended value: 0.5
+    ///
+    /// # Example
+    /// ```
+    /// # use egui_commonmark_extended::CommonMarkViewer;
+    /// CommonMarkViewer::new().heading_spacing_below(0.5); // 50% of font size
+    /// ```
+    pub fn heading_spacing_below(mut self, multiplier: f32) -> Self {
+        self.options.typography.heading_spacing_below = Some(Measurement::Multiplier(multiplier));
+        self
+    }
+
+    /// Set spacing below headings as absolute pixels.
+    ///
+    /// # Example
+    /// ```
+    /// # use egui_commonmark_extended::CommonMarkViewer;
+    /// CommonMarkViewer::new().heading_spacing_below_px(8.0); // 8 pixels
+    /// ```
+    pub fn heading_spacing_below_px(mut self, pixels: f32) -> Self {
+        self.options.typography.heading_spacing_below = Some(Measurement::Pixels(pixels));
+        self
+    }
+
+    /// Set line height for code blocks as a multiplier of font size.
+    ///
+    /// Recommended value: 1.3 (PPIG Conference research)
+    /// Code benefits from tighter line height than prose (1.2-1.4× vs 1.5×)
+    ///
+    /// # Example
+    /// ```
+    /// # use egui_commonmark_extended::CommonMarkViewer;
+    /// CommonMarkViewer::new().code_line_height(1.3); // 130% of font size
+    /// ```
+    pub fn code_line_height(mut self, multiplier: f32) -> Self {
+        self.options.typography.code_line_height = Some(Measurement::Multiplier(multiplier));
+        self
+    }
+
+    /// Set line height for code blocks as absolute pixels.
+    ///
+    /// # Example
+    /// ```
+    /// # use egui_commonmark_extended::CommonMarkViewer;
+    /// CommonMarkViewer::new().code_line_height_px(18.0); // 18 pixels
+    /// ```
+    pub fn code_line_height_px(mut self, pixels: f32) -> Self {
+        self.options.typography.code_line_height = Some(Measurement::Pixels(pixels));
+        self
+    }
+
+    /// Apply evidence-based typography defaults for optimal readability.
+    ///
+    /// Based on peer-reviewed HCI research, WCAG 2.1, and vision science:
+    /// - Line height: 1.5× (WCAG 2.1 SC 1.4.12, Reading University)
+    /// - Code line height: 1.3× (PPIG Conference research)
+    /// - Paragraph spacing: 2.0× font size (WCAG 1.4.12)
+    /// - Heading spacing above: 2.0× font size
+    /// - Heading spacing below: 0.75× font size
+    ///
+    /// # Example
+    /// ```
+    /// # use egui_commonmark_extended::CommonMarkViewer;
+    /// CommonMarkViewer::new().typography_recommended();
+    /// ```
+    pub fn typography_recommended(mut self) -> Self {
+        self.options.typography = TypographyConfig::recommended();
+        self
+    }
+
+    /// Caller-provided content version. Bumped by the caller on every
+    /// load/reload of the source text. Only consulted by `show_scrollable`;
+    /// `show` falls back to its internal content-hash cache.
+    pub fn content_version(mut self, version: u64) -> Self {
+        self.content_version = Some(version);
+        self
+    }
+
+    /// Vertical scroll offset to apply this frame. Pass `None` (or omit the
+    /// call) to leave the scroll position untouched.
+    ///
+    /// Use this instead of the caller setting `vertical_scroll_offset` on an
+    /// outer `ScrollArea` — `show_scrollable` owns the ScrollArea internally.
+    pub fn pending_scroll_offset(mut self, offset: Option<f32>) -> Self {
+        self.pending_scroll_offset = offset;
+        self
+    }
+
+    /// Paint the complete document this frame so off-screen target positions
+    /// can be measured. Keep this disabled for scrolling to a cached position.
+    pub fn force_full_render(mut self, force: bool) -> Self {
+        self.force_full_render = force;
+        self
+    }
+
+    /// Configure which scroll inputs the renderer-owned ScrollArea reacts to.
+    ///
+    /// Default is whatever `egui::ScrollArea::vertical()` provides. Callers
+    /// can pass e.g. `ScrollSource { drag: false, scroll_bar: true,
+    /// mouse_wheel: true }` to preserve text selection while scrolling.
+    pub fn scroll_source(mut self, source: egui::scroll_area::ScrollSource) -> Self {
+        self.scroll_source = Some(source);
+        self
+    }
+
+    /// Shows rendered markdown
+    pub fn show(
+        self,
+        ui: &mut egui::Ui,
+        cache: &mut CommonMarkCache,
+        text: &str,
+    ) -> egui::InnerResponse<()> {
+        prepare_show(cache, ui.ctx());
+
+        let (response, _) = parsers::pulldown::CommonMarkViewerInternal::new().show(
+            ui,
+            cache,
+            &self.options,
+            text,
+            None,
+        );
+
+        response
+    }
+
+    /// Shows rendered markdown, and allows the rendered ui to mutate the source text.
+    ///
+    /// The only currently implemented mutation is allowing checkboxes to be toggled through the ui.
+    pub fn show_mut(
+        mut self,
+        ui: &mut egui::Ui,
+        cache: &mut CommonMarkCache,
+        text: &mut String,
+    ) -> egui::InnerResponse<()> {
+        self.options.mutable = true;
+        prepare_show(cache, ui.ctx());
+
+        let (mut inner_response, checkmark_events) =
+            parsers::pulldown::CommonMarkViewerInternal::new().show(
+                ui,
+                cache,
+                &self.options,
+                text,
+                None,
+            );
+
+        // Update source text for checkmarks that were clicked
+        for ev in checkmark_events {
+            if ev.checked {
+                text.replace_range(ev.span, "[x]")
+            } else {
+                text.replace_range(ev.span, "[ ]")
+            }
+
+            inner_response.response.mark_changed();
+        }
+
+        inner_response
+    }
+
+    /// Shows markdown inside a [`ScrollArea`] with viewport-clipped rendering.
+    ///
+    /// Renders only the events whose layout y-positions intersect the visible
+    /// viewport, using waypoints (split_points) populated on the first paint
+    /// and a layout signature (width / font size / theme) that invalidates
+    /// them when the rendering context changes.
+    ///
+    /// # Content change contract
+    ///
+    /// Pass a monotonic [`content_version`] that the caller bumps on every
+    /// content reload, so the renderer can drop the per-document cache without
+    /// hashing the entire text on every frame. When `content_version` is
+    /// unset, the renderer falls back to a content hash.
+    ///
+    /// [`ScrollArea`]: egui::ScrollArea
+    /// [`content_version`]: CommonMarkViewer::content_version
+    #[cfg(feature = "pulldown_cmark")]
+    pub fn show_scrollable(
+        self,
+        source_id: impl std::hash::Hash,
+        ui: &mut egui::Ui,
+        cache: &mut CommonMarkCache,
+        text: &str,
+    ) -> egui::scroll_area::ScrollAreaOutput<()> {
+        prepare_show(cache, ui.ctx());
+        parsers::pulldown::CommonMarkViewerInternal::new().show_scrollable(
+            Id::new(source_id),
+            ui,
+            cache,
+            &self.options,
+            text,
+            self.content_version,
+            self.pending_scroll_offset,
+            self.force_full_render,
+            self.scroll_source,
+        )
+    }
+}
+
+pub(crate) struct ListLevel {
+    current_number: Option<u64>,
+}
+
+#[derive(Default)]
+pub(crate) struct List {
+    items: Vec<ListLevel>,
+    has_list_begun: bool,
+    /// Marker slots reserved by `start_item` but not painted yet, waiting for
+    /// the item's first line to be laid out.
+    pending_markers: Vec<(ListMarkerSlot, ListMarkerKind)>,
+}
+
+impl List {
+    pub fn start_level_with_number(&mut self, start_number: u64) {
+        self.items.push(ListLevel {
+            current_number: Some(start_number),
+        });
+    }
+
+    pub fn start_level_without_number(&mut self) {
+        self.items.push(ListLevel {
+            current_number: None,
+        });
+    }
+
+    pub fn is_inside_a_list(&self) -> bool {
+        !self.items.is_empty()
+    }
+
+    pub fn is_last_level(&self) -> bool {
+        self.items.len() == 1
+    }
+
+    pub fn start_item(&mut self, ui: &mut egui::Ui, options: &CommonMarkOptions) {
+        // A nested list starts a new item before the outer item has painted any
+        // text; flush the outer marker here so it stays on its own row.
+        self.flush_pending_markers(ui, None);
+
+        // To ensure that newlines are only inserted within the list and not before it
+        if self.has_list_begun {
+            newline(ui);
+        } else {
+            self.has_list_begun = true;
+        }
+
+        let len = self.items.len();
+        if let Some(item) = self.items.last_mut() {
+            ui.label(" ".repeat((len - 1) * options.indentation_spaces));
+
+            // The marker's box must match the item text's line box, and the
+            // text's line height is resolved against the font size. Resolving
+            // against `text_style_height` (the font's natural ≈1.2× height)
+            // makes the box 27.6 px where the text's line box is 24 px at a
+            // 16 px body with a 1.5× line height — that mismatch is what pushed
+            // this line's glyphs down (issue #196).
+            let row_height = crate::parsers::pulldown::body_line_height(ui, options);
+
+            let slot = reserve_list_marker(ui, row_height);
+            let kind = if let Some(number) = &mut item.current_number {
+                let kind = ListMarkerKind::Number(number.to_string());
+                *number += 1;
+                kind
+            } else if len > 1 {
+                ListMarkerKind::BulletHollow
+            } else {
+                ListMarkerKind::Bullet
+            };
+
+            // The marker cannot be painted yet. egui anchors a wrapping label's
+            // galley at the cursor's top edge and sizes its first row from the
+            // cursor's height at label time, so anything that still joins this
+            // line — the task checkbox, inline images, the text itself — moves
+            // the text relative to this slot. Paint once the item's first text
+            // is about to be laid out (`flush_pending_markers`); items whose
+            // first content is not text are covered by the fallbacks.
+            self.pending_markers.push((slot, kind));
+        } else {
+            unreachable!();
+        }
+
+        ui.add_space(4.0);
+    }
+
+    /// Paint every reserved list marker that is still outstanding.
+    ///
+    /// `format` is the text format of the label the markers are being aligned
+    /// with; `None` falls back to the body style. Must be called right before
+    /// that label is laid out, with no widget in between, so the cursor egui
+    /// reads here is the cursor the label will read.
+    pub fn flush_pending_markers(&mut self, ui: &mut egui::Ui, format: Option<egui::TextFormat>) {
+        if self.pending_markers.is_empty() {
+            return;
+        }
+        for (slot, kind) in self.pending_markers.drain(..) {
+            paint_list_marker(ui, &slot, &kind, format.as_ref());
+        }
+    }
+
+    pub fn end_level(&mut self, ui: &mut egui::Ui, insert_newline: bool) {
+        self.items.pop();
+
+        if self.items.is_empty() && insert_newline {
+            newline(ui);
+        }
+    }
+}
