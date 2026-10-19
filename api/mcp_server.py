@@ -4716,31 +4716,55 @@ Please answer the question based ONLY on the context provided above (including t
                 pass
 
             try:
-                # 1. Download file from target_url
+                # 1. Download file from target_url with streaming and strict size limits (max 50 MB)
+                # to prevent Out-Of-Memory thrashing when analyzing large distributions
+                MAX_FILE_BYTES = int(os.environ.get("MAX_CDIF_DOWNLOAD_BYTES", 50 * 1024 * 1024)) # 50 MB
                 download_headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 }
                 async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-                    file_resp = await client.get(target_url, headers=download_headers)
-                    if file_resp.status_code != 200:
-                        return JSONResponse({
-                            "error": f"Failed to download file from {target_url}",
-                            "status_code": file_resp.status_code,
-                            "details": file_resp.text[:500]
-                        }, status_code=502)
+                    async with client.stream("GET", target_url, headers=download_headers) as stream_resp:
+                        if stream_resp.status_code != 200:
+                            return JSONResponse({
+                                "error": f"Failed to download file from {target_url}",
+                                "status_code": stream_resp.status_code,
+                            }, status_code=502)
 
-                    # Determine filename
-                    filename = None
-                    cd = file_resp.headers.get("content-disposition", "")
-                    if "filename=" in cd or "filename*=" in cd:
-                        m = re.search(r"filename\*?=['\"]?(?:UTF-8'')?([^;'\"]+)", cd)
-                        if m:
-                            filename = urllib.parse.unquote(m.group(1))
+                        # Determine filename
+                        filename = None
+                        cd = stream_resp.headers.get("content-disposition", "")
+                        if "filename=" in cd or "filename*=" in cd:
+                            m = re.search(r"filename\*?=['\"]?(?:UTF-8'')?([^;'\"]+)", cd)
+                            if m:
+                                filename = urllib.parse.unquote(m.group(1))
 
-                    if not filename:
-                        filename = target_url.split("/")[-1].split("?")[0] or "data.csv"
+                        if not filename:
+                            filename = target_url.split("/")[-1].split("?")[0] or "data.csv"
 
-                    file_content = file_resp.content
+                        # Stream chunks up to MAX_FILE_BYTES
+                        chunks = []
+                        downloaded_bytes = 0
+                        is_truncated_download = False
+                        async for chunk in stream_resp.aiter_bytes(chunk_size=65536):
+                            if downloaded_bytes + len(chunk) > MAX_FILE_BYTES:
+                                allowed = MAX_FILE_BYTES - downloaded_bytes
+                                if allowed > 0:
+                                    chunks.append(chunk[:allowed])
+                                    downloaded_bytes += allowed
+                                is_truncated_download = True
+                                break
+                            chunks.append(chunk)
+                            downloaded_bytes += len(chunk)
+
+                        file_content = b"".join(chunks)
+                        del chunks
+
+                    # If file is a plain text/csv/tsv and was truncated, ensure the last partial line is cleanly sliced
+                    fname_lower = filename.lower()
+                    if is_truncated_download and any(fname_lower.endswith(ext) for ext in [".csv", ".tsv", ".tab", ".txt"]):
+                        last_nl = file_content.rfind(b"\n")
+                        if last_nl > 0:
+                            file_content = file_content[:last_nl + 1]
 
                     # Store file metadata extracted during processing
                     file_size = len(file_content)
@@ -7037,7 +7061,7 @@ Please answer the question based ONLY on the context provided above (including t
                         })
 
             results = []
-            sem = asyncio.Semaphore(5)
+            sem = asyncio.Semaphore(int(os.environ.get("MAX_ANALYZE_CONCURRENCY", 2)))
 
             async def process_single_file(f_item, http_client):
                 async with sem:
@@ -7104,6 +7128,11 @@ Please answer the question based ONLY on the context provided above (including t
                                 await http_client.put(f"{es_url}/cdif/_doc/{doc_cache_id}", json=es_record)
                             except Exception as es_put_err:
                                 print(f"Error caching to ES cdif index: {es_put_err}")
+
+                            del es_record
+                            del cdif_data
+                            import gc
+                            gc.collect()
 
                             return {
                                 "status": "success",
@@ -7255,8 +7284,10 @@ Please answer the question based ONLY on the context provided above (including t
                 )
 
             async with httpx.AsyncClient(timeout=180.0) as http_client:
-                tasks = [process_single_file(f, http_client) for f in files_to_process]
-                results = await asyncio.gather(*tasks)
+                results = []
+                for f in files_to_process:
+                    res = await process_single_file(f, http_client)
+                    results.append(res)
 
             total_elapsed = round(time.time() - t_start, 2)
             successful = [r for r in results if r.get("status") in ["success", "cached"]]
