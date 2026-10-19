@@ -96,7 +96,9 @@ services:
       - ./api/static/login.html:/app/static/login.html
       - ./api/static/index.html:/app/static/index.html
       - ./api/static/collections_index.html:/app/static/collections_index.html
+      - ./api/static/collection_viewer.html:/app/static/collection_viewer.html
       - ./api/static/groups_index.html:/app/static/groups_index.html
+      - ./api/static/variables_index.html:/app/static/variables_index.html
       - ./api/static/profile.html:/app/static/profile.html
       - ./credentials.json:/app/credentials.json:ro
     depends_on:
@@ -128,7 +130,9 @@ services:
       - ./api/static/login.html:/app/static/login.html
       - ./api/static/index.html:/app/static/index.html
       - ./api/static/collections_index.html:/app/static/collections_index.html
+      - ./api/static/collection_viewer.html:/app/static/collection_viewer.html
       - ./api/static/groups_index.html:/app/static/groups_index.html
+      - ./api/static/variables_index.html:/app/static/variables_index.html
       - ./api/static/profile.html:/app/static/profile.html
       - ./credentials.json:/app/credentials.json:ro
     depends_on:
