@@ -1855,3 +1855,19 @@ async def view_collections_index(request: Request):
             return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "text/html"))
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/variableindex")
+async def view_variables_index(request: Request):
+    import httpx
+    from fastapi import Response, HTTPException
+    
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(f"http://mcp:7070/variableindex", headers=headers)
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "text/html"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
