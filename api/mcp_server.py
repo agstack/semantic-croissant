@@ -7043,11 +7043,15 @@ Please answer the question based ONLY on the context provided above (including t
                         continue
 
                     ext = fname.split(".")[-1].lower() if "." in fname else ""
+                    # Exclude script/code/text files (e.g. Stata .do files, python scripts, text logs)
+                    non_tabular_exts = {"do", "py", "r", "sh", "m", "c", "cpp", "java", "pdf", "docx", "doc", "html", "xml", "json", "png", "jpg", "jpeg", "tif", "gph"}
                     is_tabular = (
-                        ext in tabular_exts or
-                        any(h in fmt for h in tabular_mime_hints) or
-                        any(ext_candidate in curl.lower() for ext_candidate in [".csv", ".xls", ".xlsx", ".dta", ".sav", ".tab", ".parquet", ".tsv"])
-                    )
+                        (ext in tabular_exts and ext not in non_tabular_exts) or
+                        (ext not in non_tabular_exts and (
+                            any(h in fmt for h in tabular_mime_hints) or
+                            any(ext_candidate in curl.lower() for ext_candidate in [".csv", ".xls", ".xlsx", ".dta", ".sav", ".tab", ".parquet", ".tsv"])
+                        ))
+                    ) and ext not in non_tabular_exts
 
                     if is_tabular:
                         files_to_process.append({

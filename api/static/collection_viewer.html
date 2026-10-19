@@ -2658,8 +2658,10 @@
                                     const isSuccess = evt.current_status === 'success' || evt.current_status === 'cached';
                                     const tagColor = isSuccess ? '#28a745' : '#dc3545';
                                     const tagText = evt.current_status === 'cached' ? 'CACHED' : (isSuccess ? 'SUCCESS' : 'FAILED');
+                                    const errDetail = (!isSuccess && evt.result) ? (evt.result.details || evt.result.error || '') : '';
+                                    const errSnippet = errDetail ? ` <span style="color:#6b7280; font-size:0.75rem;">(${escapeHtml(errDetail.slice(0, 90))})</span>` : '';
                                     
-                                    entry.innerHTML = `<span style="color:${tagColor}; font-weight:bold;">[${tagText}]</span> ${evt.current_file}`;
+                                    entry.innerHTML = `<span style="color:${tagColor}; font-weight:bold;">[${tagText}]</span> ${escapeHtml(evt.current_file)}${errSnippet}`;
                                     logList.appendChild(entry);
                                     logList.scrollTop = logList.scrollHeight;
                                 } else if (evt.type === 'complete') {
