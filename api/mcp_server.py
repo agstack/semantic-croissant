@@ -755,6 +755,20 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
         else:
             effective_limit = limit
 
+        # Build Elasticsearch query string: proximity slop < 10 words for multi-word phrases
+        es_query = "*"
+        if clean_query:
+            # If user already specified explicit boolean operators, quotes, or slop, preserve it
+            if any(op in clean_query for op in [" AND ", " OR ", " NOT ", '"', "~"]):
+                es_query = clean_query
+            else:
+                words = [w.strip() for w in clean_query.split() if w.strip()]
+                if len(words) > 1:
+                    phrase = " ".join(words)
+                    es_query = f'"{phrase}"~10'
+                elif len(words) == 1:
+                    es_query = words[0]
+
         # Step 1: Query the expert
         if expert_index_resolved != "delpher":
             payload = {
@@ -762,7 +776,7 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
                 "_source": False,
                 "query": {
                     "query_string": {
-                        "query": f"*{clean_query}* OR {clean_query}" if clean_query else "*",
+                        "query": es_query,
                         "fields": ["_full_text", "_markdown_text", "name", "description", "schema:name", "schema:description", "title", "dcterms:title", "dsDescription.dsDescriptionValue", "citation:dsDescriptionValue", "*"]
                     }
                 }
@@ -5809,8 +5823,56 @@ Please answer the question based ONLY on the context provided above (including t
                 download_headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 }
+                # Lookup contact email from nodes.conf for guestbook responses
+                nodes_data = get_nodes_config()
+                pname = os.environ.get("PROFILE_NAME", "").strip().lower()
+                profile_cfg = nodes_data.get(pname, {})
+                contact_email = profile_cfg.get("email") or os.environ.get("CONTACT_EMAIL") or "ai@codata.org"
+
+
                 async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-                    async with client.stream("GET", target_url, headers=download_headers) as stream_resp:
+                    download_url = target_url
+                    # Check if target_url is a Dataverse access URL that may require Guestbook response
+                    if "dataverse" in target_url.lower() and "/api/access/datafile" in target_url.lower():
+                        try:
+                            # Preemptively check if a Guestbook response is required
+                            head_check = await client.get(target_url, headers=download_headers)
+                            if head_check.status_code == 400 and "guestbook" in head_check.text.lower():
+                                gb_payload = {
+                                    "name": "Semantic Croissant",
+                                    "email": contact_email,
+                                    "institution": "CIAT"
+                                }
+                                gb_post = await client.post(target_url, json=gb_payload, headers=download_headers)
+                                if gb_post.status_code == 200:
+                                    signed_data = gb_post.json().get("data", {})
+                                    if "signedUrl" in signed_data:
+                                        download_url = signed_data["signedUrl"]
+                        except Exception:
+                            pass
+
+                    async with client.stream("GET", download_url, headers=download_headers) as stream_resp:
+                        if stream_resp.status_code != 200:
+                            # Check if error is due to missing guestbook
+                            err_body = await stream_resp.aread()
+                            err_text = err_body.decode("utf-8", errors="ignore")
+                            if "guestbook" in err_text.lower():
+                                try:
+                                    gb_payload = {
+                                        "name": "Semantic Croissant",
+                                        "email": contact_email,
+                                        "institution": "CIAT"
+                                    }
+                                    gb_post = await client.post(target_url, json=gb_payload, headers=download_headers)
+                                    if gb_post.status_code == 200:
+                                        signed_data = gb_post.json().get("data", {})
+                                        if "signedUrl" in signed_data:
+                                            async with client.stream("GET", signed_data["signedUrl"], headers=download_headers) as gb_stream:
+                                                if gb_stream.status_code == 200:
+                                                    stream_resp = gb_stream
+                                except Exception:
+                                    pass
+
                         if stream_resp.status_code != 200:
                             return JSONResponse({
                                 "error": f"Failed to download file from {target_url}",
