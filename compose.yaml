@@ -101,6 +101,8 @@ services:
       - ./api/static/variables_index.html:/app/static/variables_index.html
       - ./api/static/profile.html:/app/static/profile.html
       - ./credentials.json:/app/credentials.json:ro
+      - ./nodes.conf:/app/nodes.conf:ro
+      - ./profiles:/app/profiles:ro
     depends_on:
       - server
       - elasticsearch
@@ -135,6 +137,8 @@ services:
       - ./api/static/variables_index.html:/app/static/variables_index.html
       - ./api/static/profile.html:/app/static/profile.html
       - ./credentials.json:/app/credentials.json:ro
+      - ./nodes.conf:/app/nodes.conf:ro
+      - ./profiles:/app/profiles:ro
     depends_on:
       - api
       - elasticsearch
