@@ -67,20 +67,17 @@ def get_nodes_config() -> dict:
 def get_elasticsearch_lookup_urls() -> list[str]:
     """
     Returns an ordered list of Elasticsearch base URLs to query across all known nodes.
-    Each ES node is formatted as IP:PORT (e.g. http://IP:PORT).
+    Prioritizes real network node IPs defined in nodes.conf and profiles over localhost/127.0.0.1.
     """
-    urls = []
-    local_es = os.environ.get("ELASTICSEARCH_URL", "").rstrip("/")
-    if local_es:
-        urls.append(local_es)
-
+    node_urls = []
+    fallback_urls = []
     nodes = get_nodes_config()
+
     for sname, sdata in nodes.items():
         ip = sdata.get("ip", "").strip()
         es_port = sdata.get("es_port", "").strip()
         es_u = sdata.get("elasticsearch_url", "").strip().rstrip("/")
 
-        # Build IP:PORT endpoint
         if ip and es_port:
             candidate = f"http://{ip}:{es_port}"
         elif es_u:
@@ -88,17 +85,57 @@ def get_elasticsearch_lookup_urls() -> list[str]:
         else:
             continue
 
-        if candidate and candidate not in urls:
-            urls.append(candidate)
+        # If IP is a real network IP (not localhost or loopback), prioritize it
+        if ip and ip not in ["localhost", "127.0.0.1", "0.0.0.0"]:
+            if candidate not in node_urls:
+                node_urls.append(candidate)
+        else:
+            if candidate not in fallback_urls:
+                fallback_urls.append(candidate)
 
-        # Inside a Docker container, if IP is localhost/127.0.0.1, also add host.docker.internal or gateway
-        if "localhost" in candidate or "127.0.0.1" in candidate:
-            for alt_host in ["172.17.0.1", "172.29.0.1", "10.147.18.186"]:
-                alt_url = candidate.replace("localhost", alt_host).replace("127.0.0.1", alt_host)
-                if alt_url not in urls:
-                    urls.append(alt_url)
+    # Local container or environment fallback only if needed
+    local_es = os.environ.get("ELASTICSEARCH_URL", "").rstrip("/")
+    if local_es and local_es not in fallback_urls and "localhost" not in local_es and "127.0.0.1" not in local_es:
+        fallback_urls.append(local_es)
 
-    return urls
+    # Return remote node URLs first, followed by fallbacks only if no remote nodes found
+    if node_urls:
+        return node_urls
+    return fallback_urls or (["http://elasticsearch:9200"] if os.environ.get("IN_DOCKER") else ["http://localhost:9200"])
+
+def get_minio_lookup_urls() -> list[str]:
+    """
+    Returns an ordered list of MinIO base endpoints to query across all known nodes.
+    Prioritizes real network node IPs defined in nodes.conf over localhost/127.0.0.1.
+    """
+    node_urls = []
+    fallback_urls = []
+    nodes = get_nodes_config()
+
+    for sname, sdata in nodes.items():
+        ip = sdata.get("ip", "").strip()
+        minio_u = sdata.get("minio_url", "").strip().rstrip("/")
+        if not minio_u and ip:
+            minio_u = f"http://{ip}:9000"
+
+        if not minio_u:
+            continue
+
+        if ip and ip not in ["localhost", "127.0.0.1", "0.0.0.0"] and "localhost" not in minio_u and "127.0.0.1" not in minio_u:
+            if minio_u not in node_urls:
+                node_urls.append(minio_u)
+        else:
+            if minio_u not in fallback_urls:
+                fallback_urls.append(minio_u)
+
+    local_minio = os.environ.get("MINIO_URL", "").rstrip("/")
+    if local_minio and local_minio not in fallback_urls:
+        fallback_urls.append(local_minio)
+
+    if node_urls:
+        return node_urls
+    return fallback_urls or ["http://minio:9000"]
+
 
 # Global user info set when MCP server is authenticated
 SERVER_USER_INFO = None
@@ -120,6 +157,98 @@ def _odrl_base_dir():
     if not os.path.exists(base):
         base = os.path.expanduser("~/.odrl")
     return base
+
+def fix_croissant_dataverse_distributions(data):
+    if not isinstance(data, dict):
+        return data
+    dataset_url = data.get('url', '')
+    dists = data.get('distribution') or data.get('fileObject') or data.get('fileSet') or []
+    if not dists or not isinstance(dists, list):
+        return data
+    has_dataverse_dists = any(isinstance(d, dict) and 'dataverse' in d.get('contentUrl', '') for d in dists)
+    if not ('dataverse' in dataset_url or 'doi.org' in dataset_url or has_dataverse_dists):
+        return data
+
+    dv_base = None
+    pid = None
+    import urllib.parse
+    for d in dists:
+        if isinstance(d, dict) and 'contentUrl' in d and 'dataverse' in d['contentUrl']:
+            p = urllib.parse.urlparse(d['contentUrl'])
+            dv_base = f"{p.scheme}://{p.netloc}"
+            break
+    if not dv_base:
+        return data
+
+    if 'persistentId=' in dataset_url:
+        pid = urllib.parse.parse_qs(urllib.parse.urlparse(dataset_url).query).get('persistentId', [None])[0]
+    elif 'doi.org/' in dataset_url:
+        doi = dataset_url.split('doi.org/')[-1]
+        pid = f"doi:{doi}"
+    elif isinstance(data.get('identifier'), str) and 'doi:' in data.get('identifier'):
+        pid = data.get('identifier')
+
+    if not pid:
+        return data
+
+    import requests
+    api_url = f"{dv_base}/api/datasets/:persistentId/?persistentId={urllib.parse.quote(pid, safe='/')}"
+    headers = {'User-Agent': 'SemanticCroissant/1.0'}
+    try:
+        r_api = requests.get(api_url, headers=headers, timeout=10)
+        if r_api.status_code != 200:
+            return data
+        raw_files = r_api.json().get('data', {}).get('latestVersion', {}).get('files', [])
+        api_by_name = {}
+        api_by_id = {}
+        for f in raw_files:
+            df = f.get('dataFile', {})
+            fid = df.get('id')
+            fn = df.get('filename')
+            orig_fn = df.get('originalFileName') or fn
+            lbl = f.get('label') or fn
+            api_by_id[fid] = df
+            if fn: api_by_name[fn] = df
+            if orig_fn: api_by_name[orig_fn] = df
+            if lbl: api_by_name[lbl] = df
+
+        for d in dists:
+            if not isinstance(d, dict): continue
+            name = d.get('name')
+            md5 = d.get('md5')
+            matched_df = api_by_name.get(name)
+            if not matched_df and md5:
+                for df in api_by_id.values():
+                    if df.get('md5') == md5 or df.get('checksum', {}).get('value') == md5:
+                        matched_df = df
+                        break
+            if matched_df:
+                d['contentUrl'] = f"{dv_base}/api/access/datafile/{matched_df.get('id')}"
+                if matched_df.get('contentType'):
+                    d['encodingFormat'] = matched_df.get('contentType')
+                if matched_df.get('filesize'):
+                    d['contentSize'] = str(matched_df.get('filesize'))
+
+        # Enrich each FileObject with subjectOf pointing to the DDI-CDI export
+        base_host = f"https://{MCP_DOMAIN}"
+        ds_for_export = data.get('url') or data.get('identifier')
+        for d in dists:
+            if not isinstance(d, dict): continue
+            curl = d.get('contentUrl')
+            if curl:
+                if ds_for_export:
+                    export_url = f"{base_host}/export?ds={urllib.parse.quote(ds_for_export, safe='')}&file={urllib.parse.quote(curl, safe='')}"
+                else:
+                    export_url = f"{base_host}/export?file={urllib.parse.quote(curl, safe='')}"
+                d['subjectOf'] = {
+                    "@type": "Dataset",
+                    "@id": export_url,
+                    "encodingFormat": "application/ld+json",
+                    "conformsTo": "https://ddialliance.org/Specification/DDI-CDI/1.0/"
+                }
+    except Exception as e:
+        print(f"Failed to align Dataverse distributions: {e}")
+    return data
 
 
 def _resolve_did_name(did: str) -> dict:
@@ -765,15 +894,18 @@ async def ask_expert(index: str, q: str, limit: int = 10) -> list[types.TextCont
         return [types.TextContent(type="text", text=f"Error querying expert index: {str(e)}")]
 
 async def read_vault_article(url_or_filename: str) -> list[types.TextContent]:
-    filename = url_or_filename
+    import os, json, re, httpx, urllib.parse
+    filename = (url_or_filename or "").strip()
+    raw_doc_id = None
+
     if filename.startswith("http://") or filename.startswith("https://"):
-        import urllib.parse
         parsed_url = urllib.parse.urlparse(filename)
         path = parsed_url.path.rstrip("/")
         if "/vault/" in path:
             filename = path.split("/")[-1]
             if filename == "annotations":
                 filename = path.split("/")[-2]
+            raw_doc_id = filename
         else:
             safe_name = parsed_url.netloc + path
             safe_name = safe_name.replace("/", "_").replace(".", "_")
@@ -784,73 +916,119 @@ async def read_vault_article(url_or_filename: str) -> list[types.TextContent]:
             if not safe_name:
                 safe_name = "url_output"
             filename = f"{safe_name}_content.md"
-            
+    else:
+        # Check if filename is directly a document ID (e.g., 16-hex or slug)
+        clean_cand = filename.replace(".md", "").replace(".jsonld", "").replace(".csv", "")
+        if re.match(r'^[a-f0-9]{16}$', clean_cand) or "/" not in clean_cand:
+            raw_doc_id = clean_cand
+
+    # Step 1: Check across all Elasticsearch nodes from nodes.conf if we have a document ID
+    if raw_doc_id:
+        clean_id = raw_doc_id.replace(".md", "").replace(".jsonld", "").replace(".csv", "")
+        es_nodes = get_elasticsearch_lookup_urls()
+        candidate_indices = ["dataverse", "croissant", "trump", "openml", "cdif"]
+        
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as es_client:
+            for es_url in es_nodes:
+                doc_source = None
+                for idx_name in candidate_indices:
+                    try:
+                        r = await es_client.get(f"{es_url}/{idx_name}/_doc/{clean_id}")
+                        if r.status_code == 200:
+                            doc_source = r.json().get("_source", {})
+                            break
+                    except Exception:
+                        pass
+                if not doc_source:
+                    try:
+                        r = await es_client.post(f"{es_url}/_all/_search", json={"query": {"term": {"_id": clean_id}}, "size": 1})
+                        if r.status_code == 200:
+                            hits = r.json().get("hits", {}).get("hits", [])
+                            if hits:
+                                doc_source = hits[0].get("_source", {})
+                    except Exception:
+                        pass
+
+                if doc_source:
+                    md_text = doc_source.get("_markdown_text", None)
+                    if md_text and isinstance(md_text, str):
+                        stripped = md_text.strip()
+                        if stripped.startswith("{") and stripped.endswith("}"):
+                            try:
+                                parsed = json.loads(stripped)
+                                if isinstance(parsed, dict):
+                                    md_text = None
+                            except Exception:
+                                pass
+                    if not md_text:
+                        doc_source = fix_croissant_dataverse_distributions(doc_source)
+                        # We can construct readable markdown from doc_source
+                        lines = []
+                        name = doc_source.get('name', 'Dataset')
+                        lines.append(f"# 🥐 {name}\n")
+                        url = doc_source.get('url')
+                        if url:
+                            lines.append(f"**[Original URL →]({url})**\n")
+                        desc = doc_source.get('description')
+                        if desc:
+                            lines.append(f"> {desc}\n")
+                        lines.append(f"```json\n{json.dumps(doc_source, indent=2)}\n```")
+                        md_text = "\n".join(lines)
+                    return [types.TextContent(type="text", text=md_text)]
+
+    # Step 2: Check MinIO Vault across all configured nodes
+    minio_urls = get_minio_lookup_urls()
     if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".gz") and not filename.endswith(".csv"):
         filename += ".md"
 
-    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
-    endpoint = minio_base.replace("http://", "").replace("https://", "")
-    
-    try:
-        from minio import Minio
-        m_client = Minio(
-            endpoint,
-            access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
-            secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
-            secure=False
-        )
-        
+    from minio import Minio
+    import gzip
+
+    for minio_base in minio_urls:
+        endpoint = minio_base.replace("http://", "").replace("https://", "")
         try:
-            response = m_client.get_object("vault", filename)
-            content = response.read()
-            response.close()
-            response.release_conn()
-            r_status_code = 200
-        except Exception:
-            candidates = [filename + ".gz"]
+            m_client = Minio(
+                endpoint,
+                access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                secure=False
+            )
+            candidates = [filename, filename + ".gz"]
             if filename.endswith(".md"):
                 base = filename[:-3]
-                candidates.extend([base + ".jsonld", base + ".jsonld.gz", base + ".csv", base + ".csv.gz"])
-            
-            r_status_code = 404
+                candidates.extend([base + ".jsonld", base + ".jsonld.gz", base + ".csv", base + ".csv.gz", base])
+
             for cand in candidates:
                 try:
                     response = m_client.get_object("vault", cand)
                     content = response.read()
                     response.close()
                     response.release_conn()
-                    filename = cand
-                    r_status_code = 200
-                    break
+
+                    if cand.endswith(".gz"):
+                        try:
+                            content = gzip.decompress(content)
+                        except gzip.BadGzipFile:
+                            pass
+
+                    result_content = content.decode("utf-8", errors="replace")
+                    session_match = re.search(r'(UNF-6_[^_]+)_', cand)
+                    if session_match:
+                        session_id = session_match.group(1)
+                        if "session_" in cand:
+                            session_match_exact = re.search(r'session_(UNF-6_[^_]+)_', cand)
+                            if session_match_exact:
+                                session_id = session_match_exact.group(1)
+                        system_prompt = f"\n\n---\nSYSTEM INSTRUCTION FOR AI AGENT:\nThis document belongs to an existing session ({session_id}). When you use the 'save_to_vault' tool to save your response or analysis based on this document, you MUST include the property '\"session_id\": \"{session_id}\"' at the root level of your 'jsonld_payload' argument. This is mandatory to preserve the provenance history chain."
+                        result_content += system_prompt
+
+                    return [types.TextContent(type="text", text=result_content)]
                 except Exception:
                     pass
-                
-        if r_status_code == 200:
-            import gzip
-            if filename.endswith(".gz"):
-                try:
-                    content = gzip.decompress(content)
-                except gzip.BadGzipFile:
-                    pass
-                    
-            result_content = content.decode("utf-8", errors="replace")
-            import re
-            session_match = re.search(r'(UNF-6_[^_]+)_', filename)
-            if session_match:
-                session_id = session_match.group(1)
-                if "session_" in filename:
-                    session_match_exact = re.search(r'session_(UNF-6_[^_]+)_', filename)
-                    if session_match_exact:
-                        session_id = session_match_exact.group(1)
-                        
-                system_prompt = f"\n\n---\nSYSTEM INSTRUCTION FOR AI AGENT:\nThis document belongs to an existing session ({session_id}). When you use the 'save_to_vault' tool to save your response or analysis based on this document, you MUST include the property '\"session_id\": \"{session_id}\"' at the root level of your 'jsonld_payload' argument. This is mandatory to preserve the provenance history chain."
-                result_content += system_prompt
-                
-            return [types.TextContent(type="text", text=result_content)]
-        else:
-            return [types.TextContent(type="text", text=f"Article '{filename}' not found in vault (HTTP 404).")]
-    except Exception as e:
-        return [types.TextContent(type="text", text=f"Failed to read from vault: {str(e)}")]
+        except Exception:
+            pass
+
+    return [types.TextContent(type="text", text=f"Article or dataset document '{url_or_filename}' not found in Elasticsearch or MinIO vault.")]
 
 async def list_vault_documents(prefix: str = "") -> list[types.TextContent]:
     import os
@@ -1880,6 +2058,11 @@ async def read_direct_file(url: str, plan: str = None) -> list[types.TextContent
     """
     import os, json, re, hashlib, urllib.parse, httpx
     try:
+        url_clean = (url or "").strip()
+        # If the URL is a vault document URL or vault document ID, delegate to read_vault_article
+        if "/vault/doc/" in url_clean or "/vault/" in url_clean or (re.match(r'^[a-f0-9]{16}$', url_clean) and not url_clean.startswith("http")):
+            return await read_vault_article(url_or_filename=url_clean)
+
         cdif_plan_text = ""
         cdif_doc = None
 
@@ -3987,7 +4170,7 @@ Here is detailed information about how every tool works:
         )
     elif name == "read_vault_article":
         return await read_vault_article(
-            url_or_filename=arguments.get("filename", "")
+            url_or_filename=arguments.get("filename") or arguments.get("url") or arguments.get("id") or arguments.get("url_or_filename") or ""
         )
     elif name == "list_vault_documents":
         return await list_vault_documents(
@@ -4011,7 +4194,7 @@ Here is detailed information about how every tool works:
             referenced_ids=arguments.get("referenced_ids", [])
         )
     elif name == "get_croissant_dataset":
-        return await get_croissant_dataset(id=arguments.get("id"))
+        return await get_croissant_dataset(id=arguments.get("id") or arguments.get("url") or arguments.get("url_or_id") or "")
     elif name == "get_cdif_summary":
         return await get_cdif_summary(url_or_id=arguments.get("url_or_id") or arguments.get("url") or arguments.get("id"))
     elif name == "read_croissant_file":
@@ -4021,7 +4204,8 @@ Here is detailed information about how every tool works:
             file_name=arguments.get("file_name")
         )
     elif name == "read_direct_file":
-        return await read_direct_file(url=arguments.get("url"), plan=arguments.get("plan"))
+        file_url = arguments.get("url") or arguments.get("file_url") or arguments.get("filename") or arguments.get("id") or ""
+        return await read_direct_file(url=file_url, plan=arguments.get("plan"))
     elif name == "hazards_info_profile":
         return await get_hazard_info_profiles(q=arguments.get("q"))
     elif name == "hazards_translation":
@@ -4236,13 +4420,14 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="read_vault_article",
-            description=f"Read the contents of an article or document from the MinIO vault. Use this ONLY to read the text contents of a markdown document. If the user asks to read the DATASET FILES or records from a vault document (e.g., 'Read files from vault <ID>'), DO NOT use this tool. Instead, construct the URL '{HOST}/vault/doc/<ID>' and use 'read_direct_file'.",
+            description=f"Read the contents of an article, document, or dataset from the vault/registry. Accepts a vault document ID (e.g. '5387798f9c6b1327'), document filename, or full vault URL (e.g. '{HOST}/vault/doc/<ID>').",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "filename": {"type": "string", "description": "The exact filename in the vault, raw document ID, or URL of the article."}
-                },
-                "required": ["filename"]
+                    "url": {"type": "string", "description": "The URL of the vault article or document (e.g. '{HOST}/vault/doc/<ID>')."},
+                    "filename": {"type": "string", "description": "The exact filename in the vault, raw document ID, or URL of the article."},
+                    "id": {"type": "string", "description": "The raw vault document ID (e.g. '5387798f9c6b1327')."}
+                }
             }
         ),
         types.Tool(
@@ -6489,27 +6674,35 @@ Please answer the question based ONLY on the context provided above (including t
                 return "\n".join(md)
 
             es_id = request.path_params["es_id"]
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
             md_text = None
             media_type = "text/markdown"
+            es_nodes = get_elasticsearch_lookup_urls()
+            candidate_indices = ["dataverse", "croissant", "trump", "openml", "cdif"]
             
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 try:
-                    # Check across trump, croissant, and all indices
-                    candidate_indices = ["trump", "croissant"]
                     doc_source = None
-                    for idx_name in candidate_indices:
-                        r = await client.get(f"{es_url}/{idx_name}/_doc/{es_id}")
-                        if r.status_code == 200:
-                            doc_source = r.json().get("_source", {})
+                    for es_url in es_nodes:
+                        for idx_name in candidate_indices:
+                            try:
+                                r = await client.get(f"{es_url}/{idx_name}/_doc/{es_id}")
+                                if r.status_code == 200:
+                                    doc_source = r.json().get("_source", {})
+                                    break
+                            except Exception:
+                                pass
+                        if doc_source:
                             break
-                    if not doc_source:
-                        # Try generic search by _id across all indices
-                        r = await client.post(f"{es_url}/_all/_search", json={"query": {"term": {"_id": es_id}}, "size": 1})
-                        if r.status_code == 200:
-                            hits = r.json().get("hits", {}).get("hits", [])
-                            if hits:
-                                doc_source = hits[0].get("_source", {})
+                        # Try generic search by _id across all indices on this node
+                        try:
+                            r = await client.post(f"{es_url}/_all/_search", json={"query": {"term": {"_id": es_id}}, "size": 1})
+                            if r.status_code == 200:
+                                hits = r.json().get("hits", {}).get("hits", [])
+                                if hits:
+                                    doc_source = hits[0].get("_source", {})
+                                    break
+                        except Exception:
+                            pass
 
                     if doc_source:
                         md_text = doc_source.get("_markdown_text", None)
@@ -6534,37 +6727,39 @@ Please answer the question based ONLY on the context provided above (including t
                     pass
                     
                 if not md_text:
-                    # Fallback to MinIO Vault
-                    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
-                    try:
-                        from minio import Minio
-                        from datetime import timedelta
-                        endpoint = minio_base.replace("http://", "").replace("https://", "")
-                        m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
-                        
-                        for ext in [".md", ".jsonld", ".csv", ""]:
-                            try:
-                                response = m_client.get_object("vault", es_id + ext)
-                                data = response.read()
-                                response.close()
-                                response.release_conn()
-                                
-                                md_text = data.decode("utf-8") if not ext.endswith(".csv") else data
-                                if ext == ".jsonld": 
-                                    import json
-                                    try:
-                                        parsed = json.loads(md_text)
-                                        parsed = fix_croissant_dataverse_distributions(parsed)
-                                        md_text = _generate_md(parsed)
-                                        media_type = "text/markdown"
-                                    except Exception:
-                                        media_type = "application/ld+json"
-                                elif ext == ".csv": media_type = "text/csv"
-                                break
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
+                    # Fallback to MinIO Vault across configured MinIO endpoints
+                    minio_urls = get_minio_lookup_urls()
+                    from minio import Minio
+                    for minio_base in minio_urls:
+                        if md_text:
+                            break
+                        try:
+                            endpoint = minio_base.replace("http://", "").replace("https://", "")
+                            m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
+                            
+                            for ext in [".md", ".jsonld", ".csv", ""]:
+                                try:
+                                    response = m_client.get_object("vault", es_id + ext)
+                                    data = response.read()
+                                    response.close()
+                                    response.release_conn()
+                                    
+                                    md_text = data.decode("utf-8") if not ext.endswith(".csv") else data
+                                    if ext == ".jsonld": 
+                                        import json
+                                        try:
+                                            parsed = json.loads(md_text)
+                                            parsed = fix_croissant_dataverse_distributions(parsed)
+                                            md_text = _generate_md(parsed)
+                                            media_type = "text/markdown"
+                                        except Exception:
+                                            media_type = "application/ld+json"
+                                    elif ext == ".csv": media_type = "text/csv"
+                                    break
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
                 
                 if md_text is None:
                     from starlette.responses import Response
