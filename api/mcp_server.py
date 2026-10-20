@@ -18,6 +18,88 @@ API_BASE = os.environ.get("API_BASE", "http://localhost:7013")
 MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "mcp.dev.codata.org")
 HOST = os.environ.get("HOST", f"https://{MCP_DOMAIN}")
 
+def get_nodes_config() -> dict:
+    """
+    Parse nodes.conf (or look in ./nodes.conf or /app/nodes.conf) to obtain all
+    configured profiles and their respective HOST, MCP_DOMAIN, IP, elasticsearch_url,
+    minio_url, and mongodb_url.
+    """
+    import configparser
+    candidates = [
+        os.environ.get("NODES_CONF", ""),
+        "/app/nodes.conf",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "nodes.conf"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "nodes.conf"),
+        "nodes.conf"
+    ]
+    conf_path = None
+    for c in candidates:
+        if c and os.path.exists(c):
+            conf_path = c
+            break
+
+    nodes = {}
+    if conf_path:
+        cp = configparser.ConfigParser()
+        try:
+            cp.read(conf_path)
+            for section in cp.sections():
+                nodes[section] = dict(cp[section])
+        except Exception as e:
+            print(f"Warning: Failed to read {conf_path}: {e}", file=sys.stderr)
+
+    # Fallback to local profile environment if nodes.conf was missing
+    if not nodes:
+        local_pname = os.environ.get("PROFILE_NAME", "default")
+        es_default = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200")
+        minio_default = os.environ.get("MINIO_URL", "http://minio:9000")
+        ip_default = os.environ.get("IP", "localhost")
+        nodes[local_pname] = {
+            "host": HOST,
+            "mcp_domain": MCP_DOMAIN,
+            "ip": ip_default,
+            "elasticsearch_url": es_default,
+            "minio_url": minio_default,
+            "mongodb_url": f"mongodb://{ip_default}:27017"
+        }
+    return nodes
+
+def get_elasticsearch_lookup_urls() -> list[str]:
+    """
+    Returns an ordered list of Elasticsearch base URLs to query across all known nodes.
+    Each ES node is formatted as IP:PORT (e.g. http://IP:PORT).
+    """
+    urls = []
+    local_es = os.environ.get("ELASTICSEARCH_URL", "").rstrip("/")
+    if local_es:
+        urls.append(local_es)
+
+    nodes = get_nodes_config()
+    for sname, sdata in nodes.items():
+        ip = sdata.get("ip", "").strip()
+        es_port = sdata.get("es_port", "").strip()
+        es_u = sdata.get("elasticsearch_url", "").strip().rstrip("/")
+
+        # Build IP:PORT endpoint
+        if ip and es_port:
+            candidate = f"http://{ip}:{es_port}"
+        elif es_u:
+            candidate = es_u
+        else:
+            continue
+
+        if candidate and candidate not in urls:
+            urls.append(candidate)
+
+        # Inside a Docker container, if IP is localhost/127.0.0.1, also add host.docker.internal or gateway
+        if "localhost" in candidate or "127.0.0.1" in candidate:
+            for alt_host in ["172.17.0.1", "172.29.0.1", "10.147.18.186"]:
+                alt_url = candidate.replace("localhost", alt_host).replace("127.0.0.1", alt_host)
+                if alt_url not in urls:
+                    urls.append(alt_url)
+
+    return urls
+
 # Global user info set when MCP server is authenticated
 SERVER_USER_INFO = None
 
@@ -601,8 +683,8 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
         async with httpx.AsyncClient(timeout=30.0) as client:
             await client.put(f"{es_url}/collections/_doc/{cid}", json=col_data)
         
-        HOST = os.environ.get("HOST", "https://ai.codata.org")
-        return [types.TextContent(type="text", text=f"Success! Created collection '{collection_name}' (ID: {cid}) and filled it with {len(doc_ids)} documents from {expert_index}.\n\nYou can view the collection here: {HOST}/collections/{cid}")]
+        current_host = os.environ.get("HOST", HOST)
+        return [types.TextContent(type="text", text=f"Success! Created collection '{collection_name}' (ID: {cid}) and filled it with {len(doc_ids)} documents from {expert_index}.\n\nYou can view the collection here: {current_host}/collections/{cid}")]
         
     except Exception as e:
         return [types.TextContent(type="text", text=f"Error building collection: {str(e)}")]
@@ -1649,9 +1731,9 @@ async def update_vault_document(target_id: str, referenced_ids: list[str], new_c
             except Exception:
                 pass
             
-        HOST = os.environ.get("MCP_DOMAIN", "ai.codata.org")
-        if not HOST.startswith("http"):
-            HOST = f"https://{HOST}"
+        current_host = os.environ.get("HOST", HOST)
+        if not current_host.startswith("http"):
+            current_host = f"https://{current_host}"
 
         # 2. Update content if provided
         final_md = original_md
@@ -1692,7 +1774,7 @@ async def update_vault_document(target_id: str, referenced_ids: list[str], new_c
             new_item = {
                 "@type": "CreativeWork",
                 "name": f"{ref_id}.md",
-                "url": f"{HOST}/vault/{ref_id}.md",
+                "url": f"{current_host}/vault/{ref_id}.md",
                 "creator": ref_creator
             }
             if review_status:
@@ -1867,8 +1949,11 @@ async def read_direct_file(url: str, plan: str = None) -> list[types.TextContent
                     fetch_plan_url = plan_str
                     if not fetch_plan_url.startswith("http"):
                         fetch_plan_url = f"http://localhost:7070/{fetch_plan_url.lstrip('/')}"
-                    elif "ai.mediaquantum.eu" in fetch_plan_url:
-                        fetch_plan_url = fetch_plan_url.replace("https://ai.mediaquantum.eu", "http://localhost:7070")
+                    elif "localhost" not in fetch_plan_url and ("127.0.0.1" not in fetch_plan_url):
+                        # Redirect external export URLs back to internal service
+                        parsed_plan = urllib.parse.urlparse(fetch_plan_url)
+                        if parsed_plan.path.endswith("/export") or "/export?" in fetch_plan_url:
+                            fetch_plan_url = f"http://localhost:7070{parsed_plan.path}?{parsed_plan.query}"
 
                     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as p_client:
                         p_resp = await p_client.get(fetch_plan_url, headers={"User-Agent": "Mozilla/5.0"})
@@ -1998,7 +2083,7 @@ async def get_cdif_summary(url_or_id: str) -> list[types.TextContent]:
     Read both Croissant and CDIF (DDI-CDI) representations for a given dataset/file export URL or ID,
     and return structured information about the dataset and its variables.
     Recognizes URLs like:
-    - https://ai.mediaquantum.eu/export?ds=https%3A%2F%2Fdoi.org%2F10.7910%2FDVN%2F3H1E4X&file=https%3A%2F%2Fdataverse.harvard.edu%2Fapi%2Faccess%2Fdatafile%2F5373735
+    - /export?ds=https%3A%2F%2Fdoi.org%2F10.7910%2FDVN%2F3H1E4X&file=https%3A%2F%2Fdataverse.harvard.edu%2Fapi%2Faccess%2Fdatafile%2F5373735
     - export?ds=...&file=...
     - Raw DOI or Vault ID
     """
@@ -2045,81 +2130,158 @@ async def get_cdif_summary(url_or_id: str) -> list[types.TextContent]:
             export_url = f"{base_internal}/export?{raw_str}"
 
         # Determine public base host for external links
-        base_public = "https://ai.mediaquantum.eu"
+        base_public = HOST.rstrip("/")
         if raw_str.startswith("http://") or raw_str.startswith("https://"):
             parsed_u = urllib.parse.urlparse(raw_str)
             if parsed_u.netloc and "localhost" not in parsed_u.netloc and "127.0.0.1" not in parsed_u.netloc:
                 base_public = f"{parsed_u.scheme}://{parsed_u.netloc}"
 
-        es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+        es_nodes = get_elasticsearch_lookup_urls()
         croissant_doc = None
         cdif_doc = None
         matched_doc_id = None
 
-        async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-            # Fetch Croissant JSON-LD
-            # A: Try DOI hash
-            if target_doi:
-                norm_doi = target_doi
-                if "doi.org/" in norm_doi:
-                    norm_doi = "https://doi.org/" + norm_doi.split("doi.org/")[-1]
-                h1 = hashlib.sha256(norm_doi.encode("utf-8")).hexdigest()[:16]
-                try:
-                    r_c = await client.get(f"{es_url}/croissant/_doc/{h1}")
-                    if r_c.status_code == 200:
-                        croissant_doc = r_c.json().get("_source", {})
-                        matched_doc_id = h1
-                except Exception:
-                    pass
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            # Step 1: Resolve Croissant JSON-LD across all configured Elasticsearch nodes
+            for es_url in es_nodes:
+                if croissant_doc:
+                    break
 
-            # B: Search by distribution file if not found
-            if not croissant_doc and target_file:
-                try:
-                    q_file = {
-                        "query": {
-                            "nested": {
-                                "path": "distribution",
-                                "query": {"term": {"distribution.contentUrl": target_file}}
-                            }
-                        },
-                        "size": 1
-                    }
-                    r_f = await client.post(f"{es_url}/_all/_search", json=q_file)
-                    if r_f.status_code == 200:
-                        hits = r_f.json().get("hits", {}).get("hits", [])
-                        if hits:
-                            matched_doc_id = hits[0].get("_id")
-                            croissant_doc = hits[0].get("_source", {})
-                except Exception:
-                    pass
+                # A: Try direct ID lookup if raw_id is a document ID (e.g. 16-hex hash or string ID)
+                if not croissant_doc and not target_doi and not target_file:
+                    for idx in ["croissant", "dataverse", "openml", "_all"]:
+                        try:
+                            r_id = await client.get(f"{es_url}/{idx}/_doc/{raw_id}", timeout=5.0)
+                            if r_id.status_code == 200:
+                                croissant_doc = r_id.json().get("_source", {})
+                                matched_doc_id = raw_id
+                                break
+                        except Exception:
+                            pass
 
-            # Fetch CDIF JSON-LD from MinIO cache or export endpoint
-            # Step 1: Check MinIO vault cache directly
-            try:
-                minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
-                minio_endpoint = minio_base.replace("http://", "").replace("https://", "")
-                vault_cache_key = f"cdif_cache_{hashlib.sha256((target_file + (target_doi or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
-                from minio import Minio
-                m_cache_client = Minio(
-                    minio_endpoint,
-                    access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
-                    secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
-                    secure=False
-                )
-                if m_cache_client.bucket_exists("vault"):
+                    # If direct GET was 404, try querying by _id in _search
+                    if not croissant_doc:
+                        try:
+                            r_q = await client.post(f"{es_url}/_search", json={
+                                "query": {"ids": {"values": [raw_id]}},
+                                "size": 1
+                            }, timeout=5.0)
+                            if r_q.status_code == 200:
+                                hits_q = r_q.json().get("hits", {}).get("hits", [])
+                                if hits_q:
+                                    croissant_doc = hits_q[0].get("_source", {})
+                                    matched_doc_id = hits_q[0].get("_id", raw_id)
+                        except Exception:
+                            pass
+
+                # B: Try DOI hash if target_doi is known
+                if not croissant_doc and target_doi:
+                    norm_doi = target_doi
+                    if "doi.org/" in norm_doi:
+                        norm_doi = "https://doi.org/" + norm_doi.split("doi.org/")[-1]
+                    h1 = hashlib.sha256(norm_doi.encode("utf-8")).hexdigest()[:16]
                     try:
-                        cached_obj = m_cache_client.get_object("vault", vault_cache_key)
-                        cached_bytes = cached_obj.read()
-                        cached_obj.close()
-                        cached_obj.release_conn()
-                        cdif_doc = json.loads(cached_bytes.decode("utf-8"))
+                        r_c = await client.get(f"{es_url}/croissant/_doc/{h1}", timeout=5.0)
+                        if r_c.status_code == 200:
+                            croissant_doc = r_c.json().get("_source", {})
+                            matched_doc_id = h1
                     except Exception:
                         pass
+
+                # C: Search by distribution file if not found
+                if not croissant_doc and target_file:
+                    try:
+                        q_file = {
+                            "query": {
+                                "nested": {
+                                    "path": "distribution",
+                                    "query": {"term": {"distribution.contentUrl": target_file}}
+                                }
+                            },
+                            "size": 1
+                        }
+                        r_f = await client.post(f"{es_url}/_all/_search", json=q_file, timeout=5.0)
+                        if r_f.status_code == 200:
+                            hits = r_f.json().get("hits", {}).get("hits", [])
+                            if hits:
+                                matched_doc_id = hits[0].get("_id")
+                                croissant_doc = hits[0].get("_source", {})
+                    except Exception:
+                        pass
+
+            # Extract target_doi and distribution target_file from resolved croissant_doc
+            if croissant_doc:
+                target_doi = croissant_doc.get("url") or croissant_doc.get("identifier") or target_doi
+                dists = croissant_doc.get("distribution") or []
+                for d in dists:
+                    if isinstance(d, dict):
+                        curl = d.get("contentUrl") or d.get("downloadUrl") or d.get("url")
+                        if curl:
+                            target_file = curl
+                            break
+
+                # Rebuild canonical internal export_url now that target_file and target_doi are known
+                if target_file and target_doi:
+                    export_url = f"{base_internal}/export?{urllib.parse.urlencode([('ds', target_doi), ('file', target_file)])}"
+                elif target_file:
+                    export_url = f"{base_internal}/export?{urllib.parse.urlencode([('file', target_file)])}"
+
+            # Step 2: Fetch CDIF JSON-LD from Elasticsearch 'cdif' index across nodes
+            try:
+                if target_file or target_doi or matched_doc_id:
+                    filters = []
+                    if target_file:
+                        filters.append({"term": {"file_url.keyword": target_file}})
+                    elif target_doi:
+                        filters.append({"term": {"dataset_url.keyword": target_doi}})
+                    elif matched_doc_id:
+                        filters.append({"term": {"dataset_id.keyword": matched_doc_id}})
+                    
+                    if filters:
+                        for es_url in es_nodes:
+                            if cdif_doc:
+                                break
+                            try:
+                                r_es_cdif = await client.post(f"{es_url}/cdif/_search", json={
+                                    "query": {"bool": {"filter": filters}},
+                                    "size": 1
+                                }, timeout=5.0)
+                                if r_es_cdif.status_code == 200:
+                                    cdif_hits = r_es_cdif.json().get("hits", {}).get("hits", [])
+                                    if cdif_hits:
+                                        cdif_doc = cdif_hits[0].get("_source", {}).get("cdif_jsonld")
+                            except Exception:
+                                pass
             except Exception:
                 pass
 
-            # Step 2: Fallback to HTTP GET on export_url if not in cache
-            if not cdif_doc:
+            # Check 2: MinIO vault cache
+            if not cdif_doc and target_file:
+                try:
+                    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                    minio_endpoint = minio_base.replace("http://", "").replace("https://", "")
+                    vault_cache_key = f"cdif_cache_{hashlib.sha256((target_file + (target_doi or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
+                    from minio import Minio
+                    m_cache_client = Minio(
+                        minio_endpoint,
+                        access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                        secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                        secure=False
+                    )
+                    if m_cache_client.bucket_exists("vault"):
+                        try:
+                            cached_obj = m_cache_client.get_object("vault", vault_cache_key)
+                            cached_bytes = cached_obj.read()
+                            cached_obj.close()
+                            cached_obj.release_conn()
+                            cdif_doc = json.loads(cached_bytes.decode("utf-8"))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+            # Check 3: Fallback to HTTP GET on export_url if not in cache
+            if not cdif_doc and export_url and target_file:
                 try:
                     r_exp = await client.get(export_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
                     if r_exp.status_code == 200:
@@ -2291,9 +2453,10 @@ async def get_croissant_dataset(id: str) -> list[types.TextContent]:
         target_doi = None
         target_file = None
         matched_doc = None
-        es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+        es_nodes = get_elasticsearch_lookup_urls()
+        es_url = es_nodes[0] if es_nodes else os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
 
-        # 1. Check if input is an export URL, e.g. https://ai.mediaquantum.eu/export?ds=...&file=...
+        # 1. Check if input is an export URL, e.g. /export?ds=...&file=... or https://<HOST>/export?ds=...&file=...
         if "/export" in raw_id and ("?" in raw_id or "&" in raw_id):
             parsed_export = urllib.parse.urlparse(raw_id)
             qs = urllib.parse.parse_qs(parsed_export.query)
@@ -2714,6 +2877,553 @@ async def extract_variables_from_oai(url: str) -> list[types.TextContent]:
             return [types.TextContent(type="text", text=json.dumps({"questions": data.get("questions", []), "variables": variables}, indent=2))]
     except Exception as e:
         return [types.TextContent(type="text", text=f"Failed to extract OAI variables: {str(e)}")]
+
+async def cdif_variables(
+    action: str = "list",
+    query: str = None,
+    collection_id: str = None,
+    dataset_id: str = None,
+    variable_name: str = None,
+    file_url: str = None,
+    limit: int = 50,
+    variable_data: dict = None,
+    dataset_url: str = None,
+    file_name: str = None
+) -> list[types.TextContent]:
+    """
+    Explore, search, read, and manage CDIF (DDI-CDI) tabular variables in the CDIF Variables Registry.
+    Supported actions:
+    - 'list': List variables across the registry or filtered by collection/dataset/file.
+    - 'search': Full-text search across the Elasticsearch 'cdif' index (files, dataset titles, descriptions, and variable names/labels/definitions).
+    - 'read': Retrieve full metadata and DDI-CDI model components for a specific variable.
+    - 'add': Index a new CDIF variable (or batch of variables) into the registry.
+    """
+    import os, json, sys, hashlib, datetime, urllib.parse, httpx
+    es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+    action = (action or "list").strip().lower()
+
+    if action == "search":
+        try:
+            q_str = (query or variable_name or "").strip()
+            filter_clauses = []
+            if collection_id:
+                filter_clauses.append({"term": {"collection_id.keyword": collection_id}})
+            if dataset_id:
+                filter_clauses.append({"term": {"dataset_id.keyword": dataset_id}})
+            if file_url:
+                filter_clauses.append({"term": {"file_url.keyword": file_url}})
+
+            # To comprehensively search across both Elasticsearch document fields (title, description, file_name,
+            # dataset_url) AND embedded CDIF DDI-CDI models (variable names, display labels, definitions, units),
+            # retrieve candidate records and score both levels.
+            if filter_clauses:
+                es_body = {
+                    "query": {
+                        "bool": {
+                            "filter": filter_clauses
+                        }
+                    }
+                }
+            else:
+                es_body = {"query": {"match_all": {}}}
+
+            es_body["size"] = 10000
+            es_body["_source"] = [
+                "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url", "collection_id",
+                "title", "description", "file_format", "models_count", "created_at",
+                "cdif_jsonld.DDICDIModels.@type",
+                "cdif_jsonld.DDICDIModels.name",
+                "cdif_jsonld.DDICDIModels.displayLabel",
+                "cdif_jsonld.DDICDIModels.physicalDataType",
+                "cdif_jsonld.DDICDIModels.dct:description",
+                "cdif_jsonld.DDICDIModels.definition",
+                "cdif_jsonld.DDICDIModels.schema:unitText"
+            ]
+
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                resp = await client.post(f"{es_url}/cdif/_search", json=es_body)
+                if resp.status_code != 200:
+                    return [types.TextContent(type="text", text=f"Error querying CDIF index: HTTP {resp.status_code} - {resp.text}")]
+
+                hits = resp.json().get("hits", {}).get("hits", [])
+                q_lower = q_str.lower()
+                results = []
+
+                for h in hits:
+                    src = h.get("_source", {})
+                    score = h.get("_score", 1.0)
+                    fname = src.get("file_name", "")
+                    furl = src.get("file_url", "")
+                    durl = src.get("dataset_url", "")
+                    did = src.get("dataset_id", "")
+                    cid = src.get("collection_id", "")
+                    dtitle = src.get("title", "")
+                    ddesc = src.get("description", "")
+                    format_str = src.get("file_format", "")
+                    models_count = src.get("models_count", 0)
+                    cdif_url = src.get("cdif_export_url", "")
+                    if cdif_url and "/export?" in cdif_url:
+                        qs_part = cdif_url.split("/export?", 1)[-1]
+                        cdif_url = f"https://{MCP_DOMAIN}/export?{qs_part}"
+
+                    models = src.get("cdif_jsonld", {}).get("DDICDIModels", [])
+                    matched_vars = []
+                    all_file_vars = []
+
+                    for m in models:
+                        if isinstance(m, dict) and m.get("@type") == "InstanceVariable":
+                            raw_name = m.get("name", {})
+                            vname = raw_name.get("name", "") if isinstance(raw_name, dict) else str(raw_name or "")
+                            
+                            raw_disp = m.get("displayLabel", {})
+                            loc_var = raw_disp.get("locationVariant", {}) if isinstance(raw_disp, dict) else {}
+                            disp_label = loc_var.get("entryValue", "") if isinstance(loc_var, dict) else str(loc_var or "")
+                            if not disp_label:
+                                disp_label = vname
+
+                            raw_dt = m.get("physicalDataType", {})
+                            data_type = raw_dt.get("entryValue", "") if isinstance(raw_dt, dict) else str(raw_dt or "")
+
+                            desc = m.get("dct:description") or ""
+                            if not desc:
+                                raw_def = m.get("definition", {})
+                                desc = raw_def.get("content", "") if isinstance(raw_def, dict) else str(raw_def or "")
+
+                            unit = m.get("schema:unitText") or ""
+
+                            var_entry = {
+                                "variable_name": vname,
+                                "display_label": disp_label,
+                                "data_type": data_type or "unspecified",
+                                "description": desc,
+                                "unit": unit
+                            }
+                            all_file_vars.append(var_entry)
+
+                            # Check if variable directly matches the search query
+                            if q_lower:
+                                var_haystack = f"{vname} {disp_label} {desc} {data_type} {unit}".lower()
+                                if q_lower in var_haystack:
+                                    matched_vars.append(var_entry)
+
+                    # If query matches file/title/description or any variable in this document
+                    file_haystack = f"{fname} {dtitle} {ddesc}".lower()
+                    file_matches_query = not q_lower or (q_lower in file_haystack) or bool(matched_vars)
+
+                    if file_matches_query:
+                        results.append({
+                            "dataset_title": dtitle,
+                            "dataset_id": did,
+                            "dataset_url": durl,
+                            "collection_id": cid,
+                            "file_name": fname,
+                            "file_format": format_str,
+                            "file_url": furl,
+                            "cdif_export_url": cdif_url,
+                            "description": ddesc[:300] + ("..." if len(ddesc) > 300 else ""),
+                            "score": score,
+                            "total_variables_in_file": len(all_file_vars),
+                            "matching_variables": matched_vars if matched_vars else all_file_vars[:10],
+                            "has_variable_match": bool(matched_vars)
+                        })
+
+                # Sort results prioritizing direct variable matches first, then Elasticsearch relevance score
+                results.sort(key=lambda x: (x["has_variable_match"], x["score"]), reverse=True)
+                paginated = results[:max(1, limit)]
+
+                response_obj = {
+                    "action": "search",
+                    "query": q_str,
+                    "total_matching_files": len(results),
+                    "count": len(paginated),
+                    "limit": limit,
+                    "results": paginated
+                }
+                return [types.TextContent(type="text", text=json.dumps(response_obj, indent=2))]
+
+        except Exception as e:
+            return [types.TextContent(type="text", text=f"Failed to search CDIF index: {str(e)}")]
+
+    elif action in ["list"]:
+        try:
+            es_query = {"match_all": {}}
+            filter_clauses = []
+            if collection_id:
+                filter_clauses.append({"term": {"collection_id.keyword": collection_id}})
+            if dataset_id:
+                filter_clauses.append({"term": {"dataset_id.keyword": dataset_id}})
+            if file_url:
+                filter_clauses.append({"term": {"file_url.keyword": file_url}})
+
+            if filter_clauses:
+                es_query = {"bool": {"filter": filter_clauses}}
+
+            payload = {
+                "query": es_query,
+                "size": 10000,
+                "_source": [
+                    "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url", "collection_id", "title",
+                    "cdif_jsonld.DDICDIModels.@type",
+                    "cdif_jsonld.DDICDIModels.name",
+                    "cdif_jsonld.DDICDIModels.displayLabel",
+                    "cdif_jsonld.DDICDIModels.physicalDataType",
+                    "cdif_jsonld.DDICDIModels.dct:description",
+                    "cdif_jsonld.DDICDIModels.definition",
+                    "cdif_jsonld.DDICDIModels.schema:unitText"
+                ]
+            }
+
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                resp = await client.post(f"{es_url}/cdif/_search", json=payload)
+                if resp.status_code != 200:
+                    return [types.TextContent(type="text", text=f"Error querying CDIF variables index: HTTP {resp.status_code} - {resp.text}")]
+
+                hits = resp.json().get("hits", {}).get("hits", [])
+                matched_variables = []
+                q_lower = query.strip().lower() if query else ""
+
+                for h in hits:
+                    src = h.get("_source", {})
+                    fname = src.get("file_name", "")
+                    furl = src.get("file_url", "")
+                    durl = src.get("dataset_url", "")
+                    did = src.get("dataset_id", "")
+                    cid = src.get("collection_id", "")
+                    dtitle = src.get("title", "")
+                    cdif_url = src.get("cdif_export_url", "")
+                    if cdif_url and "/export?" in cdif_url:
+                        qs_part = cdif_url.split("/export?", 1)[-1]
+                        cdif_url = f"https://{MCP_DOMAIN}/export?{qs_part}"
+
+                    models = src.get("cdif_jsonld", {}).get("DDICDIModels", [])
+                    for m in models:
+                        if isinstance(m, dict) and m.get("@type") == "InstanceVariable":
+                            raw_name = m.get("name", {})
+                            vname = raw_name.get("name", "") if isinstance(raw_name, dict) else str(raw_name or "")
+                            
+                            raw_disp = m.get("displayLabel", {})
+                            loc_var = raw_disp.get("locationVariant", {}) if isinstance(raw_disp, dict) else {}
+                            disp_label = loc_var.get("entryValue", "") if isinstance(loc_var, dict) else str(loc_var or "")
+                            if not disp_label:
+                                disp_label = vname
+
+                            raw_dt = m.get("physicalDataType", {})
+                            data_type = raw_dt.get("entryValue", "") if isinstance(raw_dt, dict) else str(raw_dt or "")
+
+                            desc = m.get("dct:description") or ""
+                            if not desc:
+                                raw_def = m.get("definition", {})
+                                desc = raw_def.get("content", "") if isinstance(raw_def, dict) else str(raw_def or "")
+
+                            unit = m.get("schema:unitText") or ""
+
+                            # Apply search query filter if provided
+                            if q_lower:
+                                haystack = f"{vname} {disp_label} {desc} {data_type} {unit} {fname} {dtitle}".lower()
+                                if q_lower not in haystack:
+                                    continue
+
+                            matched_variables.append({
+                                "variable_name": vname,
+                                "display_label": disp_label,
+                                "data_type": data_type or "unspecified",
+                                "description": desc,
+                                "unit": unit,
+                                "file_name": fname,
+                                "file_url": furl,
+                                "dataset_url": durl,
+                                "dataset_id": did,
+                                "dataset_title": dtitle,
+                                "collection_id": cid,
+                                "cdif_export_url": cdif_url
+                            })
+
+                total_matched = len(matched_variables)
+                results_page = matched_variables[:max(1, limit)]
+
+                response_obj = {
+                    "action": "list",
+                    "total_matches": total_matched,
+                    "count": len(results_page),
+                    "limit": limit,
+                    "variables": results_page
+                }
+                return [types.TextContent(type="text", text=json.dumps(response_obj, indent=2))]
+
+        except Exception as e:
+            return [types.TextContent(type="text", text=f"Failed to list CDIF variables: {str(e)}")]
+
+    elif action in ["read", "get", "inspect"]:
+        if not variable_name and not query:
+            return [types.TextContent(type="text", text="Error: 'variable_name' is required for action 'read'.")]
+        target_name = (variable_name or query).strip()
+
+        try:
+            es_query = {"match_all": {}}
+            filter_clauses = []
+            if collection_id:
+                filter_clauses.append({"term": {"collection_id.keyword": collection_id}})
+            if dataset_id:
+                filter_clauses.append({"term": {"dataset_id.keyword": dataset_id}})
+            if file_url:
+                filter_clauses.append({"term": {"file_url.keyword": file_url}})
+
+            if filter_clauses:
+                es_query = {"bool": {"filter": filter_clauses}}
+
+            payload = {
+                "query": es_query,
+                "size": 10000,
+                "_source": True
+            }
+
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                resp = await client.post(f"{es_url}/cdif/_search", json=payload)
+                if resp.status_code != 200:
+                    return [types.TextContent(type="text", text=f"Error querying CDIF variables index: HTTP {resp.status_code} - {resp.text}")]
+
+                hits = resp.json().get("hits", {}).get("hits", [])
+                found_details = []
+
+                for h in hits:
+                    src = h.get("_source", {})
+                    fname = src.get("file_name", "")
+                    furl = src.get("file_url", "")
+                    durl = src.get("dataset_url", "")
+                    did = src.get("dataset_id", "")
+                    cid = src.get("collection_id", "")
+                    dtitle = src.get("title", "")
+                    cdif_url = src.get("cdif_export_url", "")
+                    if cdif_url and "/export?" in cdif_url:
+                        qs_part = cdif_url.split("/export?", 1)[-1]
+                        cdif_url = f"https://{MCP_DOMAIN}/export?{qs_part}"
+
+                    cdif_doc = src.get("cdif_jsonld", {})
+                    models = cdif_doc.get("DDICDIModels", []) if isinstance(cdif_doc, dict) else []
+
+                    # Find matching InstanceVariable
+                    matched_iv = None
+                    for m in models:
+                        if isinstance(m, dict) and m.get("@type") == "InstanceVariable":
+                            raw_name = m.get("name", {})
+                            vname = raw_name.get("name", "") if isinstance(raw_name, dict) else str(raw_name or "")
+                            raw_disp = m.get("displayLabel", {})
+                            loc_var = raw_disp.get("locationVariant", {}) if isinstance(raw_disp, dict) else {}
+                            disp_label = loc_var.get("entryValue", "") if isinstance(loc_var, dict) else str(loc_var or "")
+
+                            if vname.lower() == target_name.lower() or disp_label.lower() == target_name.lower():
+                                matched_iv = m
+                                break
+
+                    if matched_iv:
+                        # Extract substantive value domain & concept description
+                        domain_id = matched_iv.get("takesSubstantiveValuesFrom_SubstantiveValueDomain", "")
+                        domain_obj = None
+                        if domain_id:
+                            for m in models:
+                                if isinstance(m, dict) and m.get("@id") == domain_id:
+                                    domain_obj = m
+                                    break
+
+                        # Extract physical mapping position
+                        position = None
+                        for m in models:
+                            if isinstance(m, dict) and m.get("@type") == "PhysicalMappingPosition" and target_name.lower() in str(m.get("@id", "")).lower():
+                                position = m.get("indexes_PhysicalSegmentLayout_PhysicalSegmentLayout", {})
+                                break
+
+                        # Collect sample data points / instance values for this variable (up to 5)
+                        sample_values = []
+                        for m in models:
+                            if isinstance(m, dict) and m.get("@type") == "InstanceValue" and target_name.lower() in str(m.get("@id", "")).lower():
+                                val = m.get("content", {})
+                                if isinstance(val, dict):
+                                    sample_values.append(val.get("entryValue", ""))
+                                else:
+                                    sample_values.append(str(val))
+                                if len(sample_values) >= 5:
+                                    break
+
+                        desc = matched_iv.get("dct:description") or ""
+                        if not desc:
+                            raw_def = matched_iv.get("definition", {})
+                            desc = raw_def.get("content", "") if isinstance(raw_def, dict) else str(raw_def or "")
+
+                        found_details.append({
+                            "variable_name": matched_iv.get("name", {}).get("name") if isinstance(matched_iv.get("name"), dict) else str(matched_iv.get("name", "")),
+                            "display_label": matched_iv.get("displayLabel", {}).get("locationVariant", {}).get("entryValue") if isinstance(matched_iv.get("displayLabel"), dict) else "",
+                            "description": desc,
+                            "physical_data_type": matched_iv.get("physicalDataType", {}).get("entryValue") if isinstance(matched_iv.get("physicalDataType"), dict) else "",
+                            "unit": matched_iv.get("schema:unitText", ""),
+                            "file_name": fname,
+                            "file_url": furl,
+                            "dataset_url": durl,
+                            "dataset_id": did,
+                            "dataset_title": dtitle,
+                            "collection_id": cid,
+                            "cdif_export_url": cdif_url,
+                            "ddi_cdi_instance_variable": matched_iv,
+                            "substantive_value_domain": domain_obj,
+                            "physical_layout_position": position,
+                            "sample_values": sample_values
+                        })
+
+                if not found_details:
+                    return [types.TextContent(type="text", text=f"Variable '{target_name}' was not found in the CDIF registry.")]
+
+                response_obj = {
+                    "action": "read",
+                    "variable_name": target_name,
+                    "matches_found": len(found_details),
+                    "details": found_details
+                }
+                return [types.TextContent(type="text", text=json.dumps(response_obj, indent=2))]
+
+        except Exception as e:
+            return [types.TextContent(type="text", text=f"Failed to read CDIF variable '{target_name}': {str(e)}")]
+
+    elif action in ["add", "create", "index"]:
+        if not variable_data and not query:
+            return [types.TextContent(type="text", text="Error: 'variable_data' dictionary or JSON definition is required for action 'add'.")]
+
+        # Normalize variable_data input
+        var_payload = variable_data
+        if isinstance(var_payload, str):
+            try:
+                var_payload = json.loads(var_payload)
+            except Exception:
+                var_payload = {"name": var_payload}
+        elif not var_payload and query:
+            var_payload = {"name": query}
+
+        try:
+            v_name = var_payload.get("name") or var_payload.get("variable_name") or "variable"
+            v_label = var_payload.get("display_label") or var_payload.get("label") or v_name
+            v_type = var_payload.get("data_type") or var_payload.get("type") or "string"
+            v_desc = var_payload.get("description") or var_payload.get("definition") or ""
+            v_unit = var_payload.get("unit") or ""
+            f_name = file_name or var_payload.get("file_name") or "custom_variables.csv"
+            f_url = file_url or var_payload.get("file_url") or f"custom://variable/{v_name}"
+            d_url = dataset_url or var_payload.get("dataset_url") or ""
+            c_id = collection_id or var_payload.get("collection_id") or "custom"
+            d_id = dataset_id or var_payload.get("dataset_id") or (hashlib.sha256(d_url.encode("utf-8")).hexdigest()[:16] if d_url else "custom")
+
+            doc_cache_id = hashlib.sha256((f_url + (d_url or "")).encode("utf-8")).hexdigest()[:24]
+
+            # Construct clean DDI-CDI InstanceVariable model node
+            iv_node = {
+                "@id": f"#instanceVariable-{v_name}",
+                "@type": "InstanceVariable",
+                "physicalDataType": {
+                    "@type": "ControlledVocabularyEntry",
+                    "entryValue": v_type
+                },
+                "displayLabel": {
+                    "@type": "LabelForDisplay",
+                    "locationVariant": {
+                        "@type": "ControlledVocabularyEntry",
+                        "entryValue": v_label
+                    }
+                },
+                "name": {
+                    "@type": "ObjectName",
+                    "name": v_name
+                },
+                "definition": {
+                    "@type": "InternationalString",
+                    "language": "en",
+                    "content": v_desc
+                }
+            }
+            if v_unit:
+                iv_node["schema:unitText"] = v_unit
+
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Check if file record already exists
+                existing_resp = await client.get(f"{es_url}/cdif/_doc/{doc_cache_id}")
+                if existing_resp.status_code == 200:
+                    es_record = existing_resp.json().get("_source", {})
+                    cdif_jsonld = es_record.get("cdif_jsonld", {})
+                    models = cdif_jsonld.get("DDICDIModels", [])
+                    # Update or append instance variable
+                    updated = False
+                    for idx, m in enumerate(models):
+                        if isinstance(m, dict) and m.get("@type") == "InstanceVariable" and (m.get("name", {}).get("name") == v_name or m.get("@id") == f"#instanceVariable-{v_name}"):
+                            models[idx] = iv_node
+                            updated = True
+                            break
+                    if not updated:
+                        models.append(iv_node)
+                    cdif_jsonld["DDICDIModels"] = models
+                    es_record["cdif_jsonld"] = cdif_jsonld
+                    es_record["models_count"] = len(models)
+                else:
+                    canonical_export_url = f"https://{MCP_DOMAIN}/export?file={urllib.parse.quote(f_url, safe='')}"
+                    if d_url:
+                        canonical_export_url += f"&ds={urllib.parse.quote(d_url, safe='')}"
+
+                    cdif_jsonld = {
+                        "@context": [
+                            "https://ddi-cdi.github.io/m2t-ng/DDI-CDI_1-1beta/encoding/json-ld/ddi-cdi.jsonld",
+                            {
+                                "dct": "http://purl.org/dc/terms/",
+                                "prov": "http://www.w3.org/ns/prov#",
+                                "schema": "http://schema.org/"
+                            }
+                        ],
+                        "@id": canonical_export_url,
+                        "@type": ["schema:Dataset", "DataDownload"],
+                        "name": f_name,
+                        "dct:title": f_name,
+                        "dct:description": v_desc or f"CDIF variable dataset for {f_name}",
+                        "DDICDIModels": [iv_node]
+                    }
+                    es_record = {
+                        "collection_id": c_id,
+                        "dataset_id": d_id,
+                        "dataset_url": d_url,
+                        "file_name": f_name,
+                        "file_url": f_url,
+                        "file_format": "text/csv",
+                        "cdif_export_url": canonical_export_url,
+                        "title": f_name,
+                        "description": v_desc,
+                        "models_count": 1,
+                        "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+                        "status": "success",
+                        "cdif_jsonld": cdif_jsonld
+                    }
+
+                save_resp = await client.put(f"{es_url}/cdif/_doc/{doc_cache_id}?refresh=wait_for", json=es_record)
+                if save_resp.status_code in [200, 201]:
+                    return [types.TextContent(
+                        type="text",
+                        text=json.dumps({
+                            "status": "success",
+                            "action": "add",
+                            "message": f"Successfully indexed CDIF variable '{v_name}' into registry.",
+                            "variable": {
+                                "variable_name": v_name,
+                                "display_label": v_label,
+                                "data_type": v_type,
+                                "description": v_desc,
+                                "unit": v_unit,
+                                "file_name": f_name,
+                                "file_url": f_url,
+                                "collection_id": c_id,
+                                "dataset_id": d_id
+                            },
+                            "doc_id": doc_cache_id
+                        }, indent=2)
+                    )]
+                else:
+                    return [types.TextContent(type="text", text=f"Failed to index variable in Elasticsearch: HTTP {save_resp.status_code} - {save_resp.text}")]
+
+        except Exception as e:
+            return [types.TextContent(type="text", text=f"Failed to add CDIF variable: {str(e)}")]
+
+    else:
+        return [types.TextContent(type="text", text=f"Unsupported action: '{action}'. Supported actions are: 'list', 'read', 'add'.")]
 
 async def url_to_croissant(url: str, slice: bool = False, traverse: bool = False, reingest: bool = False, upload_gdrive: bool = False, upload_gdrive_folder: str = None, is_file: bool = False) -> list[types.TextContent]:
     if reingest:
@@ -3176,6 +3886,7 @@ Here is detailed information about how every tool works:
 - ask_expert: Query one of the semantic expert indices in Elasticsearch: 'trump' (Trump expert/collection), 'croissant' (Croissant expert/collection), 'dataverse', 'openml', 'honduras', 'hips', 'ollama', 'huggingface'.
 - get_croissant_dataset: Get the full Croissant JSON-LD payload for a specific dataset ID. IMPORTANT: You MUST read the JSON payload and print a summary of the dataset (Title, Description, Creator, URL) for the user in readable Markdown. Do not hide the payload.
 - get_cdif_summary: Read both Croissant and CDIF (DDI-CDI) representations for a dataset or export URL (e.g. export?ds=...&file=...) and summarize dataset metadata, distributions, and DDI-CDI variables.
+- cdif_variables: Explore, search, read, and manage CDIF (DDI-CDI) tabular variables in the CDIF Variables Registry. Actions: 'search' (search CDIF index files & variables), 'list' (list variables), 'read' (read variable details and DDI-CDI models), 'add' (register variable).
 - hazards_info_profile: Search for Hazard Information Profiles (HIPs) based on a query.
 
 - hazards_translation: Get translations for Hazard Information Profiles into a specific language.
@@ -3367,6 +4078,19 @@ Here is detailed information about how every tool works:
         )
     elif name == "planner":
         return await get_planner(query=arguments.get("query"))
+    elif name == "cdif_variables":
+        return await cdif_variables(
+            action=arguments.get("action", "list"),
+            query=arguments.get("query"),
+            collection_id=arguments.get("collection_id"),
+            dataset_id=arguments.get("dataset_id"),
+            variable_name=arguments.get("variable_name"),
+            file_url=arguments.get("file_url"),
+            limit=int(arguments.get("limit", 50)),
+            variable_data=arguments.get("variable_data"),
+            dataset_url=arguments.get("dataset_url"),
+            file_name=arguments.get("file_name")
+        )
     else:
         raise ValueError(f"Unknown tool: {name}")
 
@@ -3512,7 +4236,7 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="read_vault_article",
-            description="Read the contents of an article or document from the MinIO vault. Use this ONLY to read the text contents of a markdown document. If the user asks to read the DATASET FILES or records from a vault document (e.g., 'Read files from vault <ID>'), DO NOT use this tool. Instead, construct the URL 'https://ai.mediaquantum.eu/vault/doc/<ID>' and use 'read_direct_file'.",
+            description=f"Read the contents of an article or document from the MinIO vault. Use this ONLY to read the text contents of a markdown document. If the user asks to read the DATASET FILES or records from a vault document (e.g., 'Read files from vault <ID>'), DO NOT use this tool. Instead, construct the URL '{HOST}/vault/doc/<ID>' and use 'read_direct_file'.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -3594,7 +4318,7 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["url"],
                 "properties": {
                     "url": {"type": "string", "description": "The exact URL of the file to download and read."},
-                    "plan": {"type": "string", "description": "Optional CDIF export URL (e.g. 'https://ai.mediaquantum.eu/export?ds=...&file=...') specifying structural format, column mapping, delimiter, and sample records."}
+                    "plan": {"type": "string", "description": f"Optional CDIF export URL (e.g. '{HOST}/export?ds=...&file=...') specifying structural format, column mapping, delimiter, and sample records."}
                 }
             }
         ),
@@ -3639,6 +4363,58 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["url"],
                 "properties": {
                     "url": {"type": "string", "description": "OAI_ORE export URL."}
+                }
+            }
+        ),
+        types.Tool(
+            name="cdif_variables",
+            description="Explore, search, read, and manage CDIF (DDI-CDI) tabular variables in the CDIF Variables Registry. Supports listing/searching variables, reading detailed DDI-CDI model components (data types, definitions, domains, physical layouts), and adding new variables.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "Operation to perform: 'list' (list variables), 'search' (search CDIF index across files, titles, descriptions, and variables), 'read' (fetch full variable details & DDI-CDI models), or 'add' (register new variable metadata). Default is 'list'.",
+                        "enum": ["list", "search", "read", "add"],
+                        "default": "list"
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Search keyword or variable name filter for 'search', 'list', or 'read' (e.g. 'household', 'age', 'income', 'Ghana')."
+                    },
+                    "variable_name": {
+                        "type": "string",
+                        "description": "Specific variable identifier or name to inspect in 'read' mode (e.g. 'FPrimary', 'HH_SIZE')."
+                    },
+                    "collection_id": {
+                        "type": "string",
+                        "description": "Optional Collection UUID filter (e.g. '113fd2f2-3e32-4621-8e68-46743ded61a1')."
+                    },
+                    "dataset_id": {
+                        "type": "string",
+                        "description": "Optional Dataset ID filter (e.g. 'edb8020d265e0838')."
+                    },
+                    "file_url": {
+                        "type": "string",
+                        "description": "Optional distribution data file URL filter."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of variables to return in 'list' mode (default 50).",
+                        "default": 50
+                    },
+                    "variable_data": {
+                        "type": "object",
+                        "description": "Variable metadata dictionary for 'add' mode, containing fields like 'name', 'display_label', 'data_type', 'description', 'unit', etc."
+                    },
+                    "dataset_url": {
+                        "type": "string",
+                        "description": "Optional dataset DOI/URL when indexing a variable with 'add'."
+                    },
+                    "file_name": {
+                        "type": "string",
+                        "description": "Optional data file name when indexing a variable with 'add'."
+                    }
                 }
             }
         ),
@@ -4237,9 +5013,9 @@ Please answer the question based ONLY on the context provided above (including t
                 import datetime, json, re, os
                 # We fetch the original JSON-LD to get the creator/model
                 minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
-                HOST = os.environ.get("MCP_DOMAIN", "ai.codata.org")
-                if not HOST.startswith("http"):
-                    HOST = f"https://{HOST}"
+                current_host = os.environ.get("HOST", HOST)
+                if not current_host.startswith("http"):
+                    current_host = f"https://{current_host}"
                     
                 status_label = "Approved"
                 prefix = "approved_snippet"
@@ -4270,7 +5046,7 @@ Please answer the question based ONLY on the context provided above (including t
                     "reviewStatus": review_status,
                     "isBasedOn": {
                         "@type": "CreativeWork",
-                        "url": f"{HOST}/vault/doc/{es_id}",
+                        "url": f"{current_host}/vault/doc/{es_id}",
                         "name": f"Original Vault Document ({es_id})"
                     }
                 }
@@ -4288,7 +5064,7 @@ Please answer the question based ONLY on the context provided above (including t
                 if action == "note" and note_text:
                     final_text = f"**User Note:** {note_text}\n\n---\n*Source Text:*\n{snippet_text}"
                     
-                snippet_text_with_ref = f"{final_text}\n\n---\n*Source Document:* [View Original]({HOST}/vault/doc/{es_id})"
+                snippet_text_with_ref = f"{final_text}\n\n---\n*Source Document:* [View Original]({current_host}/vault/doc/{es_id})"
                 
                 res = await store_in_vault(content=snippet_text_with_ref, prefix=prefix, jsonld_payload=json.dumps(snippet_jsonld))
                 res_text = res[0].text
@@ -6842,7 +7618,7 @@ Please answer the question based ONLY on the context provided above (including t
                     doc_data = src or doc_jsonld or {}
                     doc_name = doc_data.get("name") or f"Material {doc_id}"
                     doc_desc = doc_data.get("description") or f"Collection material {doc_id}"
-                    doc_url = doc_data.get("url") or doc_data.get("_source_url") or f"https://ai.mediaquantum.eu/vault/doc/{doc_id}"
+                    doc_url = doc_data.get("url") or doc_data.get("_source_url") or f"{HOST}/vault/doc/{doc_id}"
                     doc_keywords = doc_data.get("keywords") or []
                     if isinstance(doc_keywords, str):
                         doc_keywords = [k.strip() for k in doc_keywords.split(",") if k.strip()]
@@ -6886,7 +7662,7 @@ Please answer the question based ONLY on the context provided above (including t
                     part_type = "cr:Dataset" if item_is_dataset else "schema:CreativeWork"
                     part_obj = {
                         "@type": part_type,
-                        "@id": f"https://ai.mediaquantum.eu/vault/doc/{doc_id}",
+                        "@id": f"{HOST}/vault/doc/{doc_id}",
                         "name": doc_name,
                         "description": doc_desc,
                         "url": doc_url
@@ -6913,10 +7689,10 @@ Please answer the question based ONLY on the context provided above (including t
                         "dataType": "cr:dataType"
                     },
                     "@type": ["schema:Dataset", "cr:Dataset"],
-                    "@id": f"https://ai.mediaquantum.eu/collections/{cid}",
+                    "@id": f"{HOST}/collections/{cid}",
                     "name": col_name,
                     "description": col_desc,
-                    "url": f"https://ai.mediaquantum.eu/collections/{cid}",
+                    "url": f"{HOST}/collections/{cid}",
                     "conformsTo": "http://mlcommons.org/croissant/1.1",
                     "license": "https://creativecommons.org/licenses/by/4.0/",
                     "distribution": distributions,
@@ -7028,7 +7804,7 @@ Please answer the question based ONLY on the context provided above (including t
                     except Exception:
                         src = {}
                 
-                ds_url = src.get("url") or src.get("_source_url") or f"https://ai.mediaquantum.eu/vault/doc/{doc_id}"
+                ds_url = src.get("url") or src.get("_source_url") or f"{HOST}/vault/doc/{doc_id}"
                 dists = src.get("distribution") or src.get("fileObject") or src.get("files") or []
                 if isinstance(dists, dict):
                     dists = [dists]

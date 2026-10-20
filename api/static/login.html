@@ -515,9 +515,9 @@
     <script>
     const ODRL_API = 'https://odrl.dev.codata.org/api';
     const ORCID_CLIENT_ID = 'APP-GYWELCXSUPLY5AKQ';
-    const ORCID_REDIRECT = 'https://ai.codata.org/login';
+    const ORCID_REDIRECT = `${window.location.origin}/login`;
     const GOOGLE_CLIENT_ID = '1053808023233-frteb30h3ccii1946fpkfvuoopjjjdsm.apps.googleusercontent.com';
-    const GOOGLE_REDIRECT = 'https://ai.codata.org/login';
+    const GOOGLE_REDIRECT = `${window.location.origin}/login`;
 
     let orcidProfile = null;  // {name, orcid, token}
     let googleProfile = null; // {name, email, token}
