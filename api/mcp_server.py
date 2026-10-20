@@ -2319,6 +2319,15 @@ async def get_cdif_summary(url_or_id: str) -> list[types.TextContent]:
             if parsed_u.netloc and "localhost" not in parsed_u.netloc and "127.0.0.1" not in parsed_u.netloc:
                 base_public = f"{parsed_u.scheme}://{parsed_u.netloc}"
 
+        # Determine raw_id (from URL or direct ID)
+        raw_id = raw_str
+        if raw_id.startswith("http://") or raw_id.startswith("https://"):
+            parsed_id_u = urllib.parse.urlparse(raw_id)
+            if "/vault/doc/" in parsed_id_u.path or "/vault/" in parsed_id_u.path:
+                raw_id = parsed_id_u.path.rstrip("/").split("/")[-1]
+                if raw_id == "annotations":
+                    raw_id = parsed_id_u.path.rstrip("/").split("/")[-2]
+
         es_nodes = get_elasticsearch_lookup_urls()
         croissant_doc = None
         cdif_doc = None
@@ -2899,57 +2908,83 @@ async def predict_missing_variable_info(variables, dataset_title="Dataset"):
 async def extract_variables_from_croissant(dataset_id_or_url: str) -> list[types.TextContent]:
     try:
         async with httpx.AsyncClient(timeout=30.0, headers=get_auth_headers({"User-Agent": "curl/7.68.0"})) as client:
-            # 1. Lookup in Elasticsearch first
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200").rstrip("/")
-            try:
-                # Try multiple indices since we don't know where it came from
-                search_term = f'"{dataset_id_or_url}"'
-                es_res = await client.post(f"{es_url}/_search", json={
-                    "query": {
-                        "multi_match": {
-                            "query": dataset_id_or_url,
-                            "fields": ["url", "schema:url", "identifier", "@id"]
-                        }
-                    }
-                })
-                
-                hits = []
-                if es_res.status_code == 200:
-                    hits = es_res.json().get("hits", {}).get("hits", [])
-                    
-                if not hits:
-                    for idx in ["croissant", "dataverse", "openml", "hips"]:
-                        fallback_res = await client.get(f"{es_url}/{idx}/_search", params={"q": search_term})
-                        if fallback_res.status_code == 200:
-                            idx_hits = fallback_res.json().get("hits", {}).get("hits", [])
-                            if idx_hits:
-                                hits = idx_hits
-                                break
+            # 1. Lookup in Elasticsearch nodes from nodes.conf
+            es_nodes = get_elasticsearch_lookup_urls()
+            clean_lookup = dataset_id_or_url.strip()
+            raw_id_cand = None
+            if clean_lookup.startswith("http://") or clean_lookup.startswith("https://"):
+                import urllib.parse
+                parsed_u = urllib.parse.urlparse(clean_lookup)
+                if "/vault/doc/" in parsed_u.path or "/vault/" in parsed_u.path:
+                    raw_id_cand = parsed_u.path.rstrip("/").split("/")[-1]
+                    if raw_id_cand == "annotations":
+                        raw_id_cand = parsed_u.path.rstrip("/").split("/")[-2]
+            elif re.match(r'^[a-f0-9]{16}$', clean_lookup):
+                raw_id_cand = clean_lookup
+
+            hits = []
+            for es_url in es_nodes:
+                if hits:
+                    break
+                try:
+                    # If we have a document ID, check direct ID in indices
+                    if raw_id_cand:
+                        for idx in ["dataverse", "croissant", "openml", "_all"]:
+                            try:
+                                r_get = await client.get(f"{es_url}/{idx}/_doc/{raw_id_cand}", timeout=5.0)
+                                if r_get.status_code == 200:
+                                    hits = [r_get.json()]
+                                    break
+                            except Exception:
+                                pass
+                    if not hits:
+                        search_term = f'"{clean_lookup}"'
+                        es_res = await client.post(f"{es_url}/_search", json={
+                            "query": {
+                                "multi_match": {
+                                    "query": clean_lookup,
+                                    "fields": ["url", "schema:url", "identifier", "@id", "_source_url"]
+                                }
+                            }
+                        }, timeout=5.0)
+                        if es_res.status_code == 200:
+                            hits = es_res.json().get("hits", {}).get("hits", [])
+                    if not hits:
+                        for idx in ["croissant", "dataverse", "openml", "hips"]:
+                            try:
+                                fallback_res = await client.get(f"{es_url}/{idx}/_search", params={"q": search_term}, timeout=5.0)
+                                if fallback_res.status_code == 200:
+                                    idx_hits = fallback_res.json().get("hits", {}).get("hits", [])
+                                    if idx_hits:
+                                        hits = idx_hits
+                                        break
+                            except Exception:
+                                pass
+                except Exception as e:
+                    print(f"Warning: Elastic lookup failed on {es_url}: {e}", file=sys.stderr)
 
                 if hits:
                     raw_jsonld = hits[0]["_source"].get("_markdown_text")
                     if raw_jsonld:
-                            try:
-                                parsed_jsonld = json.loads(raw_jsonld)
-                                res = await client.post(f"{API_BASE}/variables/croissant/raw", json={"jsonld": parsed_jsonld})
-                                if res.status_code == 200:
-                                    data = res.json()
-                                    variables = data.get("variables", [])
-                                    files = data.get("files", [])
-                                    print(f"DEBUG Step 1: variables={variables}, files={files}", flush=True, file=sys.stderr)
-                                    if variables or files:
-                                        if variables:
-                                            variables = await predict_missing_variable_info(variables, dataset_title=dataset_id_or_url)
-                                            data["variables"] = variables
-                                        return [types.TextContent(type="text", text=json.dumps(data, indent=2))]
-                                    else:
-                                        print("DEBUG Step 1: No variables or files, falling through...", flush=True, file=sys.stderr)
-                                        # Return raw JSON-LD so the LLM can inspect distribution files
-                                        return [types.TextContent(type="text", text=json.dumps(parsed_jsonld, indent=2))]
-                            except json.JSONDecodeError:
-                                print("Warning: Could not parse JSON-LD from Elasticsearch _markdown_text", file=sys.stderr)
-            except Exception as e:
-                print(f"Warning: Elastic lookup failed: {e}", file=sys.stderr)
+                        try:
+                            parsed_jsonld = json.loads(raw_jsonld)
+                            res = await client.post(f"{API_BASE}/variables/croissant/raw", json={"jsonld": parsed_jsonld})
+                            if res.status_code == 200:
+                                data = res.json()
+                                variables = data.get("variables", [])
+                                files = data.get("files", [])
+                                print(f"DEBUG Step 1: variables={variables}, files={files}", flush=True, file=sys.stderr)
+                                if variables or files:
+                                    if variables:
+                                        variables = await predict_missing_variable_info(variables, dataset_title=dataset_id_or_url)
+                                        data["variables"] = variables
+                                    return [types.TextContent(type="text", text=json.dumps(data, indent=2))]
+                                else:
+                                    print("DEBUG Step 1: No variables or files, falling through...", flush=True, file=sys.stderr)
+                                    # Return raw JSON-LD so the LLM can inspect distribution files
+                                    return [types.TextContent(type="text", text=json.dumps(parsed_jsonld, indent=2))]
+                        except json.JSONDecodeError:
+                            print("Warning: Could not parse JSON-LD from Elasticsearch _markdown_text", file=sys.stderr)
 
             # 2. Fallback to QLever SPARQL
             response = await client.get(f"{API_BASE}/variables/sparql", params={"id": dataset_id_or_url})
@@ -8063,6 +8098,7 @@ Please answer the question based ONLY on the context provided above (including t
                             return {
                                 "status": "cached",
                                 "source": "elasticsearch",
+                                "dataset_id": f_item.get("dataset_id"),
                                 "file_name": f_name,
                                 "file_url": f_url,
                                 "dataset_url": d_url,
@@ -8111,6 +8147,7 @@ Please answer the question based ONLY on the context provided above (including t
 
                             return {
                                 "status": "success",
+                                "dataset_id": f_item.get("dataset_id"),
                                 "file_name": f_name,
                                 "file_url": f_url,
                                 "dataset_url": d_url,
@@ -8122,6 +8159,7 @@ Please answer the question based ONLY on the context provided above (including t
                             return {
                                 "status": "error",
                                 "status_code": exp_resp.status_code,
+                                "dataset_id": f_item.get("dataset_id"),
                                 "file_name": f_name,
                                 "file_url": f_url,
                                 "dataset_url": d_url,
@@ -8131,6 +8169,7 @@ Please answer the question based ONLY on the context provided above (including t
                     except Exception as conv_err:
                         return {
                             "status": "error",
+                            "dataset_id": f_item.get("dataset_id"),
                             "file_name": f_name,
                             "file_url": f_url,
                             "dataset_url": d_url,
@@ -8225,6 +8264,8 @@ Please answer the question based ONLY on the context provided above (including t
                                     "processed": completed_count,
                                     "total": len(files_to_process),
                                     "percent": pct,
+                                    "dataset_id": f_item.get("dataset_id"),
+                                    "dataset_url": f_item.get("dataset_url"),
                                     "current_file": f_item["file_name"],
                                     "current_status": res.get("status"),
                                     "successful": success_count,

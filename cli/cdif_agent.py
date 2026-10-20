@@ -43,6 +43,32 @@ except ImportError:
     HAS_RICH = False
 
 DEFAULT_SERVER_URL = os.environ.get("CDIF_SERVER_URL") or os.environ.get("MCP_SERVER_URL") or "http://127.0.0.1:7110"
+DEFAULT_REPORT_FILE = os.environ.get("CDIF_REPORT_FILE") or "cdif_agent_report.json"
+
+
+def load_processed_datasets(report_file: str = DEFAULT_REPORT_FILE) -> Dict[str, Any]:
+    """Load previously processed datasets from the JSON report log."""
+    if os.path.exists(report_file):
+        try:
+            with open(report_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception as e:
+            print(f"Warning: Could not read existing report file '{report_file}': {e}", file=sys.stderr)
+    return {"processed_datasets": {}, "collections": {}, "history": []}
+
+
+def save_processed_datasets(report_data: Dict[str, Any], report_file: str = DEFAULT_REPORT_FILE) -> None:
+    """Save processed datasets state and history to the JSON report log."""
+    try:
+        report_data["last_updated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        tmp_file = f"{report_file}.tmp"
+        with open(tmp_file, "w", encoding="utf-8") as f:
+            json.dump(report_data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_file, report_file)
+    except Exception as e:
+        print(f"Warning: Failed to save report log to '{report_file}': {e}", file=sys.stderr)
 
 
 class CDIFClient:
@@ -105,10 +131,12 @@ class CDIFClient:
                             continue
 
 
-def print_collections_table(collections: List[Dict[str, Any]], client: Optional[CDIFClient] = None):
+def print_collections_table(collections: List[Dict[str, Any]], client: Optional[CDIFClient] = None, report_data: Optional[Dict[str, Any]] = None):
     if not collections:
         print("No collections available.")
         return
+
+    processed_collections = report_data.get("collections", {}) if report_data else {}
 
     if HAS_RICH:
         console = Console()
@@ -124,34 +152,64 @@ def print_collections_table(collections: List[Dict[str, Any]], client: Optional[
         table.add_column("Name", style="bright_white")
         table.add_column("Items", justify="center", style="yellow", width=8)
         table.add_column("Type", justify="center", style="magenta", width=12)
+        table.add_column("CDIF Status", justify="center", width=14)
 
         for idx, col in enumerate(collections, 1):
             cid = col.get("id", "N/A")
             name = col.get("name") or "Untitled"
             items_cnt = len(col.get("items", []))
             is_super = "Supercollection" if col.get("is_supercollection") else "Collection"
-            table.add_row(str(idx), cid, name, str(items_cnt), is_super)
+            
+            # Check log report status
+            c_info = processed_collections.get(cid)
+            if c_info and c_info.get("status") == "success":
+                status_str = "[bold green]Analyzed[/bold green]"
+            elif c_info and c_info.get("status") == "partial":
+                status_str = "[bold yellow]Partial[/bold yellow]"
+            else:
+                status_str = "[dim]Pending[/dim]"
+
+            table.add_row(str(idx), cid, name, str(items_cnt), is_super, status_str)
 
         console.print(table)
         console.print(f"\n[dim]Total collections: {len(collections)} | Endpoint: {client.base_url if client else DEFAULT_SERVER_URL}[/dim]\n")
     else:
-        print(f"\n{'#':>3}  {'Collection ID':<38}  {'Items':<6}  {'Name'}")
-        print("-" * 80)
+        print(f"\n{'#':>3}  {'Collection ID':<38}  {'Items':<6}  {'Status':<10}  {'Name'}")
+        print("-" * 90)
         for idx, col in enumerate(collections, 1):
             cid = col.get("id", "N/A")
             name = col.get("name") or "Untitled"
             items_cnt = len(col.get("items", []))
-            print(f"{idx:>3}. {cid:<38}  {items_cnt:<6}  {name}")
+            c_info = processed_collections.get(cid)
+            status_str = "Analyzed" if (c_info and c_info.get("status") == "success") else "Pending"
+            print(f"{idx:>3}. {cid:<38}  {items_cnt:<6}  {status_str:<10}  {name}")
         print(f"\nTotal: {len(collections)} collections.\n")
 
 
-def analyze_collection(client: CDIFClient, cid: str) -> Dict[str, Any]:
+def analyze_collection(client: CDIFClient, cid: str, report_file: str = DEFAULT_REPORT_FILE, force: bool = False) -> Dict[str, Any]:
+    # Load processed report to check if collection / its datasets were already processed
+    report = load_processed_datasets(report_file)
+    processed_cols = report.setdefault("collections", {})
+    processed_dsets = report.setdefault("processed_datasets", {})
+    
     # 1. Fetch metadata first to display collection title
     try:
         col_meta = client.get_collection(cid)
         col_name = col_meta.get("name") or "Untitled Collection"
+        col_items = list(col_meta.get("items", []))
     except Exception as e:
         col_name = "Collection"
+        col_items = []
+
+    # Check if already fully analyzed in report log
+    existing_entry = processed_cols.get(cid)
+    if existing_entry and existing_entry.get("status") == "success" and not force:
+        msg = f"Collection '{col_name}' ({cid}) was already analyzed on {existing_entry.get('last_analyzed')} (datasets: {existing_entry.get('successful_datasets', 0)}). Skipping second analysis."
+        if HAS_RICH:
+            Console().print(f"[bold yellow]⏩ [SKIPPED][/bold yellow] {msg} [dim](use --force to re-analyze)[/dim]")
+        else:
+            print(f"⏩ [SKIPPED] {msg} (use --force to re-analyze)")
+        return existing_entry
 
     summary_result = {
         "collection_id": cid,
@@ -160,7 +218,8 @@ def analyze_collection(client: CDIFClient, cid: str) -> Dict[str, Any]:
         "successful": 0,
         "failed": 0,
         "elapsed_seconds": 0.0,
-        "files": []
+        "files": [],
+        "processed_datasets": []
     }
 
     if HAS_RICH:
@@ -207,6 +266,8 @@ def analyze_collection(client: CDIFClient, cid: str) -> Dict[str, Any]:
                     processed = evt.get("processed", 0)
                     current_file = evt.get("current_file", "")
                     cur_status = evt.get("current_status", "")
+                    ds_id = evt.get("dataset_id") or evt.get("result", {}).get("dataset_id")
+                    ds_url = evt.get("dataset_url") or evt.get("result", {}).get("dataset_url")
                     
                     status_style = "[green]SUCCESS[/green]" if cur_status in ["success", "cached"] else "[red]FAILED[/red]"
                     status_flag = "[CACHED]" if cur_status == "cached" else status_style
@@ -216,10 +277,32 @@ def analyze_collection(client: CDIFClient, cid: str) -> Dict[str, Any]:
                         completed=processed,
                         description=f"[cyan]{current_file[:30]:<30}[/cyan] {status_flag}"
                     )
-                    summary_result["files"].append({
+                    file_info = {
                         "file_name": current_file,
-                        "status": cur_status
-                    })
+                        "status": cur_status,
+                        "dataset_id": ds_id,
+                        "dataset_url": ds_url
+                    }
+                    summary_result["files"].append(file_info)
+
+                    # Update dataset tracking in report
+                    if ds_id:
+                        if ds_id not in summary_result["processed_datasets"]:
+                            summary_result["processed_datasets"].append(ds_id)
+                        dset_entry = processed_dsets.setdefault(ds_id, {
+                            "dataset_id": ds_id,
+                            "dataset_url": ds_url,
+                            "collections": [],
+                            "files": {},
+                            "first_analyzed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                        })
+                        if cid not in dset_entry["collections"]:
+                            dset_entry["collections"].append(cid)
+                        dset_entry["last_analyzed"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                        dset_entry["files"][current_file] = {
+                            "status": cur_status,
+                            "cdif_export_url": evt.get("result", {}).get("cdif_export_url")
+                        }
 
                 elif evt_type == "complete":
                     summary_result["successful"] = evt.get("successful", 0)
@@ -253,11 +336,35 @@ def analyze_collection(client: CDIFClient, cid: str) -> Dict[str, Any]:
                 pct = evt.get("percent", 0.0)
                 cur_file = evt.get("current_file", "")
                 st = evt.get("current_status", "")
+                ds_id = evt.get("dataset_id") or evt.get("result", {}).get("dataset_id")
+                ds_url = evt.get("dataset_url") or evt.get("result", {}).get("dataset_url")
                 bar_len = 30
                 filled = int(bar_len * (processed / total_files)) if total_files else 0
                 bar = "=" * filled + "-" * (bar_len - filled)
                 print(f"\r[{bar}] {processed}/{total_files} ({pct}%) - {cur_file[:25]:<25} [{st.upper()}]", end="", flush=True)
-                summary_result["files"].append({"file_name": cur_file, "status": st})
+                summary_result["files"].append({
+                    "file_name": cur_file,
+                    "status": st,
+                    "dataset_id": ds_id,
+                    "dataset_url": ds_url
+                })
+                if ds_id:
+                    if ds_id not in summary_result["processed_datasets"]:
+                        summary_result["processed_datasets"].append(ds_id)
+                    dset_entry = processed_dsets.setdefault(ds_id, {
+                        "dataset_id": ds_id,
+                        "dataset_url": ds_url,
+                        "collections": [],
+                        "files": {},
+                        "first_analyzed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    })
+                    if cid not in dset_entry["collections"]:
+                        dset_entry["collections"].append(cid)
+                    dset_entry["last_analyzed"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    dset_entry["files"][cur_file] = {
+                        "status": st,
+                        "cdif_export_url": evt.get("result", {}).get("cdif_export_url")
+                    }
             elif evt_type == "complete":
                 summary_result["successful"] = evt.get("successful", 0)
                 summary_result["failed"] = evt.get("failed", 0)
@@ -267,6 +374,34 @@ def analyze_collection(client: CDIFClient, cid: str) -> Dict[str, Any]:
         var_count = client.get_collection_variables_count(cid)
         if var_count is not None:
             print(f"Registered variables in Elasticsearch: {var_count}")
+
+    # Record completion in log report
+    processed_status = "success" if summary_result["failed"] == 0 else "partial"
+    processed_cols[cid] = {
+        "id": cid,
+        "name": col_name,
+        "status": processed_status,
+        "total_files": summary_result["total_files"],
+        "successful_files": summary_result["successful"],
+        "failed_files": summary_result["failed"],
+        "successful_datasets": len(summary_result["processed_datasets"]),
+        "last_analyzed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "elapsed_seconds": summary_result["elapsed_seconds"]
+    }
+    
+    # Also record in history list
+    report.setdefault("history", []).append({
+        "collection_id": cid,
+        "name": col_name,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "successful_files": summary_result["successful"],
+        "failed_files": summary_result["failed"],
+        "elapsed_seconds": summary_result["elapsed_seconds"]
+    })
+
+    # Save to report file
+    save_processed_datasets(report, report_file)
+    print(f"📝 Log report updated in '{report_file}'. Total processed datasets tracked: {len(processed_dsets)}.")
 
     return summary_result
 
@@ -288,28 +423,41 @@ def main():
     parser.add_argument(
         "-l", "--list",
         action="store_true",
-        help="Show all available collections in the vault"
+        help="Show all available collections in the vault and their CDIF analysis status"
     )
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Sequentially analyze all available collections"
+        help="Sequentially analyze all available collections (skipping already analyzed ones)"
     )
     parser.add_argument(
         "--server",
         default=DEFAULT_SERVER_URL,
         help=f"Target backend URL (default: {DEFAULT_SERVER_URL})"
     )
+    parser.add_argument(
+        "--report-file",
+        default=DEFAULT_REPORT_FILE,
+        help=f"Path to JSON log report file storing processed datasets (default: {DEFAULT_REPORT_FILE})"
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force re-analysis of collections/datasets even if already recorded as processed in the report log"
+    )
 
     args = parser.parse_args()
     client = CDIFClient(args.server)
+    report_file = args.report_file
+    force = args.force
 
     target_cid = args.collectionID or args.pos_collectionID
 
     if args.list:
         try:
             cols = client.list_collections()
-            print_collections_table(cols, client)
+            report_data = load_processed_datasets(report_file)
+            print_collections_table(cols, client, report_data)
         except Exception as e:
             print(f"Error fetching collections: {e}", file=sys.stderr)
             sys.exit(1)
@@ -318,11 +466,12 @@ def main():
     if args.all:
         try:
             cols = client.list_collections()
-            print(f"Starting batch analysis for {len(cols)} collections...")
+            report_data = load_processed_datasets(report_file)
+            print(f"Starting batch analysis for {len(cols)} collections (Log report: '{report_file}')...")
             for c in cols:
                 cid = c.get("id")
                 if cid:
-                    analyze_collection(client, cid)
+                    analyze_collection(client, cid, report_file=report_file, force=force)
         except Exception as e:
             print(f"Error in batch analysis: {e}", file=sys.stderr)
             sys.exit(1)
@@ -334,7 +483,7 @@ def main():
         sys.exit(1)
 
     try:
-        analyze_collection(client, target_cid)
+        analyze_collection(client, target_cid, report_file=report_file, force=force)
     except Exception as e:
         print(f"\nError analyzing collection '{target_cid}': {e}", file=sys.stderr)
         sys.exit(1)
