@@ -378,7 +378,7 @@
                             <td colspan="7" style="text-align: center; padding: 40px 20px; color: #6b7280;">
                                 <div style="display: inline-flex; align-items: center; gap: 10px; font-weight: 500; font-size: 0.95rem;">
                                     <span class="var-spinner"></span>
-                                    <span>Loading CDIF variables from Elasticsearch...</span>
+                                    <span>Loading CDIF variables...</span>
                                 </div>
                                 <div style="font-size: 0.8rem; color: #8c939f; margin-top: 6px;">Extracting and organizing variable metadata across all tabular files</div>
                             </td>
@@ -482,7 +482,7 @@
                         <td colspan="7" style="text-align: center; padding: 40px 20px; color: #6b7280;">
                             <div style="display: inline-flex; align-items: center; gap: 10px; font-weight: 500; font-size: 0.95rem;">
                                 <span class="var-spinner"></span>
-                                <span>Loading CDIF variables from Elasticsearch...</span>
+                                <span>Loading CDIF variables...</span>
                             </div>
                             <div style="font-size: 0.8rem; color: #8c939f; margin-top: 6px;">Extracting and organizing variable metadata across all tabular files</div>
                         </td>
@@ -494,14 +494,32 @@
             }
 
             try {
-                const res = await fetch('/api/variableindex/data');
-                if (!res.ok) {
-                    throw new Error(`Server returned HTTP ${res.status}`);
+                // Step 1: Load first 100 variables fast and show them immediately
+                const initialRes = await fetch('/api/variableindex/data?limit=100&offset=0');
+                if (!initialRes.ok) {
+                    throw new Error(`Server returned HTTP ${initialRes.status}`);
                 }
-                const data = await res.json();
-                rawVariablesData = data;
-                renderDashboardSummary(data);
+                const initialData = await initialRes.json();
+                rawVariablesData = initialData;
+                renderDashboardSummary(initialData);
                 applyFilters();
+
+                // Step 2: Load remaining variables in the background if index has more
+                if (initialData.has_more || (initialData.total_variables && initialData.total_variables > initialData.variables.length)) {
+                    if (countBadge) {
+                        countBadge.innerHTML = `<span class="var-spinner" style="width: 10px; height: 10px; border-width: 1.5px; vertical-align: middle; margin-right: 4px;"></span> Loading remaining ${initialData.total_variables.toLocaleString()} variables...`;
+                    }
+                    fetch('/api/variableindex/data')
+                        .then(r => r.ok ? r.json() : null)
+                        .then(fullData => {
+                            if (fullData && fullData.variables) {
+                                rawVariablesData = fullData;
+                                renderDashboardSummary(fullData);
+                                applyFilters();
+                            }
+                        })
+                        .catch(bgErr => console.warn('Background variables load note:', bgErr));
+                }
             } catch (err) {
                 console.error('Error fetching CDIF variables:', err);
                 if (tableBody) {
@@ -510,6 +528,7 @@
                 if (countBadge) countBadge.textContent = 'Error';
             }
         }
+
 
         function renderDashboardSummary(data) {
             const vars = (data && data.variables) ? data.variables : [];

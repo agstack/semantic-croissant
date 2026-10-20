@@ -8504,6 +8504,11 @@ Please answer the question based ONLY on the context provided above (including t
             cid = request.path_params["id"]
             es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
             
+            limit_param = request.query_params.get("limit")
+            limit = int(limit_param) if limit_param and limit_param.isdigit() else None
+            offset_param = request.query_params.get("offset")
+            offset = int(offset_param) if offset_param and offset_param.isdigit() else 0
+
             try:
                 # Query ES 'cdif' index for this collection with selective fields
                 payload = {
@@ -8613,16 +8618,23 @@ Please answer the question based ONLY on the context provided above (including t
                             "variables_count": file_var_count
                         })
 
+                    total_vars_count = len(all_variables)
+                    returned_variables = all_variables
+                    if limit is not None:
+                        returned_variables = all_variables[offset:offset + limit]
+
                     return JSONResponse({
                         "collection_id": cid,
                         "total_files": len(files_summary),
-                        "total_variables": len(all_variables),
-                        "variables": all_variables,
-                        "files": files_summary
+                        "total_variables": total_vars_count,
+                        "variables": returned_variables,
+                        "files": files_summary,
+                        "has_more": (offset + len(returned_variables)) < total_vars_count if limit is not None else False
                     })
             except Exception as e:
                 import traceback
                 traceback.print_exc()
+
                 return JSONResponse({"error": str(e), "collection_id": cid, "total_variables": 0, "variables": []}, status_code=500)
 
         async def api_collections_variables_ask(request):
@@ -9115,6 +9127,11 @@ Instructions:
             from starlette.responses import JSONResponse
             import json, httpx, os, sys
 
+            limit_param = request.query_params.get("limit")
+            limit = int(limit_param) if limit_param and limit_param.isdigit() else None
+            offset_param = request.query_params.get("offset")
+            offset = int(offset_param) if offset_param and offset_param.isdigit() else 0
+
             es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
             try:
                 payload = {
@@ -9226,15 +9243,22 @@ Instructions:
                             "variables_count": file_var_count
                         })
 
+                    total_vars_count = len(all_variables)
+                    returned_variables = all_variables
+                    if limit is not None:
+                        returned_variables = all_variables[offset:offset + limit]
+
                     return JSONResponse({
                         "total_files": len(files_summary),
-                        "total_variables": len(all_variables),
-                        "variables": all_variables,
-                        "files": files_summary
+                        "total_variables": total_vars_count,
+                        "variables": returned_variables,
+                        "files": files_summary,
+                        "has_more": (offset + len(returned_variables)) < total_vars_count if limit is not None else False
                     })
             except Exception as e:
                 import traceback
                 traceback.print_exc()
+
                 return JSONResponse({"error": str(e), "total_variables": 0, "variables": []}, status_code=500)
 
         async def api_variable_index_ask(request):
