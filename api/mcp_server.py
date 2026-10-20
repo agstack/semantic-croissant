@@ -7078,7 +7078,8 @@ Please answer the question based ONLY on the context provided above (including t
                     if d_url:
                         params.insert(0, ("ds", d_url))
                     query_string = urllib.parse.urlencode(params)
-                    canonical_export_url = f"https://ai.mediaquantum.eu/export?{query_string}"
+                    base_host = f"https://{MCP_DOMAIN}"
+                    canonical_export_url = f"{base_host}/export?{query_string}"
                     internal_export_url = f"http://127.0.0.1:7070/export?{query_string}"
 
                     doc_cache_id = hashlib.sha256((f_url + (d_url or "")).encode("utf-8")).hexdigest()[:24]
@@ -7373,6 +7374,10 @@ Please answer the question based ONLY on the context provided above (including t
                         did = src.get("dataset_id", "")
                         dtitle = dataset_titles.get(did, "") or src.get("title", "") or ""
                         cdif_url = src.get("cdif_export_url", "")
+                        if cdif_url and "/export?" in cdif_url:
+                            qs_part = cdif_url.split("/export?", 1)[-1]
+                            base_host = f"https://{MCP_DOMAIN}"
+                            cdif_url = f"{base_host}/export?{qs_part}"
                         cdif_json = src.get("cdif_jsonld", {})
                         models = cdif_json.get("DDICDIModels", [])
                         
@@ -7980,6 +7985,10 @@ Instructions:
                         cid = src.get("collection_id", "")
                         dtitle = dataset_titles.get(did, "") or src.get("title", "") or ""
                         cdif_url = src.get("cdif_export_url", "")
+                        if cdif_url and "/export?" in cdif_url:
+                            qs_part = cdif_url.split("/export?", 1)[-1]
+                            base_host = f"https://{MCP_DOMAIN}"
+                            cdif_url = f"{base_host}/export?{qs_part}"
                         cdif_json = src.get("cdif_jsonld", {})
                         models = cdif_json.get("DDICDIModels", [])
 
