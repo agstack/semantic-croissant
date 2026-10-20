@@ -409,24 +409,45 @@ async def search_croissant_datasets(q: str, limit: int = 10, page: int = 1, form
 
 
 async def get_collection_documents(collection_id: str, limit: int = 50) -> list[types.TextContent]:
-    es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+    es_nodes = get_elasticsearch_lookup_urls()
     try:
         import httpx
-        async with httpx.AsyncClient() as client:
-            # 1. Get collection to find items
-            col_resp = await client.get(f"{es_url}/collections/_doc/{collection_id}")
-            if col_resp.status_code != 200:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # 1. Get collection to find items across all known ES nodes
+            col_data = None
+            for es_url in es_nodes:
+                try:
+                    col_resp = await client.get(f"{es_url}/collections/_doc/{collection_id}")
+                    if col_resp.status_code == 200:
+                        col_data = col_resp.json()
+                        break
+                except Exception:
+                    continue
+
+            # Fallback to MinIO if not found in ES
+            if not col_data:
+                for minio_url in get_minio_lookup_urls():
+                    try:
+                        from minio import Minio
+                        endpoint = minio_url.replace("http://", "").replace("https://", "")
+                        m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
+                        obj = m_client.get_object("collections", f"{collection_id}.json")
+                        col_data = {"_source": json.loads(obj.read().decode("utf-8"))}
+                        obj.close()
+                        obj.release_conn()
+                        break
+                    except Exception:
+                        continue
+
+            if not col_data:
                 return [types.TextContent(type="text", text=f"Collection '{collection_id}' not found.")]
             
-            col_data = col_resp.json()
             items = col_data.get("_source", {}).get("items", [])
             if not items:
                 return [types.TextContent(type="text", text=f"Collection '{collection_id}' has no documents.")]
                 
-            # 2. Get summaries of documents from trump and croissant indices
-            # We limit to requested limit to prevent context overflow
+            # 2. Get summaries of documents from trump, croissant, and dataverse indices
             doc_ids = items[:limit]
-            
             payload = {
                 "query": {
                     "terms": {
@@ -434,25 +455,29 @@ async def get_collection_documents(collection_id: str, limit: int = 50) -> list[
                     }
                 },
                 "size": limit,
-                "_source": ["name", "description", "url"]
+                "_source": ["name", "description", "url", "schema:name", "title"]
             }
             
-            docs_resp = await client.post(f"{es_url}/trump,croissant/_search", json=payload)
-            if docs_resp.status_code != 200:
-                return [types.TextContent(type="text", text=f"Failed to fetch documents from index: {docs_resp.text}")]
-                
-            hits = docs_resp.json().get("hits", {}).get("hits", [])
-            # Create a lookup map for ES hits
-            es_docs = {h.get("_id"): h for h in hits}
+            es_docs = {}
+            for es_url in es_nodes:
+                try:
+                    docs_resp = await client.post(f"{es_url}/croissant,dataverse,trump,openml/_search", json=payload)
+                    if docs_resp.status_code == 200:
+                        hits = docs_resp.json().get("hits", {}).get("hits", [])
+                        for h in hits:
+                            if h.get("_id") not in es_docs:
+                                es_docs[h.get("_id")] = h
+                except Exception:
+                    continue
             
             md = [f"### Documents in Collection '{col_data.get('_source', {}).get('name', collection_id)}' (Showing {len(doc_ids)} of {len(items)})"]
             
-            HOST = os.environ.get("HOST", "http://localhost:8000")
+            HOST = os.environ.get("HOST", HOST)
             for doc_id in doc_ids:
                 if doc_id in es_docs:
                     h = es_docs[doc_id]
                     s = h.get("_source", {})
-                    name = s.get("name", "Unknown Title")
+                    name = s.get("name") or s.get("schema:name") or s.get("title") or "Unknown Title"
                     desc = str(s.get("description", ""))
                     if len(desc) > 200:
                         desc = desc[:197] + "..."
@@ -460,41 +485,43 @@ async def get_collection_documents(collection_id: str, limit: int = 50) -> list[
                     # Attempt to fetch metadata from MinIO vault directly
                     name = "Vault Document"
                     desc = "Metadata not available in search index."
-                    try:
-                        from minio import Minio
-                        import json, re
-                        endpoint = os.environ.get("MINIO_URL", "http://minio:9000").replace("http://", "").replace("https://", "")
-                        m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
-                        
+                    for minio_url in get_minio_lookup_urls():
                         try:
-                            # Try JSONLD first for exact name
-                            j_resp = m_client.get_object("vault", doc_id + ".jsonld")
-                            j_data = json.loads(j_resp.read().decode("utf-8"))
-                            j_resp.close()
-                            j_resp.release_conn()
-                            if "name" in j_data:
-                                name = j_data["name"]
-                                desc = str(j_data.get("description", "Fetched from Vault."))
-                        except Exception:
-                            # Fallback to MD
-                            md_resp = m_client.get_object("vault", doc_id + ".md")
-                            md_data = md_resp.read().decode("utf-8")
-                            md_resp.close()
-                            md_resp.release_conn()
-                            # Find first h1
-                            h1_match = re.search(r'^#\s+(?:🥐\s*)?(.+)$', md_data, flags=re.MULTILINE)
-                            if h1_match:
-                                name = h1_match.group(1).strip()
-                            desc_match = re.search(r'^>\s*(.+)$', md_data, flags=re.MULTILINE)
-                            if desc_match:
-                                desc = desc_match.group(1).strip()
-                            else:
-                                desc = "Fetched from Vault (Markdown document)."
+                            from minio import Minio
+                            import json, re
+                            endpoint = minio_url.replace("http://", "").replace("https://", "")
+                            m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
                             
-                        if len(desc) > 200:
-                            desc = desc[:197] + "..."
-                    except Exception as e:
-                        pass
+                            try:
+                                # Try JSONLD first for exact name
+                                j_resp = m_client.get_object("vault", doc_id + ".jsonld")
+                                j_data = json.loads(j_resp.read().decode("utf-8"))
+                                j_resp.close()
+                                j_resp.release_conn()
+                                if "name" in j_data:
+                                    name = j_data["name"]
+                                    desc = str(j_data.get("description", "Fetched from Vault."))
+                                    break
+                            except Exception:
+                                # Fallback to MD
+                                md_resp = m_client.get_object("vault", doc_id + ".md")
+                                md_data = md_resp.read().decode("utf-8")
+                                md_resp.close()
+                                md_resp.release_conn()
+                                h1_match = re.search(r'^#\s+(?:🥐\s*)?(.+)$', md_data, flags=re.MULTILINE)
+                                if h1_match:
+                                    name = h1_match.group(1).strip()
+                                desc_match = re.search(r'^>\s*(.+)$', md_data, flags=re.MULTILINE)
+                                if desc_match:
+                                    desc = desc_match.group(1).strip()
+                                else:
+                                    desc = "Fetched from Vault (Markdown document)."
+                                break
+                        except Exception:
+                            continue
+                        
+                    if len(desc) > 200:
+                        desc = desc[:197] + "..."
                     
                 doc_link = f"[{name}]({HOST}/vault/doc/{doc_id})"
                 md.append(f"- **{doc_link}** (ID: {doc_id})\n  {desc}")
@@ -504,51 +531,65 @@ async def get_collection_documents(collection_id: str, limit: int = 50) -> list[
         return [types.TextContent(type="text", text=f"Error retrieving collection documents: {str(e)}")]
 
 async def search_collections(q: str, limit: int = 10) -> list[types.TextContent]:
-    es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+    es_nodes = get_elasticsearch_lookup_urls()
     try:
         import httpx
         payload = {"size": limit, "query": {"query_string": {"query": q}}} if q != "*" else {"size": limit, "query": {"match_all": {}}}
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(f"{es_url}/collections/_search", json=payload)
-            if resp.status_code != 200:
-                return [types.TextContent(type="text", text=f"Error searching collections: {resp.text}")]
-            data = resp.json()
-            hits = data.get("hits", {}).get("hits", [])
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            hits = []
+            for es_url in es_nodes:
+                try:
+                    resp = await client.post(f"{es_url}/collections/_search", json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        hits = data.get("hits", {}).get("hits", [])
+                        if hits:
+                            break
+                except Exception:
+                    continue
+
             if not hits:
                 return [types.TextContent(type="text", text="No collections found.")]
             md = []
+            HOST_VAL = os.environ.get("HOST", HOST)
             for h in hits:
                 s = h.get("_source", {})
-                HOST = os.environ.get("HOST", "http://localhost:8000")
-                md.append(f"- [**{s.get('name', 'Unknown')}**]({HOST}/groups/{h.get('_id')}) (ID: {h.get('_id')}): {s.get('description', '')}")
+                md.append(f"- [**{s.get('name', 'Unknown')}**]({HOST_VAL}/groups/{h.get('_id')}) (ID: {h.get('_id')}): {s.get('description', '')}")
             return [types.TextContent(type="text", text="\n".join(md))]
     except Exception as e:
         return [types.TextContent(type="text", text=f"Failed to search collections: {str(e)}")]
 
 async def search_groups(q: str, limit: int = 10) -> list[types.TextContent]:
-    es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+    es_nodes = get_elasticsearch_lookup_urls()
     try:
         import httpx
         payload = {"size": limit, "query": {"query_string": {"query": q}}} if q != "*" else {"size": limit, "query": {"match_all": {}}}
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(f"{es_url}/groups/_search", json=payload)
-            if resp.status_code != 200:
-                return [types.TextContent(type="text", text=f"Error searching groups: {resp.text}")]
-            data = resp.json()
-            hits = data.get("hits", {}).get("hits", [])
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            hits = []
+            for es_url in es_nodes:
+                try:
+                    resp = await client.post(f"{es_url}/groups/_search", json=payload)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        hits = data.get("hits", {}).get("hits", [])
+                        if hits:
+                            break
+                except Exception:
+                    continue
+
             if not hits:
                 return [types.TextContent(type="text", text="No groups found.")]
             md = []
+            HOST_VAL = os.environ.get("HOST", HOST)
             for h in hits:
                 s = h.get("_source", {})
-                HOST = os.environ.get("HOST", "http://localhost:8000")
-                md.append(f"- [**{s.get('name', 'Unknown')}**]({HOST}/groups/{h.get('_id')}) (ID: {h.get('_id')}): {s.get('description', '')}")
+                md.append(f"- [**{s.get('name', 'Unknown')}**]({HOST_VAL}/groups/{h.get('_id')}) (ID: {h.get('_id')}): {s.get('description', '')}")
             return [types.TextContent(type="text", text="\n".join(md))]
     except Exception as e:
         return [types.TextContent(type="text", text=f"Failed to search groups: {str(e)}")]
 
 async def elasticsearch_fulltext_search(q: str, limit: int = 10, format: str = "json-ld") -> list[types.TextContent]:
-    es_url = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200").rstrip("/")
+    es_nodes = get_elasticsearch_lookup_urls()
     try:
         if q == "*":
             payload = {
@@ -567,18 +608,24 @@ async def elasticsearch_fulltext_search(q: str, limit: int = 10, format: str = "
                     }
                 }
             }
+        hits = []
         async with httpx.AsyncClient(timeout=30.0, headers=get_auth_headers(get_auth_headers())) as client:
-            response = await client.post(
-                f"{es_url}/croissant/_search",
-                json=payload,
-                headers={"Content-Type": "application/json"}
-            )
-            if response.status_code == 404:
-                return [types.TextContent(type="text", text="No index found or no datasets indexed in Elasticsearch yet.")]
-            response.raise_for_status()
-            data = response.json()
+            for es_url in es_nodes:
+                try:
+                    response = await client.post(
+                        f"{es_url}/croissant/_search",
+                        json=payload,
+                        headers={"Content-Type": "application/json"}
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        h = data.get("hits", {}).get("hits", [])
+                        if h:
+                            hits = h
+                            break
+                except Exception:
+                    continue
             
-        hits = data.get("hits", {}).get("hits", [])
         if not hits:
             return [types.TextContent(type="text", text="No datasets found matching your keywords in Elasticsearch.")]
             
@@ -589,7 +636,6 @@ async def elasticsearch_fulltext_search(q: str, limit: int = 10, format: str = "
             results.append(src)
         
         if format == "vault_list":
-
             md = ["<div style='display:flex; flex-direction:column; gap:12px;'>"]
             for r in results:
                 name = r.get("name") or r.get("schema:name") or r.get("title") or r.get("dcterms:title") or "Unknown Dataset"
@@ -627,7 +673,6 @@ async def elasticsearch_fulltext_search(q: str, limit: int = 10, format: str = "
             r.pop("_full_text", None)
             r.pop("_markdown_text", None)
             r.pop("_source_url", None)
-            # Truncate overly long fields to avoid context blowup
             if "description" in r and isinstance(r["description"], str) and len(r["description"]) > 500:
                 r["description"] = r["description"][:500] + "..."
             if "schema:description" in r and isinstance(r["schema:description"], str) and len(r["schema:description"]) > 500:
@@ -637,11 +682,11 @@ async def elasticsearch_fulltext_search(q: str, limit: int = 10, format: str = "
             return [types.TextContent(type="text", text=json.dumps(results, indent=2))]
             
         md = ["# Elasticsearch Search Results\n"]
-        HOST = os.environ.get("HOST", "http://localhost:8000")
+        HOST_VAL = os.environ.get("HOST", HOST)
         for r in results:
             name = r.get("name") or r.get("schema:name") or r.get("title") or r.get("dcterms:title") or "Unknown Dataset"
             desc = r.get("description") or r.get("schema:description") or "No description provided."
-            vault_url = f"{HOST}/vault/doc/{r.get('_es_id')}"
+            vault_url = f"{HOST_VAL}/vault/doc/{r.get('_es_id')}"
             keywords = ", ".join(r.get("keywords", [])) if isinstance(r.get("keywords"), list) else r.get("keywords", "None")
             
             md.append(f"## {name}")
@@ -656,7 +701,7 @@ async def elasticsearch_fulltext_search(q: str, limit: int = 10, format: str = "
 
 async def build_collection_from_expert(collection_name: str, expert_index: str, query: str, limit: int = None, is_private: bool = False) -> list[types.TextContent]:
     import os, uuid, datetime, json, httpx, io
-    es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+    es_nodes = get_elasticsearch_lookup_urls()
     from minio import Minio
     try:
         # Normalize expert_index aliases
@@ -705,15 +750,26 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
                 }
             }
             
+            doc_ids = []
+            last_err = None
             async with httpx.AsyncClient(timeout=30.0) as client:
-                docs_resp = await client.post(f"{es_url}/{expert_index_resolved}/_search", json=payload)
-                if docs_resp.status_code != 200:
-                    return [types.TextContent(type="text", text=f"Failed to query expert '{expert_index}': {docs_resp.text}")]
-                    
-                hits = docs_resp.json().get("hits", {}).get("hits", [])
-                doc_ids = [h.get("_id") for h in hits if h.get("_id")]
+                for es_url in es_nodes:
+                    try:
+                        docs_resp = await client.post(f"{es_url}/{expert_index_resolved}/_search", json=payload)
+                        if docs_resp.status_code == 200:
+                            hits = docs_resp.json().get("hits", {}).get("hits", [])
+                            doc_ids = [h.get("_id") for h in hits if h.get("_id")]
+                            if doc_ids:
+                                break
+                        else:
+                            last_err = docs_resp.text
+                    except Exception as e:
+                        last_err = str(e)
+                        continue
                 
                 if not doc_ids:
+                    if last_err and not doc_ids:
+                        return [types.TextContent(type="text", text=f"Failed to query expert '{expert_index}': {last_err}")]
                     return [types.TextContent(type="text", text=f"Expert '{expert_index}' returned no documents for query '{query}'. Collection not created.")]
                     
         elif expert_index.lower() == "delpher":
@@ -800,17 +856,30 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
             "items": doc_ids
         }
         
-        # Save to MinIO
-        minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
-        endpoint = minio_base.replace("http://", "").replace("https://", "")
-        m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
-        
+        # Save to MinIO (try local and remote lookup endpoints)
         content_bytes = json.dumps(col_data).encode("utf-8")
-        m_client.put_object("collections", f"{cid}.json", io.BytesIO(content_bytes), len(content_bytes), content_type="application/json")
-        
-        # Save to ES
+        minio_saved = False
+        for minio_url in get_minio_lookup_urls():
+            try:
+                endpoint = minio_url.replace("http://", "").replace("https://", "")
+                m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
+                if not m_client.bucket_exists("collections"):
+                    try:
+                        m_client.make_bucket("collections")
+                    except Exception:
+                        pass
+                m_client.put_object("collections", f"{cid}.json", io.BytesIO(content_bytes), len(content_bytes), content_type="application/json")
+                minio_saved = True
+            except Exception:
+                continue
+
+        # Save to ES across available nodes
         async with httpx.AsyncClient(timeout=30.0) as client:
-            await client.put(f"{es_url}/collections/_doc/{cid}", json=col_data)
+            for es_url in es_nodes:
+                try:
+                    await client.put(f"{es_url}/collections/_doc/{cid}", json=col_data)
+                except Exception:
+                    continue
         
         current_host = os.environ.get("HOST", HOST)
         return [types.TextContent(type="text", text=f"Success! Created collection '{collection_name}' (ID: {cid}) and filled it with {len(doc_ids)} documents from {expert_index}.\n\nYou can view the collection here: {current_host}/collections/{cid}")]
@@ -819,7 +888,7 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
         return [types.TextContent(type="text", text=f"Error building collection: {str(e)}")]
 
 async def ask_expert(index: str, q: str, limit: int = 10) -> list[types.TextContent]:
-    es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+    es_nodes = get_elasticsearch_lookup_urls()
     expert_map = {
         "trump": "trump",
         "croissant": "croissant",
@@ -846,18 +915,22 @@ async def ask_expert(index: str, q: str, limit: int = 10) -> list[types.TextCont
                 }
             }
         }
+        hits = []
         async with httpx.AsyncClient(timeout=30.0, headers=get_auth_headers(get_auth_headers())) as client:
-            response = await client.post(
-                f"{es_url}/{index_resolved}/_search",
-                json=payload,
-                headers={"Content-Type": "application/json"}
-            )
-            if response.status_code == 404:
-                return [types.TextContent(type="text", text=f"No index '{index_resolved}' found.")]
-            response.raise_for_status()
-            data = response.json()
-            
-        hits = data.get("hits", {}).get("hits", [])
+            for es_url in es_nodes:
+                try:
+                    response = await client.post(
+                        f"{es_url}/{index_resolved}/_search",
+                        json=payload,
+                        headers={"Content-Type": "application/json"}
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        hits = data.get("hits", {}).get("hits", [])
+                        if hits:
+                            break
+                except Exception:
+                    continue
         if not hits:
             return [types.TextContent(type="text", text=f"No datasets found in expert index '{index}'.")]
             
