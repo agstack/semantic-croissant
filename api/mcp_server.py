@@ -66,14 +66,37 @@ def get_nodes_config() -> dict:
 
 def get_elasticsearch_lookup_urls() -> list[str]:
     """
-    Returns an ordered list of Elasticsearch base URLs to query across all known nodes.
-    Prioritizes real network node IPs defined in nodes.conf and profiles over localhost/127.0.0.1.
+    Returns an ordered list of Elasticsearch base URLs to query.
+    If PROFILE_NAME is set, prioritizes the elasticsearch settings for that profile from nodes.conf.
     """
-    node_urls = []
-    fallback_urls = []
+    urls = []
     nodes = get_nodes_config()
+    profile_name = os.environ.get("PROFILE_NAME", "").strip().lower()
 
+    # 1. Profile-specific elastic settings from nodes.conf
+    if profile_name and profile_name in nodes:
+        pdata = nodes[profile_name]
+        ip = pdata.get("ip", "").strip()
+        es_port = pdata.get("es_port", "").strip()
+        es_u = pdata.get("elasticsearch_url", "").strip().rstrip("/")
+        
+        # When inside docker container (ciat-mcp), local profile elastic is http://elasticsearch:9200
+        in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+        if in_docker and (not ip or ip in ["localhost", "127.0.0.1", "0.0.0.0"]):
+            container_es = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            if container_es not in urls:
+                urls.append(container_es)
+        elif ip and es_port:
+            candidate = f"http://{ip}:{es_port}"
+            if candidate not in urls:
+                urls.append(candidate)
+        elif es_u and es_u not in urls:
+            urls.append(es_u)
+
+    # 2. Add other nodes as secondary fallbacks
     for sname, sdata in nodes.items():
+        if sname == profile_name:
+            continue
         ip = sdata.get("ip", "").strip()
         es_port = sdata.get("es_port", "").strip()
         es_u = sdata.get("elasticsearch_url", "").strip().rstrip("/")
@@ -85,56 +108,50 @@ def get_elasticsearch_lookup_urls() -> list[str]:
         else:
             continue
 
-        # If IP is a real network IP (not localhost or loopback), prioritize it
-        if ip and ip not in ["localhost", "127.0.0.1", "0.0.0.0"]:
-            if candidate not in node_urls:
-                node_urls.append(candidate)
-        else:
-            if candidate not in fallback_urls:
-                fallback_urls.append(candidate)
+        if candidate not in urls:
+            urls.append(candidate)
 
-    # Local container or environment fallback only if needed
-    local_es = os.environ.get("ELASTICSEARCH_URL", "").rstrip("/")
-    if local_es and local_es not in fallback_urls and "localhost" not in local_es and "127.0.0.1" not in local_es:
-        fallback_urls.append(local_es)
+    # 3. Environment variable fallback
+    env_es = os.environ.get("ELASTICSEARCH_URL", "").rstrip("/")
+    if env_es and env_es not in urls:
+        urls.append(env_es)
 
-    # Return remote node URLs first, followed by fallbacks only if no remote nodes found
-    if node_urls:
-        return node_urls
-    return fallback_urls or (["http://elasticsearch:9200"] if os.environ.get("IN_DOCKER") else ["http://localhost:9200"])
+    return urls or (["http://elasticsearch:9200"] if (os.environ.get("IN_DOCKER") or os.path.exists("/.dockerenv")) else ["http://localhost:9200"])
 
 def get_minio_lookup_urls() -> list[str]:
     """
     Returns an ordered list of MinIO base endpoints to query across all known nodes.
-    Prioritizes real network node IPs defined in nodes.conf over localhost/127.0.0.1.
+    Prioritizes the local profile's MinIO endpoint.
     """
-    node_urls = []
-    fallback_urls = []
+    urls = []
     nodes = get_nodes_config()
+    profile_name = os.environ.get("PROFILE_NAME", "").strip().lower()
 
+    # 1. Profile-specific MinIO settings from nodes.conf / env
+    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+    if in_docker:
+        container_minio = os.environ.get("MINIO_URL", "http://minio:9000").rstrip("/")
+        if container_minio not in urls:
+            urls.append(container_minio)
+    elif profile_name and profile_name in nodes:
+        pdata = nodes[profile_name]
+        minio_u = pdata.get("minio_url", "").strip().rstrip("/")
+        if minio_u and minio_u not in urls:
+            urls.append(minio_u)
+
+    # 2. Add other nodes
     for sname, sdata in nodes.items():
-        ip = sdata.get("ip", "").strip()
-        minio_u = sdata.get("minio_url", "").strip().rstrip("/")
-        if not minio_u and ip:
-            minio_u = f"http://{ip}:9000"
-
-        if not minio_u:
+        if sname == profile_name:
             continue
-
-        if ip and ip not in ["localhost", "127.0.0.1", "0.0.0.0"] and "localhost" not in minio_u and "127.0.0.1" not in minio_u:
-            if minio_u not in node_urls:
-                node_urls.append(minio_u)
-        else:
-            if minio_u not in fallback_urls:
-                fallback_urls.append(minio_u)
+        minio_u = sdata.get("minio_url", "").strip().rstrip("/")
+        if minio_u and minio_u not in urls and "localhost" not in minio_u and "127.0.0.1" not in minio_u:
+            urls.append(minio_u)
 
     local_minio = os.environ.get("MINIO_URL", "").rstrip("/")
-    if local_minio and local_minio not in fallback_urls:
-        fallback_urls.append(local_minio)
+    if local_minio and local_minio not in urls:
+        urls.append(local_minio)
 
-    if node_urls:
-        return node_urls
-    return fallback_urls or ["http://minio:9000"]
+    return urls or ["http://minio:9000"]
 
 
 # Global user info set when MCP server is authenticated
@@ -742,6 +759,7 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
         if expert_index_resolved != "delpher":
             payload = {
                 "size": effective_limit,
+                "_source": False,
                 "query": {
                     "query_string": {
                         "query": f"*{clean_query}* OR {clean_query}" if clean_query else "*",
@@ -752,7 +770,7 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
             
             doc_ids = []
             last_err = None
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=90.0) as client:
                 for es_url in es_nodes:
                     try:
                         docs_resp = await client.post(f"{es_url}/{expert_index_resolved}/_search", json=payload)
@@ -7733,13 +7751,30 @@ Please answer the question based ONLY on the context provided above (including t
 
                 resolved_items = []
                 if items:
-                    es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
-                    async with httpx.AsyncClient() as client:
-                        # 1. First attempt bulk lookup across trump,croissant,_all
-                        payload = {"query": {"ids": {"values": items}}, "size": len(items), "_source": ["name", "description", "url", "_source_url", "datePublished", "dateCreated", "dateModified", "unmappedFields", "_full_text", "keywords"]}
-                        docs_resp = await client.post(f"{es_url}/_all/_search", json=payload)
-                        hits = docs_resp.json().get("hits", {}).get("hits", []) if docs_resp.status_code == 200 else []
-                        es_docs = {h.get("_id"): h for h in hits}
+                    es_nodes = get_elasticsearch_lookup_urls()
+                    async with httpx.AsyncClient(timeout=60.0) as client:
+                        # 1. Batch bulk lookup across known indices in chunks of 500
+                        es_docs = {}
+                        chunk_size = 500
+                        for i in range(0, len(items), chunk_size):
+                            chunk = items[i:i + chunk_size]
+                            payload = {
+                                "query": {"terms": {"_id": chunk}},
+                                "size": len(chunk),
+                                "_source": ["name", "description", "title", "schema:name", "url", "_source_url", "datePublished", "dateCreated", "dateModified", "unmappedFields", "_full_text", "keywords"]
+                            }
+                            for es_url in es_nodes:
+                                try:
+                                    docs_resp = await client.post(f"{es_url}/croissant,dataverse,trump,openml/_search", json=payload)
+                                    if docs_resp.status_code == 200:
+                                        hits = docs_resp.json().get("hits", {}).get("hits", [])
+                                        for h in hits:
+                                            if h.get("_id") not in es_docs:
+                                                es_docs[h.get("_id")] = h
+                                        if len(hits) == len(chunk):
+                                            break
+                                except Exception:
+                                    continue
                         
                         for doc_id in items:
                             name = "Vault Document"
@@ -7749,14 +7784,17 @@ Please answer the question based ONLY on the context provided above (including t
 
                             # If not in bulk search, try direct get across candidate indices
                             if doc_id not in es_docs:
-                                for cand_idx in ["croissant", "trump"]:
-                                    try:
-                                        r_doc = await client.get(f"{es_url}/{cand_idx}/_doc/{doc_id}")
-                                        if r_doc.status_code == 200:
-                                            es_docs[doc_id] = r_doc.json()
-                                            break
-                                    except Exception:
-                                        pass
+                                for es_url in es_nodes:
+                                    for cand_idx in ["dataverse", "croissant", "trump", "openml"]:
+                                        try:
+                                            r_doc = await client.get(f"{es_url}/{cand_idx}/_doc/{doc_id}")
+                                            if r_doc.status_code == 200:
+                                                es_docs[doc_id] = r_doc.json()
+                                                break
+                                        except Exception:
+                                            pass
+                                    if doc_id in es_docs:
+                                        break
 
                             if doc_id in es_docs:
                                 s = es_docs[doc_id].get("_source", {})
