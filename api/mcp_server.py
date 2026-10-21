@@ -5733,6 +5733,75 @@ Please answer the question based ONLY on the context provided above (including t
             vault_cache_key = f"cdif_cache_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
             doc_cache_id = hashlib.sha256((target_url + (ds_url or "")).encode("utf-8")).hexdigest()[:24]
             es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+
+            # Check if requesting client is an AI assistant, crawler or bot that needs lightweight schema
+            user_agent = request.headers.get("user-agent", "").lower()
+            is_llm_or_bot = any(k in user_agent for k in ["claude", "anthropic", "chatgpt", "python-requests", "bot"])
+
+            def prepare_cdif_response(cdif_data):
+                """
+                Returns formatted CDIF bytes. If requested by Claude, ChatGPT, python-requests, or bots,
+                omits heavy micro-data arrays (DataPoint, InstanceValue, positions) to keep the payload
+                under LLM ingestion limits while preserving the full InstanceVariable schema and dataset descriptors.
+                """
+                if isinstance(cdif_data, (bytes, bytearray)):
+                    try:
+                        cdif_data = json.loads(cdif_data.decode("utf-8"))
+                    except Exception:
+                        return cdif_data
+
+                cdif_spec_uri = "https://ddialliance.org/Specification/DDI-CDI/1.0/"
+                if "dct:conformsTo" not in cdif_data and "conformsTo" not in cdif_data:
+                    cdif_data["dct:conformsTo"] = cdif_spec_uri
+                    for m in cdif_data.get("DDICDIModels", []):
+                        if isinstance(m, dict) and (m.get("@id") in ["#wideDataSet", "#tabularTextDataSet"] or "DataSet" in m.get("@type", "")):
+                            m["dct:conformsTo"] = cdif_spec_uri
+
+                if is_llm_or_bot:
+                    heavy_types = {
+                        "DataPoint", "DataPointPosition", "InstanceValue",
+                        "PhysicalMappingPosition", "ComponentPosition", "TextMapping",
+                        "SegmentPosition", "Segment", "SubstantiveValueDomain",
+                        "ValueAndConceptDescription", "MeasureComponent"
+                    }
+                    models = cdif_data.get("DDICDIModels", [])
+                    filtered_models = []
+                    for m in models:
+                        if not isinstance(m, dict):
+                            continue
+                        m_type = m.get("@type")
+                        if m_type in heavy_types:
+                            continue
+                        if m_type in ["WideDataSet", "TabularTextDataSet", "LogicalRecord", "WideDataStructure"]:
+                            m_copy = dict(m)
+                            for k, v in list(m_copy.items()):
+                                if isinstance(v, list) and len(v) > 20:
+                                    m_copy[k] = v[:20]
+                            for ref_key in ["has_DataPoint_OF_DataSet", "has_DataPointPosition", "has_DataPoint", "has_ComponentPosition", "has_PhysicalMappingPosition"]:
+                                m_copy.pop(ref_key, None)
+                            filtered_models.append(m_copy)
+                        elif m_type == "InstanceVariable":
+                            # Retain clean, essential variable schema (name, displayLabel, physicalDataType, definition)
+                            iv = {
+                                "@id": m.get("@id"),
+                                "@type": "InstanceVariable",
+                                "name": m.get("name"),
+                                "displayLabel": m.get("displayLabel"),
+                                "physicalDataType": m.get("physicalDataType"),
+                                "definition": m.get("definition")
+                            }
+                            if m.get("schema:unitText"):
+                                iv["schema:unitText"] = m.get("schema:unitText")
+                            if m.get("dct:description"):
+                                iv["dct:description"] = m.get("dct:description")
+                            filtered_models.append(iv)
+                        else:
+                            filtered_models.append(m)
+                    cdif_data = dict(cdif_data)
+                    cdif_data["DDICDIModels"] = filtered_models
+
+                return json.dumps(cdif_data).encode("utf-8")
+
             
             # Check 1: MinIO vault cache first for instant response
             try:
@@ -5751,17 +5820,12 @@ Please answer the question based ONLY on the context provided above (including t
                         cached_obj.release_conn()
                         try:
                             cached_json = json.loads(cached_bytes.decode("utf-8"))
-                            cdif_spec_uri = "https://ddialliance.org/Specification/DDI-CDI/1.0/"
-                            if "dct:conformsTo" not in cached_json and "conformsTo" not in cached_json:
-                                cached_json["dct:conformsTo"] = cdif_spec_uri
-                                for m in cached_json.get("DDICDIModels", []):
-                                    if isinstance(m, dict) and (m.get("@id") in ["#wideDataSet", "#tabularTextDataSet"] or "DataSet" in m.get("@type", "")):
-                                        m["dct:conformsTo"] = cdif_spec_uri
-                                cached_bytes = json.dumps(cached_json, indent=2).encode("utf-8")
                         except Exception:
-                            pass
+                            cached_json = None
+                        
+                        resp_bytes = prepare_cdif_response(cached_json if cached_json is not None else cached_bytes)
                         return Response(
-                            content=cached_bytes,
+                            content=resp_bytes,
                             status_code=200,
                             media_type="application/ld+json; charset=utf-8",
                             headers={
@@ -5803,8 +5867,9 @@ Please answer the question based ONLY on the context provided above (including t
                             except Exception:
                                 pass
 
+                            resp_bytes = prepare_cdif_response(cached_cdif if cached_cdif is not None else cached_bytes)
                             return Response(
-                                content=cached_bytes,
+                                content=resp_bytes,
                                 status_code=200,
                                 media_type="application/ld+json; charset=utf-8",
                                 headers={
@@ -6648,8 +6713,9 @@ Please answer the question based ONLY on the context provided above (including t
                         except Exception as es_index_err:
                             pass
 
+                        final_resp_bytes = prepare_cdif_response(enriched_json if enriched_json is not None else resp_content)
                         return Response(
-                            content=resp_content,
+                            content=final_resp_bytes,
                             status_code=200,
                             media_type="application/ld+json; charset=utf-8",
                             headers={
