@@ -8360,8 +8360,8 @@ Please answer the question based ONLY on the context provided above (including t
                         continue
 
                     ext = fname.split(".")[-1].lower() if "." in fname else ""
-                    # Exclude script/code/text files (e.g. Stata .do files, python scripts, text logs)
-                    non_tabular_exts = {"do", "py", "r", "sh", "m", "c", "cpp", "java", "pdf", "docx", "doc", "html", "xml", "json", "png", "jpg", "jpeg", "tif", "gph"}
+                    # Exclude script/code/text/simulation files (e.g. Stata .do files, python scripts, text logs, SWMM simulation files)
+                    non_tabular_exts = {"do", "py", "r", "sh", "m", "c", "cpp", "java", "pdf", "docx", "doc", "html", "xml", "json", "png", "jpg", "jpeg", "tif", "gph", "inp", "out", "rpt", "ini", "log"}
                     is_tabular = (
                         (ext in tabular_exts and ext not in non_tabular_exts) or
                         (ext not in non_tabular_exts and (
