@@ -1758,6 +1758,114 @@
             }
         }
 
+        function toggleGeoExportMenu(event) {
+            if (event) event.stopPropagation();
+            const dd = document.getElementById('geo-export-dropdown');
+            if (!dd) return;
+            const isVisible = dd.style.display === 'block';
+            dd.style.display = isVisible ? 'none' : 'block';
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(e) {
+            const dd = document.getElementById('geo-export-dropdown');
+            const btn = document.getElementById('geo-export-btn');
+            if (dd && btn && !btn.contains(e.target) && !dd.contains(e.target)) {
+                dd.style.display = 'none';
+            }
+        });
+
+        function getFilteredGeoFiles() {
+            const q = (activeGeoFilter || '').toLowerCase();
+            return q ? cachedGeoFiles.filter(f => {
+                return (f.file_name || '').toLowerCase().includes(q) ||
+                       (f.location || '').toLowerCase().includes(q) ||
+                       (f.dataset_title || '').toLowerCase().includes(q);
+            }) : cachedGeoFiles;
+        }
+
+        function exportGeoFilesCSV() {
+            const dd = document.getElementById('geo-export-dropdown');
+            if (dd) dd.style.display = 'none';
+
+            const files = getFilteredGeoFiles();
+            if (!files || files.length === 0) {
+                alert('No tabular files available to export.');
+                return;
+            }
+
+            const headers = ['File Name', 'Location', 'Dataset Title', 'Dataset URL', 'File URL', 'CDIF Export URL', 'Variables Count'];
+            const escapeCsv = (val) => {
+                const s = String(val === undefined || val === null ? '' : val).replace(/"/g, '""');
+                return `"${s}"`;
+            };
+
+            const rows = [headers.join(',')];
+            files.forEach(f => {
+                rows.push([
+                    escapeCsv(f.file_name || ''),
+                    escapeCsv(f.location || 'Global'),
+                    escapeCsv(f.dataset_title || ''),
+                    escapeCsv(f.dataset_url || ''),
+                    escapeCsv(f.file_url || ''),
+                    escapeCsv(f.cdif_export_url || ''),
+                    escapeCsv(f.variables_count || 0)
+                ].join(','));
+            });
+
+            const csvContent = '\uFEFF' + rows.join('\r\n');
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const safeColName = (currentCollectionData && currentCollectionData.name) ? currentCollectionData.name.replace(/[^a-z0-9_-]/gi, '_') : 'collection';
+            a.download = `${safeColName}_tabular_files_locations.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function exportGeoFilesJSON() {
+            const dd = document.getElementById('geo-export-dropdown');
+            if (dd) dd.style.display = 'none';
+
+            const files = getFilteredGeoFiles();
+            if (!files || files.length === 0) {
+                alert('No tabular files available to export.');
+                return;
+            }
+
+            const exportData = {
+                collection_id: colId,
+                collection_name: (currentCollectionData && currentCollectionData.name) || '',
+                total_files: files.length,
+                active_filter: activeGeoFilter || 'all',
+                exported_at: new Date().toISOString(),
+                tabular_files: files.map(f => ({
+                    file_name: f.file_name || '',
+                    location: f.location || 'Global',
+                    dataset_title: f.dataset_title || '',
+                    dataset_url: f.dataset_url || '',
+                    file_url: f.file_url || '',
+                    cdif_export_url: f.cdif_export_url || '',
+                    variables_count: f.variables_count || 0
+                }))
+            };
+
+            const jsonStr = JSON.stringify(exportData, null, 2);
+            const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const safeColName = (currentCollectionData && currentCollectionData.name) ? currentCollectionData.name.replace(/[^a-z0-9_-]/gi, '_') : 'collection';
+            a.download = `${safeColName}_tabular_files_locations.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
         function saveDashboardState() {
             alert('Dashboard layout and filter preferences saved.');
         }
@@ -2517,7 +2625,27 @@
                         Explore all indexed tabular distributions and filter variables by country or city coverage.
                     </div>
                 </div>
-                <button onclick="closeGeoLocationModal()" style="background: transparent; border: none; font-size: 1.5rem; color: var(--text-color); cursor: pointer; line-height: 1; padding: 0 4px;">&times;</button>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <!-- Export dropdown button for Geolocation Explorer -->
+                    <div style="position: relative; display: inline-block;">
+                        <button id="geo-export-btn" type="button" onclick="toggleGeoExportMenu(event)" style="display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; font-size: 0.82rem; font-weight: 500; background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 6px; cursor: pointer; transition: all 0.15s ease;" title="Export tabular files and geolocation mappings">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            <span>Export</span>
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                        </button>
+                        <div id="geo-export-dropdown" style="display: none; position: absolute; right: 0; top: 100%; margin-top: 4px; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.18); z-index: 10005; min-width: 175px; padding: 4px 0;">
+                            <a href="javascript:void(0)" onclick="exportGeoFilesCSV()" style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: var(--text-color); text-decoration: none; font-size: 0.82rem; font-weight: 500;" onmouseover="this.style.background='var(--panel-bg)';" onmouseout="this.style.background='transparent';">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
+                                <span>CSV Format (.csv)</span>
+                            </a>
+                            <a href="javascript:void(0)" onclick="exportGeoFilesJSON()" style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: var(--text-color); text-decoration: none; font-size: 0.82rem; font-weight: 500;" onmouseover="this.style.background='var(--panel-bg)';" onmouseout="this.style.background='transparent';">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><circle cx="10" cy="13" r="1"></circle><circle cx="14" cy="13" r="1"></circle></svg>
+                                <span>JSON Format (.json)</span>
+                            </a>
+                        </div>
+                    </div>
+                    <button onclick="closeGeoLocationModal()" style="background: transparent; border: none; font-size: 1.5rem; color: var(--text-color); cursor: pointer; line-height: 1; padding: 0 4px;" title="Close modal">&times;</button>
+                </div>
             </div>
 
             <!-- Search and Filter Bar inside Modal -->
