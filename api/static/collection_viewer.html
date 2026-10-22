@@ -896,8 +896,14 @@
                                 <div style="font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600;">Total Variables</div>
                                 <div id="dash-var-stat-total" style="font-size: 1.4rem; font-weight: 700; color: #0969da; margin-top: 2px;">-</div>
                             </div>
-                            <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px;">
-                                <div style="font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600;">Tabular Files</div>
+                            <div id="dash-var-stat-files-card" onclick="openGeoLocationModal()" style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; cursor: pointer; transition: all 0.2s ease; position: relative;" title="Click to view all tabular files and find geolocations (countries and cities)" onmouseover="this.style.borderColor='#10b981'; this.style.boxShadow='0 4px 12px rgba(16,185,129,0.15)';" onmouseout="this.style.borderColor='#e5e7eb'; this.style.boxShadow='none';">
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <div style="font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600;">Tabular Files</div>
+                                    <span style="font-size: 0.72rem; color: #10b981; font-weight: 600; display: inline-flex; align-items: center; gap: 3px;">
+                                        <span>Geolocations</span>
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                                    </span>
+                                </div>
                                 <div id="dash-var-stat-files" style="font-size: 1.4rem; font-weight: 700; color: #10b981; margin-top: 2px;">-</div>
                             </div>
                             <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px;">
@@ -924,17 +930,18 @@
                             <table class="variables-table">
                                 <thead>
                                     <tr>
-                                        <th style="width: 22%;">Variable Name</th>
-                                        <th style="width: 20%;">Display Label</th>
-                                        <th style="width: 12%;">Data Type</th>
-                                        <th style="width: 10%;">Unit</th>
-                                        <th style="width: 20%;">Source File</th>
-                                        <th style="width: 8%; text-align: center;">Dataset</th>
-                                        <th style="width: 8%; text-align: center;">CDIF Export</th>
+                                        <th style="width: 18%;">Variable Name</th>
+                                        <th style="width: 17%;">Display Label</th>
+                                        <th style="width: 10%;">Data Type</th>
+                                        <th style="width: 9%;">Unit</th>
+                                        <th style="width: 14%;">Location</th>
+                                        <th style="width: 18%;">Source File</th>
+                                        <th style="width: 7%; text-align: center;">Dataset</th>
+                                        <th style="width: 7%; text-align: center;">CDIF Export</th>
                                     </tr>
                                 </thead>
                                 <tbody id="dash-var-table-body">
-                                    <tr><td colspan="7" style="text-align: center; padding: 25px; color: #6b7280;">Loading variables...</td></tr>
+                                    <tr><td colspan="8" style="text-align: center; padding: 25px; color: #6b7280;">Loading variables...</td></tr>
                                 </tbody>
                             </table>
                             <!-- Bottom Pagination Bar (100 per page) -->
@@ -1292,7 +1299,7 @@
             if (tableBody) {
                 tableBody.innerHTML = `
                     <tr>
-                        <td colspan="7" style="text-align: center; padding: 40px 20px; color: #4b5563;">
+                        <td colspan="8" style="text-align: center; padding: 40px 20px; color: #4b5563;">
                             <div style="display: inline-flex; align-items: center; gap: 10px; font-weight: 500; font-size: 0.95rem;">
                                 <span class="var-spinner"></span>
                                 <span>Loading CDIF variables...</span>
@@ -1332,7 +1339,7 @@
             } catch (err) {
                 console.error('Error fetching CDIF variables:', err);
                 if (tableBody) {
-                    tableBody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 25px; color: #dc3545;">Error loading variables: ${escapeHtml(err.message)}</td></tr>`;
+                    tableBody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 25px; color: #dc3545;">Error loading variables: ${escapeHtml(err.message)}</td></tr>`;
                 }
                 if (countBadge) countBadge.textContent = 'Error';
             }
@@ -1400,6 +1407,7 @@
                 return (v.variable_name || '').toLowerCase().includes(query) ||
                        (v.display_label || '').toLowerCase().includes(query) ||
                        (v.data_type || '').toLowerCase().includes(query) ||
+                       (v.location || '').toLowerCase().includes(query) ||
                        (v.file_name || '').toLowerCase().includes(query) ||
                        (v.dataset_title || '').toLowerCase().includes(query) ||
                        (v.description || '').toLowerCase().includes(query);
@@ -1438,7 +1446,7 @@
 
             const total = filteredVariablesList.length;
             if (total === 0) {
-                tableBody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 25px; color: #6b7280;">No variables match your search filter.</td></tr>';
+                tableBody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 25px; color: #6b7280;">No variables match your search filter.</td></tr>';
                 if (paginationBar) paginationBar.style.display = 'none';
                 if (paginationBarTop) paginationBarTop.style.display = 'none';
                 return;
@@ -1482,13 +1490,17 @@
 
                 const cdifLink = v.cdif_export_url ? `<a href="${escapeHtml(v.cdif_export_url)}" target="_blank" rel="noopener noreferrer" style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 0.78rem; font-weight: 500; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; border-radius: 4px; text-decoration: none;" title="Open CDIF JSON-LD for this file"><span>CDIF</span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></a>` : '<span style="color: #9ca3af;">—</span>';
 
+                const locText = v.location ? escapeHtml(v.location) : 'Global';
+                const locBadge = `<span style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 12px; font-size: 0.78rem; font-weight: 500; background: ${locText === 'Global' ? '#f3f4f6' : '#eff6ff'}; color: ${locText === 'Global' ? '#6b7280' : '#1d4ed8'}; border: 1px solid ${locText === 'Global' ? '#e5e7eb' : '#bfdbfe'};" title="Geographic location: ${locText}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"></path><circle cx="12" cy="10" r="3"></circle></svg><span>${locText}</span></span>`;
+
                 rowsHtml += `
                     <tr>
                         <td style="font-weight: 600; color: #111827; font-family: monospace; font-size: 0.88rem;">${varName}</td>
                         <td>${displayLabel}${desc}</td>
                         <td><span class="var-type-badge ${typeClass}">${escapeHtml(v.data_type || 'unspecified')}</span></td>
                         <td>${unit}</td>
-                        <td style="max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${fileLink}</td>
+                        <td style="max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${locBadge}</td>
+                        <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${fileLink}</td>
                         <td style="text-align: center;">${datasetVaultLink}</td>
                         <td style="text-align: center;">${cdifLink}</td>
                     </tr>
@@ -1585,6 +1597,164 @@
                     btn.disabled = false;
                     btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> <span>Ask</span>';
                 }
+            }
+        }
+
+        // ==========================================
+        // Geolocation & Tabular Files Modal Logic
+        // ==========================================
+        let cachedGeoFiles = [];
+        let activeGeoFilter = '';
+
+        async function openGeoLocationModal() {
+            const modal = document.getElementById('geolocation-modal');
+            if (!modal) return;
+            modal.style.display = 'flex';
+
+            const tbody = document.getElementById('geo-modal-table-body');
+            const stats = document.getElementById('geo-modal-footer-stats');
+            const searchInput = document.getElementById('geo-modal-search');
+            if (searchInput) searchInput.value = '';
+            activeGeoFilter = '';
+
+            // If variables and files data isn't loaded yet, fetch it
+            if (!cachedVariablesData || !cachedVariablesData.files || cachedVariablesData.files.length === 0) {
+                if (tbody) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 35px; color: #4b5563;"><span class="var-spinner"></span> Loading tabular files and geolocations...</td></tr>';
+                }
+                try {
+                    const res = await fetch(`/api/collections/${colId}/variables`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        cachedVariablesData = data;
+                        renderVariablesTable(data);
+                    }
+                } catch (err) {
+                    console.error('Failed to load files for geo modal:', err);
+                }
+            }
+
+            cachedGeoFiles = (cachedVariablesData && cachedVariablesData.files) ? cachedVariablesData.files : [];
+            renderGeoLocationPills();
+            renderGeoModalFiles();
+        }
+
+        function closeGeoLocationModal() {
+            const modal = document.getElementById('geolocation-modal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        function renderGeoLocationPills() {
+            const container = document.getElementById('geo-location-quick-tags');
+            if (!container) return;
+
+            // Extract all distinct countries/locations across tabular files
+            const locMap = {};
+            cachedGeoFiles.forEach(f => {
+                const loc = (f.location || 'Global').trim();
+                // If contains comma, e.g. "Valdivia, Chile", split to also offer Chile
+                const parts = loc.split(/,\s*/);
+                parts.forEach(p => {
+                    const clean = p.trim();
+                    if (clean && clean !== 'Global') {
+                        locMap[clean] = (locMap[clean] || 0) + (f.variables_count || 1);
+                    }
+                });
+            });
+
+            // Sort by count descending
+            const sortedLocs = Object.entries(locMap).sort((a, b) => b[1] - a[1]).slice(0, 8);
+
+            let pillsHtml = `<button type="button" onclick="setGeoPillFilter('')" class="geo-pill-btn ${activeGeoFilter === '' ? 'active' : ''}" style="padding: 4px 10px; border-radius: 14px; font-size: 0.78rem; font-weight: 500; cursor: pointer; border: 1px solid #d1d5db; background: ${activeGeoFilter === '' ? '#10b981' : '#fff'}; color: ${activeGeoFilter === '' ? '#fff' : '#4b5563'};">All Locations</button>`;
+
+            sortedLocs.forEach(([locName, count]) => {
+                const isActive = activeGeoFilter.toLowerCase() === locName.toLowerCase();
+                pillsHtml += `
+                    <button type="button" onclick="setGeoPillFilter('${escapeHtml(locName)}')" class="geo-pill-btn ${isActive ? 'active' : ''}" style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 14px; font-size: 0.78rem; font-weight: 500; cursor: pointer; border: 1px solid ${isActive ? '#10b981' : '#bfdbfe'}; background: ${isActive ? '#10b981' : '#eff6ff'}; color: ${isActive ? '#fff' : '#1d4ed8'};">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                        <span>${escapeHtml(locName)}</span>
+                    </button>
+                `;
+            });
+
+            container.innerHTML = pillsHtml;
+        }
+
+        function setGeoPillFilter(locName) {
+            activeGeoFilter = locName;
+            const searchInput = document.getElementById('geo-modal-search');
+            if (searchInput) searchInput.value = locName;
+            renderGeoLocationPills();
+            renderGeoModalFiles();
+        }
+
+        function filterGeoModalFiles() {
+            const searchInput = document.getElementById('geo-modal-search');
+            activeGeoFilter = searchInput ? searchInput.value.trim() : '';
+            renderGeoModalFiles();
+        }
+
+        function renderGeoModalFiles() {
+            const tbody = document.getElementById('geo-modal-table-body');
+            const stats = document.getElementById('geo-modal-footer-stats');
+            if (!tbody) return;
+
+            const q = activeGeoFilter.toLowerCase();
+            const filtered = q ? cachedGeoFiles.filter(f => {
+                return (f.file_name || '').toLowerCase().includes(q) ||
+                       (f.location || '').toLowerCase().includes(q) ||
+                       (f.dataset_title || '').toLowerCase().includes(q);
+            }) : cachedGeoFiles;
+
+            if (stats) {
+                stats.textContent = `${filtered.length} of ${cachedGeoFiles.length} tabular files displayed`;
+            }
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 35px; color: #6b7280;">No tabular files match the location or name filter.</td></tr>';
+                return;
+            }
+
+            let rows = '';
+            filtered.forEach(f => {
+                const fname = escapeHtml(f.file_name || 'Tabular File');
+                const flink = f.file_url ? `<a href="${escapeHtml(f.file_url)}" target="_blank" rel="noopener noreferrer" style="color: #0969da; text-decoration: none; font-weight: 500;" title="${fname}">${fname}</a>` : fname;
+                const loc = f.location || 'Global';
+                const isGlobal = (loc === 'Global');
+                const locBadge = `<span style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 12px; font-size: 0.78rem; font-weight: 500; background: ${isGlobal ? '#f3f4f6' : '#eff6ff'}; color: ${isGlobal ? '#6b7280' : '#1d4ed8'}; border: 1px solid ${isGlobal ? '#e5e7eb' : '#bfdbfe'};"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"></path><circle cx="12" cy="10" r="3"></circle></svg><span>${escapeHtml(loc)}</span></span>`;
+                
+                const dtitle = escapeHtml(f.dataset_title || 'Dataset');
+                const dlink = f.dataset_id ? `<a href="/vault/doc/${encodeURIComponent(f.dataset_id)}" target="_blank" rel="noopener noreferrer" style="color: #4b5563; text-decoration: none;" title="${dtitle}">${dtitle}</a>` : dtitle;
+                const varCount = (f.variables_count || 0).toLocaleString();
+
+                rows += `
+                    <tr style="border-bottom: 1px solid var(--border-color);">
+                        <td style="padding: 10px 14px; font-family: monospace; font-size: 0.84rem; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${flink}</td>
+                        <td style="padding: 10px 14px;">${locBadge}</td>
+                        <td style="padding: 10px 14px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${dlink}</td>
+                        <td style="padding: 10px 14px; text-align: center;"><span style="display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.78rem; font-weight: 600; background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0;">${varCount}</span></td>
+                        <td style="padding: 10px 14px; text-align: center;">
+                            <button type="button" onclick="selectGeoLocationForVariables('${escapeHtml(loc)}', '${escapeHtml(f.file_name || '')}')" style="padding: 4px 10px; font-size: 0.78rem; background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; border-radius: 4px; cursor: pointer; font-weight: 500; white-space: nowrap;">Filter</button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            tbody.innerHTML = rows;
+        }
+
+        function selectGeoLocationForVariables(loc, fileName) {
+            closeGeoLocationModal();
+            // Switch to variables tab
+            switchCollectionView('variables');
+
+            // Apply filter to variables search bar
+            const searchInput = document.getElementById('dash-var-search');
+            if (searchInput) {
+                // If specific location exists, filter by location or filename
+                const filterTerm = (loc && loc !== 'Global') ? loc : fileName;
+                searchInput.value = filterTerm;
+                filterDashboardVariables();
             }
         }
 
@@ -2331,6 +2501,61 @@
             <div style="display: flex; justify-content: flex-end; gap: 10px;">
                 <button onclick="document.getElementById('expert-modal').style.display='none'" style="padding: 8px 15px; background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">Cancel</button>
                 <button id="expert-execute-btn" onclick="executeExpertTask()" style="padding: 8px 15px; background: var(--accent-color); color: white; border: none; border-radius: 4px; cursor: pointer;">Execute</button>
+            </div>
+        </div>
+    <!-- Geolocation Discovery Modal for Tabular Files -->
+    <div id="geolocation-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 10003; justify-content: center; align-items: center; backdrop-filter: blur(3px);">
+        <div style="background: var(--bg-color); padding: 25px; border-radius: 10px; width: 850px; max-width: 94%; max-height: 85vh; display: flex; flex-direction: column; border: 1px solid var(--border-color); box-shadow: 0 16px 40px rgba(0,0,0,0.3);">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; border-bottom: 1px solid var(--border-color); padding-bottom: 12px;">
+                <div>
+                    <h3 style="margin: 0; color: var(--text-color); font-size: 1.25rem; display: flex; align-items: center; gap: 8px;">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                        <span>Tabular Files & Geolocation Explorer</span>
+                    </h3>
+                    <div style="font-size: 0.85rem; color: #6b7280; margin-top: 4px;">
+                        Explore all indexed tabular distributions and filter variables by country or city coverage.
+                    </div>
+                </div>
+                <button onclick="closeGeoLocationModal()" style="background: transparent; border: none; font-size: 1.5rem; color: var(--text-color); cursor: pointer; line-height: 1; padding: 0 4px;">&times;</button>
+            </div>
+
+            <!-- Search and Filter Bar inside Modal -->
+            <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap;">
+                <div style="flex: 1; min-width: 220px; position: relative;">
+                    <input type="text" id="geo-modal-search" placeholder="Filter by country, city, or file name (e.g. Chile, Beijing, Indonesia)..." oninput="filterGeoModalFiles()" style="width: 100%; box-sizing: border-box; padding: 8px 12px; font-size: 0.88rem; border: 1px solid var(--border-color); border-radius: 6px; background: var(--panel-bg); color: var(--text-color); outline: none;">
+                </div>
+                <div id="geo-location-quick-tags" style="display: flex; gap: 5px; flex-wrap: wrap; align-items: center;">
+                    <!-- Location pill tags inserted dynamically -->
+                </div>
+            </div>
+
+            <!-- Files and Locations Table / Container -->
+            <div style="flex: 1; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; margin-bottom: 15px; background: var(--panel-bg);">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.86rem; text-align: left;">
+                    <thead>
+                        <tr style="background: var(--header-bg); border-bottom: 2px solid var(--border-color); color: var(--text-color);">
+                            <th style="padding: 10px 14px; width: 32%;">Tabular File</th>
+                            <th style="padding: 10px 14px; width: 28%;">Geographic Coverage</th>
+                            <th style="padding: 10px 14px; width: 22%;">Dataset</th>
+                            <th style="padding: 10px 14px; width: 10%; text-align: center;">Variables</th>
+                            <th style="padding: 10px 14px; width: 8%; text-align: center;">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="geo-modal-table-body">
+                        <tr><td colspan="5" style="text-align: center; padding: 30px; color: #6b7280;">Loading tabular files...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Modal Footer -->
+            <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 12px;">
+                <div id="geo-modal-footer-stats" style="font-size: 0.85rem; color: #6b7280; font-weight: 500;">
+                    0 tabular files found
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button onclick="closeGeoLocationModal()" style="padding: 7px 16px; background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 5px; cursor: pointer; font-size: 0.85rem;">Close</button>
+                    <button onclick="closeGeoLocationModal(); switchCollectionView('variables');" style="padding: 7px 16px; background: #10b981; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 0.85rem; font-weight: 500;">View All Variables &rarr;</button>
+                </div>
             </div>
         </div>
     </div>

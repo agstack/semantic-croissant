@@ -8672,9 +8672,9 @@ Please answer the question based ONLY on the context provided above (including t
                     all_variables = []
                     files_summary = []
 
-                    # Batch fetch dataset names from croissant,trump indices for all unique dataset_ids
+                    # Batch fetch dataset names and spatialCoverage from croissant,trump,dataverse indices for all unique dataset_ids
                     unique_dids = list(set(h.get("_source", {}).get("dataset_id") for h in hits if h.get("_source", {}).get("dataset_id")))
-                    dataset_titles = {}
+                    dataset_meta = {}
                     if unique_dids:
                         try:
                             ds_resp = await client.post(
@@ -8682,17 +8682,80 @@ Please answer the question based ONLY on the context provided above (including t
                                 json={
                                     "query": {"ids": {"values": unique_dids}},
                                     "size": len(unique_dids),
-                                    "_source": ["name", "title"]
+                                    "_source": ["name", "title", "spatialCoverage", "spatial", "description"]
                                 },
                                 timeout=10.0
                             )
                             if ds_resp.status_code == 200:
                                 for dh in ds_resp.json().get("hits", {}).get("hits", []):
                                     did_key = dh.get("_id")
-                                    dsrc = dh.get("_source", {})
-                                    dataset_titles[did_key] = dsrc.get("name") or dsrc.get("title") or ""
+                                    dataset_meta[did_key] = dh.get("_source", {})
                         except Exception as ds_err:
-                            print(f"Warning: could not batch fetch dataset titles: {ds_err}", file=sys.stderr)
+                            print(f"Warning: could not batch fetch dataset metadata: {ds_err}", file=sys.stderr)
+
+                    known_locations = {
+                        "beijing": ("Beijing", "China"),
+                        "guangzhou": ("Guangzhou", "China"),
+                        "hong kong": ("Hong Kong", "China"),
+                        "hongkong": ("Hong Kong", "China"),
+                        "melbourne": ("Melbourne", "Australia"),
+                        "shenzhen": ("Shenzhen", "China"),
+                        "tianjin": ("Tianjin", "China"),
+                        "wuhan": ("Wuhan", "China"),
+                        "valdivia": ("Valdivia", "Chile"),
+                        "pichoy": ("Valdivia", "Chile"),
+                        "barranquilla": ("Barranquilla", "Colombia"),
+                        "bogota": ("Bogota", "Colombia"),
+                        "trentino": ("Trentino", "Italy"),
+                        "risaralda": ("Risaralda", "Colombia"),
+                        "neelam": ("Neelam", "Pakistan"),
+                        "himalaya": ("Himalaya", "Pakistan"),
+                        "victoria": ("Victoria", "Australia"),
+                        "australia": ("Australia", "Australia"),
+                        "china": ("China", "China"),
+                        "vietnam": ("Vietnam", "Vietnam"),
+                        "viet nam": ("Vietnam", "Vietnam"),
+                        "indonesia": ("Indonesia", "Indonesia"),
+                        "brazil": ("Brazil", "Brazil"),
+                        "colombia": ("Colombia", "Colombia"),
+                        "chile": ("Chile", "Chile"),
+                        "honduras": ("Honduras", "Honduras"),
+                        "kenya": ("Kenya", "Kenya"),
+                        "pakistan": ("Pakistan", "Pakistan"),
+                        "central europe": ("Central Europe", "Europe"),
+                        "europe": ("Europe", "Europe"),
+                        "italy": ("Italy", "Italy"),
+                        "usa": ("United States", "United States"),
+                        "united states": ("United States", "United States"),
+                    }
+
+                    import re
+
+                    def detect_location(fname, ds):
+                        dname = ds.get("name") or ds.get("title") or ""
+                        sc = ds.get("spatialCoverage") or ds.get("spatial") or []
+                        if isinstance(sc, list):
+                            sc_text = " ".join(str(x) for x in sc)
+                        else:
+                            sc_text = str(sc)
+                        clean_fn = re.sub(r"[_\-.]+", " ", fname)
+                        combined = f"{clean_fn} {dname} {sc_text}".lower()
+
+                        found_cities = set()
+                        found_countries = set()
+                        for k, (entity, country) in known_locations.items():
+                            if re.search(r"\b" + re.escape(k) + r"\b", combined):
+                                if entity == country:
+                                    found_countries.add(country)
+                                else:
+                                    found_cities.add(f"{entity}, {country}")
+                                    found_countries.add(country)
+
+                        if found_cities:
+                            return ", ".join(sorted(found_cities))
+                        elif found_countries:
+                            return ", ".join(sorted(found_countries))
+                        return "Global"
 
                     for h in hits:
                         src = h.get("_source", {})
@@ -8700,7 +8763,10 @@ Please answer the question based ONLY on the context provided above (including t
                         furl = src.get("file_url", "")
                         durl = src.get("dataset_url", "")
                         did = src.get("dataset_id", "")
-                        dtitle = dataset_titles.get(did, "") or src.get("title", "") or ""
+                        ds_obj = dataset_meta.get(did, {})
+                        dtitle = ds_obj.get("name") or ds_obj.get("title") or src.get("title", "") or ""
+                        location = detect_location(fname, ds_obj)
+
                         cdif_url = src.get("cdif_export_url", "")
                         if cdif_url and "/export?" in cdif_url:
                             qs_part = cdif_url.split("/export?", 1)[-1]
@@ -8738,6 +8804,7 @@ Please answer the question based ONLY on the context provided above (including t
                                     "data_type": data_type or "unspecified",
                                     "description": desc,
                                     "unit": unit,
+                                    "location": location,
                                     "file_name": fname,
                                     "file_url": furl,
                                     "dataset_url": durl,
@@ -8752,6 +8819,7 @@ Please answer the question based ONLY on the context provided above (including t
                             "dataset_url": durl,
                             "dataset_id": did,
                             "dataset_title": dtitle,
+                            "location": location,
                             "cdif_export_url": cdif_url,
                             "variables_count": file_var_count
                         })
