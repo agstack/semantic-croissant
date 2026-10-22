@@ -501,8 +501,16 @@
             }
 
             try {
-                // Step 1: Load first 100 variables fast and show them immediately
-                const initialRes = await fetch('/api/variableindex/data?limit=100&offset=0');
+                const searchInput = document.getElementById('var-search-input');
+                const initialQuery = searchInput ? searchInput.value.trim() : '';
+
+                // If user arrived with a search query, fetch matching variables directly
+                const initialUrl = initialQuery 
+                    ? `/api/variableindex/data?q=${encodeURIComponent(initialQuery)}&limit=200&offset=0`
+                    : '/api/variableindex/data?limit=100&offset=0';
+
+                // Step 1: Load variables fast and show them immediately
+                const initialRes = await fetch(initialUrl);
                 if (!initialRes.ok) {
                     throw new Error(`Server returned HTTP ${initialRes.status}`);
                 }
@@ -516,7 +524,11 @@
                     if (countBadge) {
                         countBadge.innerHTML = `<span class="var-spinner" style="width: 10px; height: 10px; border-width: 1.5px; vertical-align: middle; margin-right: 4px;"></span> Loading remaining ${initialData.total_variables.toLocaleString()} variables...`;
                     }
-                    fetch('/api/variableindex/data')
+                    const fullUrl = initialQuery
+                        ? `/api/variableindex/data?q=${encodeURIComponent(initialQuery)}`
+                        : '/api/variableindex/data';
+
+                    fetch(fullUrl)
                         .then(r => r.ok ? r.json() : null)
                         .then(fullData => {
                             if (fullData && fullData.variables) {
@@ -598,17 +610,34 @@
                     if (firstChar !== activeLetter) return false;
                 }
 
-                // Text filter
-                if (query) {
-                    return vName.includes(query) ||
-                           vLabel.includes(query) ||
-                           vType.includes(query) ||
-                           vFile.includes(query) ||
-                           vDesc.includes(query) ||
-                           vDs.includes(query);
-                }
-                return true;
-            });
+            // Text filter - supports multi-token search e.g. "Precipitation (mm/year)" or "climate justice_race"
+            if (query) {
+                // Raw haystack and clean alphanumeric haystack for punctuation-agnostic matching
+                const haystack = `${vName} ${vLabel} ${vType} ${vFile} ${vDesc} ${vDs}`;
+                const normHaystack = haystack.toLowerCase().replace(/[()/\-_]+/g, ' ').replace(/\s+/g, ' ');
+
+                // Tokens from raw query and cleaned query
+                const rawTokens = query.split(/\s+/).filter(Boolean);
+                const cleanTokens = query.replace(/[()/\-_]+/g, ' ').split(/\s+/).filter(Boolean);
+
+                // Check matches: either all clean terms match in normHaystack, or all raw tokens match
+                const cleanMatch = cleanTokens.length > 0 && cleanTokens.every(tok => {
+                    return normHaystack.includes(tok) || haystack.includes(tok);
+                });
+
+                const rawMatch = rawTokens.every(token => {
+                    if (haystack.includes(token)) return true;
+                    if (token.includes('_')) {
+                        const subparts = token.split('_').filter(Boolean);
+                        if (subparts.length > 0 && subparts.every(sp => haystack.includes(sp))) return true;
+                    }
+                    return false;
+                });
+
+                return cleanMatch || rawMatch;
+            }
+            return true;
+        });
 
             const matchCountEl = document.getElementById('filtered-matches-count');
             if (matchCountEl) matchCountEl.textContent = filteredVariablesList.length.toLocaleString();
@@ -896,7 +925,16 @@
             });
         }
 
-        // Initialize
+        // Initialize with URL query parameters if provided (e.g. ?q=climate%20justice_race)
+        (function initFromUrl() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const initialQuery = urlParams.get('q') || urlParams.get('query') || '';
+            const searchInput = document.getElementById('var-search-input');
+            if (searchInput && initialQuery) {
+                searchInput.value = initialQuery;
+            }
+        })();
+
         loadVariablesData();
     </script>
 </body>

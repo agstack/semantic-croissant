@@ -3316,10 +3316,14 @@ async def cdif_variables(
 
                             var_entry = {
                                 "variable_name": vname,
+                                "variable_link": f"/variableindex?q={urllib.parse.quote(vname)}",
                                 "display_label": disp_label,
                                 "data_type": data_type or "unspecified",
                                 "description": desc,
-                                "unit": unit
+                                "unit": unit,
+                                "dataset_title": dtitle,
+                                "dataset_url": durl,
+                                "file_name": fname
                             }
                             all_file_vars.append(var_entry)
 
@@ -3448,6 +3452,7 @@ async def cdif_variables(
 
                             matched_variables.append({
                                 "variable_name": vname,
+                                "variable_link": f"/variableindex?q={urllib.parse.quote(vname)}",
                                 "display_label": disp_label,
                                 "data_type": data_type or "unspecified",
                                 "description": desc,
@@ -4176,7 +4181,10 @@ SYSTEM INSTRUCTION FOR LLM - Navigation Guide:
 
 8. If the user asks to search for datasets generally, use the 'ask_expert' tool. Available expert collections in Elasticsearch include: 'trump' (for Trump expert/collection), 'croissant' (for Croissant expert/collection), 'dataverse', 'openml', 'honduras', 'hips', 'ollama', 'huggingface'. Start by querying the relevant index (e.g. 'trump' for Trump queries, 'croissant' for general Croissant datasets).
 
-9. CRITICAL: If you extract variables from datasets, you MUST include ALL extracted variables formatted clearly as a Markdown table or list in your Final Answer. Do NOT tell the user to check the tool outputs; output the actual variables in your markdown response!
+9. CRITICAL: If you list or extract variables from datasets, you MUST ALWAYS provide clickable Markdown hyperlinks to both the variables and the datasets!
+   - Each dataset MUST have a link to its dataset URL, DOI, or vault viewer (e.g. `[Dataset Title](url)`).
+   - Each variable MUST be linked to its variable registry entry or search (e.g. `[variable_name](/variableindex?q=variable_name)` or CDIF export link) and state which dataset it belongs to.
+   - You MUST include ALL extracted or found variables formatted clearly as a Markdown table or list in your Final Answer. Do NOT list variables or datasets as plain text without links!
 
 10. Do NOT use the 'save_to_vault' tool manually unless specifically requested. The system will automatically save your final results to the vault.
 
@@ -7257,7 +7265,27 @@ Please answer the question based ONLY on the context provided above (including t
                     if model in mapping:
                         model = mapping[model]
                         body_json["model"] = model
-                        req_body = json.dumps(body_json).encode("utf-8")
+                    
+                    # Ensure system prompt ALWAYS requires links to variables and datasets
+                    link_instruction = (
+                        "\n\nCRITICAL MANDATORY INSTRUCTION - ALWAYS INCLUDE HYPERLINKS:\n"
+                        "Whenever you list, mention, or describe variables or datasets, you MUST ALWAYS provide direct clickable Markdown links for them:\n"
+                        "- For each dataset: link its title/name to its dataset URL or vault/registry URL (e.g. `[Dataset Title](url)`).\n"
+                        "- For each variable: link the variable name to its variable registry link or CDIF export link (e.g. `[variable_name](/variableindex?q=variable_name)` or `[variable_name](/export?...)`) and explicitly state which dataset it belongs to with a link to that dataset.\n"
+                        "Never list dataset names or variables as plain text without clickable links!"
+                    )
+                    curr_sys = body_json.get("system", "")
+                    if isinstance(curr_sys, str):
+                        if "ALWAYS INCLUDE HYPERLINKS" not in curr_sys:
+                            body_json["system"] = curr_sys + link_instruction
+                    elif isinstance(curr_sys, list):
+                        has_link_inst = any("ALWAYS INCLUDE HYPERLINKS" in (b.get("text", "") if isinstance(b, dict) else str(b)) for b in curr_sys)
+                        if not has_link_inst:
+                            body_json["system"].append({"type": "text", "text": link_instruction})
+                    else:
+                        body_json["system"] = link_instruction.strip()
+
+                    req_body = json.dumps(body_json).encode("utf-8")
                     if model in model_to_endpoint:
                         backend_url = model_to_endpoint[model]
                 except Exception as e:
@@ -9188,23 +9216,68 @@ Instructions:
 
         async def api_variable_index_data(request):
             """
-            Fetches all CDIF InstanceVariable records across the entire Elasticsearch 'cdif' index.
+            Fetches all CDIF InstanceVariable records across the entire Elasticsearch 'cdif' index,
+            and supplements with Croissant/Dataverse recordSet.field variable definitions when querying.
             """
             from starlette.responses import JSONResponse
-            import json, httpx, os, sys
+            import json, httpx, os, sys, re
 
             limit_param = request.query_params.get("limit")
             limit = int(limit_param) if limit_param and limit_param.isdigit() else None
             offset_param = request.query_params.get("offset")
             offset = int(offset_param) if offset_param and offset_param.isdigit() else 0
+            q_param = (request.query_params.get("q") or request.query_params.get("query") or "").strip()
 
             es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
             try:
+                # If a query is provided, use multi_match with cross_fields or bool match so multi-token searches match
+                if q_param:
+                    clean_q = re.sub(r"[()/\-_]+", " ", q_param).strip()
+                    es_query = {
+                        "bool": {
+                            "should": [
+                                {
+                                    "multi_match": {
+                                        "query": q_param,
+                                        "type": "cross_fields",
+                                        "operator": "or",
+                                        "fields": [
+                                            "title^3", "description^2", "file_name^2",
+                                            "cdif_jsonld.DDICDIModels.name^4",
+                                            "cdif_jsonld.DDICDIModels.displayLabel.locationVariant.entryValue^4",
+                                            "cdif_jsonld.DDICDIModels.dct:description^2",
+                                            "cdif_jsonld.DDICDIModels.definition.content^2",
+                                            "cdif_jsonld.DDICDIModels.physicalDataType.entryValue"
+                                        ]
+                                    }
+                                },
+                                {
+                                    "multi_match": {
+                                        "query": clean_q or q_param,
+                                        "type": "cross_fields",
+                                        "operator": "or",
+                                        "fields": [
+                                            "title^3", "description^2", "file_name^2",
+                                            "cdif_jsonld.DDICDIModels.name^4",
+                                            "cdif_jsonld.DDICDIModels.displayLabel.locationVariant.entryValue^4",
+                                            "cdif_jsonld.DDICDIModels.dct:description^2",
+                                            "cdif_jsonld.DDICDIModels.definition.content^2",
+                                            "cdif_jsonld.DDICDIModels.physicalDataType.entryValue"
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                else:
+                    es_query = {"match_all": {}}
+
                 payload = {
-                    "query": {"match_all": {}},
+                    "query": es_query,
                     "size": 10000,
                     "_source": [
                         "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url", "collection_id",
+                        "title", "description",
                         "cdif_jsonld.DDICDIModels.@type",
                         "cdif_jsonld.DDICDIModels.name",
                         "cdif_jsonld.DDICDIModels.displayLabel",
@@ -9244,6 +9317,7 @@ Instructions:
                         except Exception as ds_err:
                             print(f"Warning: could not batch fetch dataset titles: {ds_err}", file=sys.stderr)
 
+                    seen_var_keys = set()
                     for h in hits:
                         src = h.get("_source", {})
                         fname = src.get("file_name", "")
@@ -9283,6 +9357,9 @@ Instructions:
 
                                 unit = m.get("schema:unitText") or ""
 
+                                var_key = (did, fname, var_name)
+                                seen_var_keys.add(var_key)
+
                                 all_variables.append({
                                     "variable_name": var_name,
                                     "display_label": disp_label,
@@ -9308,6 +9385,101 @@ Instructions:
                             "cdif_export_url": cdif_url,
                             "variables_count": file_var_count
                         })
+
+                    # If query is specified, search Croissant & Dataverse dataset indices for recordSet.field matches as well
+                    if q_param:
+                        try:
+                            tokens = [t for t in re.sub(r"[()/\-_]+", " ", q_param).split() if len(t) > 1]
+                            should_clauses = [
+                                {"match_phrase_prefix": {"recordSet.field.name": {"query": q_param, "boost": 4}}},
+                                {"match": {"recordSet.field.name": {"query": q_param, "boost": 3}}},
+                                {"match": {"recordSet.field.description": {"query": q_param, "boost": 2}}}
+                            ]
+                            for t in tokens:
+                                should_clauses.append({"match": {"recordSet.field.name": {"query": t, "boost": 2}}})
+                                should_clauses.append({"match": {"recordSet.field.description": {"query": t, "boost": 1}}})
+
+                            ds_query = {"bool": {"should": should_clauses, "minimum_should_match": 1}}
+                            ds_search_resp = await client.post(
+                                f"{es_url}/*,-.*,-collections,-history,-groups,-cdif/_search",
+                                json={
+                                    "query": ds_query,
+                                    "size": 50,
+                                    "_source": [
+                                        "name", "title", "url", "_source_url", "distribution",
+                                        "recordSet.name", "recordSet.field.name",
+                                        "recordSet.field.description", "recordSet.field.dataType",
+                                        "recordSet.field.source"
+                                    ]
+                                },
+                                timeout=20.0
+                            )
+
+                            if ds_search_resp.status_code == 200:
+                                ds_hits = ds_search_resp.json().get("hits", {}).get("hits", [])
+                                for dh in ds_hits:
+                                    d_id = dh.get("_id", "")
+                                    d_src = dh.get("_source", {})
+                                    d_name = d_src.get("name") or d_src.get("title") or ""
+                                    d_url = d_src.get("url") or d_src.get("_source_url") or f"/vault/doc/{d_id}"
+                                    dist = d_src.get("distribution", [])
+                                    file_map = {}
+                                    for item in (dist if isinstance(dist, list) else [dist]):
+                                        if isinstance(item, dict):
+                                            f_id = item.get("@id") or item.get("name") or ""
+                                            f_name = item.get("name") or f_id
+                                            f_url = item.get("contentUrl") or ""
+                                            if f_id:
+                                                file_map[f_id] = (f_name, f_url)
+                                            if f_name:
+                                                file_map[f_name] = (f_name, f_url)
+
+                                    rs_list = d_src.get("recordSet", [])
+                                    for rs in (rs_list if isinstance(rs_list, list) else [rs_list]):
+                                        if not isinstance(rs, dict):
+                                            continue
+                                        fields = rs.get("field", [])
+                                        for fld in (fields if isinstance(fields, list) else [fields]):
+                                            if not isinstance(fld, dict):
+                                                continue
+                                            fld_name = str(fld.get("name") or "")
+                                            fld_desc = str(fld.get("description") or fld_name)
+                                            fld_type = str(fld.get("dataType") or "sc:Float")
+
+                                            norm_combined = re.sub(r"[()/\-_]+", " ", f"{fld_name} {fld_desc}").lower()
+                                            matched = any(t.lower() in norm_combined for t in tokens) if tokens else True
+                                            if not matched:
+                                                continue
+
+                                            fobj_id = ""
+                                            if isinstance(fld.get("source"), dict):
+                                                fobj_id = fld.get("source", {}).get("fileObject", {}).get("@id", "")
+
+                                            fname, furl = file_map.get(fobj_id, (fobj_id or "Dataset RecordSet", ""))
+                                            var_key = (d_id, fname, fld_name)
+                                            if var_key in seen_var_keys:
+                                                continue
+                                            seen_var_keys.add(var_key)
+
+                                            unit_match = re.search(r"\(([^)]+)\)", fld_name)
+                                            extracted_unit = unit_match.group(1) if unit_match else ""
+
+                                            all_variables.append({
+                                                "variable_name": fld_name,
+                                                "display_label": fld_name,
+                                                "data_type": fld_type,
+                                                "description": fld_desc,
+                                                "unit": extracted_unit,
+                                                "file_name": fname,
+                                                "file_url": furl,
+                                                "dataset_url": d_url,
+                                                "dataset_id": d_id,
+                                                "dataset_title": d_name,
+                                                "collection_id": "",
+                                                "cdif_export_url": f"https://{MCP_DOMAIN}/export?id={d_id}" if d_id else ""
+                                            })
+                        except Exception as ds_fallback_err:
+                            print(f"Warning: could not search dataset fields: {ds_fallback_err}", file=sys.stderr)
 
                     total_vars_count = len(all_variables)
                     returned_variables = all_variables
