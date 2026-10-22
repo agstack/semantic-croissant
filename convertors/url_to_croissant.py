@@ -27,7 +27,8 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
 OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "")
 OLLAMA_HEADERS = {"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {}
 ELASTICSEARCH_URL = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200")
-MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "ai.mediaquantum.eu")
+MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "localhost")
+HOST = os.environ.get("HOST", f"https://{MCP_DOMAIN}")
 MODEL_NAME = os.environ.get("MODEL_NAME", "gemma4:e4b")
 
 def fetch_with_playwright(url):
@@ -932,8 +933,8 @@ def fix_croissant_dataverse_distributions(data):
             if orig_fn: api_by_name[orig_fn] = df
             if lbl: api_by_name[lbl] = df
 
-        MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "ai.mediaquantum.eu")
-        base_host = f"https://{MCP_DOMAIN}"
+        MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "localhost")
+        base_host = os.environ.get("HOST", f"https://{MCP_DOMAIN}")
         ds_for_export = data.get('url') or data.get('identifier')
         for d in dists:
             if not isinstance(d, dict): continue

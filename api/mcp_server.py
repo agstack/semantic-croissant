@@ -6125,6 +6125,50 @@ Please answer the question based ONLY on the context provided above (including t
                             except Exception as pd_err:
                                 print(f"pandas Excel reading failed, trying fallback: {pd_err}")
 
+                        # If openpyxl and pandas Excel readers failed, check if the .xls is actually an HTML table
+                        if not converted and (b"<table" in file_content.lower() or b"<html" in file_content.lower()):
+                            try:
+                                import bs4
+                                soup = bs4.BeautifulSoup(file_content, "html.parser")
+                                table = soup.find("table")
+                                if table:
+                                    rows = []
+                                    for tr in table.find_all("tr"):
+                                        cells = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
+                                        if any(cells):
+                                            rows.append(cells)
+                                    if len(rows) >= 2:
+                                        max_cols = max(len(r) for r in rows)
+                                        # Synthesize clean header row if first row has fewer columns than data rows
+                                        header = [f"Column_{i+1}" for i in range(max_cols)]
+                                        data_rows = rows
+                                        if len(rows[0]) == max_cols and all(rows[0]):
+                                            header = [c or f"Column_{i+1}" for i, c in enumerate(rows[0])]
+                                            data_rows = rows[1:]
+                                        elif len(rows) > 2 and len(rows[2]) == max_cols:
+                                            # Combined header from rows[0] and rows[1]
+                                            h_candidates = []
+                                            for idx in range(max_cols):
+                                                val1 = rows[0][idx] if idx < len(rows[0]) else ""
+                                                val2 = rows[1][idx] if idx < len(rows[1]) else ""
+                                                combined_val = f"{val1}_{val2}".strip("_") or f"Column_{idx+1}"
+                                                h_candidates.append(combined_val)
+                                            header = h_candidates
+                                            data_rows = rows[2:]
+
+                                        out_csv = io.StringIO()
+                                        w = csv.writer(out_csv)
+                                        w.writerow(header)
+                                        for r in data_rows:
+                                            if len(r) < max_cols:
+                                                r = r + [""] * (max_cols - len(r))
+                                            w.writerow(r)
+                                        file_content = out_csv.getvalue().encode("utf-8")
+                                        filename = filename.rsplit(".", 1)[0] + ".csv"
+                                        converted = True
+                            except Exception as html_table_err:
+                                print(f"HTML table spreadsheet conversion failed: {html_table_err}")
+
                     # If file is an SPSS file (.por, .sav, .zsav) or Stata (.dta) / SAS (.sas7bdat), convert using pyreadstat
                     spss_exts = [".por", ".sav", ".zsav", ".dta", ".sas7bdat", ".xpt"]
                     is_spss_or_stat = any(filename.lower().endswith(ext) for ext in spss_exts) or "spss" in content_type_header or "stata" in content_type_header
