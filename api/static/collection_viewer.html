@@ -649,7 +649,13 @@
                             ID: ${data.id}<br>
                             Created: ${dateStr}
                         </div>
-                        ${data.description ? `<p style="font-size: 1.1rem; white-space: pre-wrap; margin-bottom: 20px;">${data.description}</p>` : ''}
+                        ${data.description ? `<p style="font-size: 1.1rem; white-space: pre-wrap; margin-bottom: 12px;">${data.description}</p>` : ''}
+                        ${(data.keywords && data.keywords.length > 0) ? `
+                            <div style="margin-bottom: 18px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
+                                <span style="font-size: 0.8rem; font-weight: 600; color: #6b7280; text-transform: uppercase;">Keywords:</span>
+                                ${(Array.isArray(data.keywords) ? data.keywords : [data.keywords]).map(kw => `<span style="background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 2px 10px; font-size: 0.82rem; font-weight: 500;">🏷️ ${kw}</span>`).join('')}
+                            </div>
+                        ` : ''}
                     </div>
                     <form id="ask-form" onsubmit="handleAskSubmit(event)" style="display: flex; gap: 10px; align-items: center; margin-top: 5px; flex-shrink: 0;">
                         <input type="text" placeholder="Ask question about datasets in the collection..." style="padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); width: 350px; font-size: 14px;">
@@ -2575,6 +2581,11 @@
                 <label style="display: block; margin-bottom: 5px; color: var(--text-color); font-weight: bold;">Description</label>
                 <textarea id="edit-col-desc" style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); min-height: 100px;"></textarea>
             </div>
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 5px; color: var(--text-color); font-weight: bold;">Keywords</label>
+                <input type="text" id="edit-col-keywords" placeholder='e.g. misinformation, "fake news", "nap news"' style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color);">
+                <small style="display: block; margin-top: 4px; color: #888; font-size: 0.8rem;">Adding keywords queries the expert collection and adds matching materials automatically.</small>
+            </div>
             <div style="margin-bottom: 15px; display: flex; gap: 20px; color: var(--text-color);">
                 <label style="display: flex; align-items: center; gap: 5px; cursor: pointer;">
                     <input type="checkbox" id="edit-col-private"> Private
@@ -2784,6 +2795,20 @@
             if (!currentCollectionData) return;
             document.getElementById('edit-col-name').value = currentCollectionData.name || '';
             document.getElementById('edit-col-desc').value = currentCollectionData.description || '';
+            
+            // Format existing keywords if available
+            let kwVal = '';
+            if (currentCollectionData.keywords) {
+                if (Array.isArray(currentCollectionData.keywords)) {
+                    kwVal = currentCollectionData.keywords.join(', ');
+                } else if (typeof currentCollectionData.keywords === 'string') {
+                    kwVal = currentCollectionData.keywords;
+                }
+            } else if (currentCollectionData.query) {
+                kwVal = currentCollectionData.query;
+            }
+            document.getElementById('edit-col-keywords').value = kwVal;
+            
             document.getElementById('edit-col-private').checked = !!currentCollectionData.is_private;
             document.getElementById('edit-col-super').checked = !!currentCollectionData.is_supercollection;
             document.getElementById('edit-col-owner').innerText = currentCollectionData.owner || 'None';
@@ -2798,6 +2823,7 @@
             const payload = {
                 name: document.getElementById('edit-col-name').value,
                 description: document.getElementById('edit-col-desc').value,
+                keywords: document.getElementById('edit-col-keywords').value,
                 is_private: document.getElementById('edit-col-private').checked,
                 is_supercollection: document.getElementById('edit-col-super').checked
             };
@@ -2810,7 +2836,12 @@
                 });
                 
                 if (res.ok) {
-                    window.location.reload();
+                    const result = await res.json();
+                    document.getElementById('edit-collection-modal').style.display = 'none';
+                    btn.disabled = false;
+                    btn.innerText = 'Save';
+                    // Re-render collection without full page reload
+                    await loadCollection();
                 } else {
                     const data = await res.json();
                     alert('Error: ' + data.error);

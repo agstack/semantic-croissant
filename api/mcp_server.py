@@ -7851,6 +7851,84 @@ Please answer the question based ONLY on the context provided above (including t
                 if "is_private" in data:
                     col_data["is_private"] = data["is_private"]
                 
+                # Handle Keywords update & expert querying
+                if "keywords" in data:
+                    kw_input = data.get("keywords")
+                    raw_keywords = []
+                    if isinstance(kw_input, list):
+                        raw_keywords = [str(k).strip() for k in kw_input if str(k).strip()]
+                    elif isinstance(kw_input, str):
+                        import csv
+                        try:
+                            reader = csv.reader(io.StringIO(kw_input.strip()), skipinitialspace=True)
+                            for row in reader:
+                                raw_keywords.extend([p.strip() for p in row if p.strip()])
+                        except Exception:
+                            raw_keywords = [p.strip() for p in kw_input.split(",") if p.strip()]
+                    
+                    col_data["keywords"] = raw_keywords
+                    
+                    if raw_keywords:
+                        # Construct query: term OR "phrase" OR term
+                        es_terms = []
+                        for kw in raw_keywords:
+                            if (kw.startswith('"') and kw.endswith('"')) or (kw.startswith("'") and kw.endswith("'")):
+                                es_terms.append(f'"{kw[1:-1].strip()}"')
+                            elif " " in kw:
+                                es_terms.append(f'"{kw}"')
+                            else:
+                                es_terms.append(kw)
+                        es_query = " OR ".join(es_terms)
+                        
+                        expert_idx = col_data.get("expert_index") or col_data.get("expert") or "dataverse"
+                        expert_map = {
+                            "trump": "trump",
+                            "croissant": "croissant",
+                            "dataverse": "dataverse",
+                            "openml": "openml",
+                            "honduras": "honduras",
+                            "hips": "hips",
+                            "ollama": "ollama",
+                            "huggingface": "huggingface",
+                            "delpher": "delpher"
+                        }
+                        expert_resolved = expert_map.get(expert_idx.lower().strip(), expert_idx)
+                        
+                        es_payload = {
+                            "size": 1000,
+                            "_source": False,
+                            "query": {
+                                "query_string": {
+                                    "query": es_query,
+                                    "fields": ["_full_text", "_markdown_text", "name", "description", "schema:name", "schema:description", "title", "dcterms:title", "dsDescription.dsDescriptionValue", "citation:dsDescriptionValue", "*"]
+                                }
+                            }
+                        }
+                        
+                        es_nodes = get_elasticsearch_lookup_urls()
+                        import httpx
+                        new_doc_ids = []
+                        async with httpx.AsyncClient(timeout=30.0) as client:
+                            for es_url in es_nodes:
+                                try:
+                                    resp_expert = await client.post(f"{es_url}/{expert_resolved}/_search", json=es_payload)
+                                    if resp_expert.status_code == 200:
+                                        hits = resp_expert.json().get("hits", {}).get("hits", [])
+                                        new_doc_ids = [h.get("_id") for h in hits if h.get("_id")]
+                                        if new_doc_ids:
+                                            break
+                                except Exception:
+                                    continue
+                                    
+                        if new_doc_ids:
+                            existing_items = col_data.get("items", [])
+                            existing_set = set(existing_items)
+                            for did in new_doc_ids:
+                                if did not in existing_set:
+                                    existing_items.append(did)
+                                    existing_set.add(did)
+                            col_data["items"] = existing_items
+                
                 content = json.dumps(col_data).encode("utf-8")
                 m_client.put_object("collections", f"{cid}.json", io.BytesIO(content), len(content), content_type="application/json")
                 import httpx
@@ -8406,6 +8484,24 @@ Please answer the question based ONLY on the context provided above (including t
                         r_es_cache = await http_client.get(f"{es_url}/cdif/_doc/{doc_cache_id}")
                         if r_es_cache.status_code == 200:
                             cached_es = r_es_cache.json().get("_source", {})
+                            # Ensure this collection is associated with the cached CDIF document
+                            try:
+                                update_script = {
+                                    "script": {
+                                        "source": (
+                                            "if (ctx._source.collection_id == null) { ctx._source.collection_id = [params.cid]; } "
+                                            "else if (ctx._source.collection_id instanceof String) { "
+                                            "  if (ctx._source.collection_id != params.cid) { ctx._source.collection_id = [ctx._source.collection_id, params.cid]; } "
+                                            "  else { ctx._source.collection_id = [ctx._source.collection_id]; } "
+                                            "} else if (!ctx._source.collection_id.contains(params.cid)) { ctx._source.collection_id.add(params.cid); }"
+                                        ),
+                                        "params": {"cid": cid}
+                                    }
+                                }
+                                await http_client.post(f"{es_url}/cdif/_update/{doc_cache_id}", json=update_script)
+                            except Exception as es_up_err:
+                                print(f"Warning: could not update collection_id for cached cdif doc {doc_cache_id}: {es_up_err}")
+
                             return {
                                 "status": "cached",
                                 "source": "elasticsearch",
@@ -8430,9 +8526,9 @@ Please answer the question based ONLY on the context provided above (including t
                             title = cdif_data.get("dct:title") or f_name
                             desc = cdif_data.get("dct:description") or ""
 
-                            # Index in Elastic cdif index
+                            # Index in Elastic cdif index with collection_id as list
                             es_record = {
-                                "collection_id": cid,
+                                "collection_id": [cid],
                                 "dataset_id": f_item["dataset_id"],
                                 "dataset_url": d_url,
                                 "file_name": f_name,
