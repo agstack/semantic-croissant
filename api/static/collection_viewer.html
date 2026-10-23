@@ -554,11 +554,24 @@
     </div>
 
     <script>
-        const pathParts = window.location.pathname.split('/');
-        const colId = pathParts[pathParts.length - 1];
+        const cleanPath = window.location.pathname.replace(/\/+$/, '');
+        const pathParts = cleanPath.split('/');
+        let rawColId = pathParts[pathParts.length - 1];
+        let initialView = 'cards';
+        if (rawColId === 'variables' || rawColId === 'varibles') {
+            initialView = 'variables';
+            rawColId = pathParts[pathParts.length - 2];
+        } else if (rawColId === 'dashboard') {
+            initialView = 'dashboard';
+            rawColId = pathParts[pathParts.length - 2];
+        }
+        if (window.location.hash === '#variables') initialView = 'variables';
+        if (window.location.hash === '#dashboard') initialView = 'dashboard';
+
+        const colId = rawColId;
         let currentCollectionData = null;
         let currentSubcollectionsData = [];
-        let currentViewMode = 'cards';
+        let currentViewMode = initialView;
         let currentDashboardTab = 'metadata';
         let cachedVariablesData = null;
         let currentVarPage = 1;
@@ -651,9 +664,14 @@
                     <div style="flex: 1; min-width: 320px;">
                         ${breadcrumbHtml}
                         <h3 style="margin-top: 0; font-size: 1.8rem;">${data.is_private ? '<span title="Private" style="font-size: 0.9em;">🔒</span> ' : ''}${data.name || 'Unnamed Collection'}</h3>
-                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 15px;">
+                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 15px; line-height: 1.5;">
                             ID: ${data.id}<br>
-                            Created: ${dateStr}
+                            Created: ${dateStr}<br>
+                            <span style="display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; flex-wrap: wrap;">
+                                <strong>Variables Link:</strong>
+                                <a href="/collections/${data.id}/variables" style="color: var(--accent-color); font-weight: 500; text-decoration: underline; word-break: break-all;">https://${window.location.host}/collections/${data.id}/variables</a>
+                                <button type="button" onclick="navigator.clipboard.writeText('https://${window.location.host}/collections/${data.id}/variables'); this.innerText='Copied!'; setTimeout(()=>this.innerText='Copy', 1500);" style="padding: 1px 7px; font-size: 0.75rem; border: 1px solid var(--border-color); background: var(--button-bg); color: var(--text-color); border-radius: 4px; cursor: pointer;">Copy</button>
+                            </span>
                         </div>
                         ${data.description ? `<p style="font-size: 1.1rem; white-space: pre-wrap; margin-bottom: 12px;">${data.description}</p>` : ''}
                         ${(data.keywords && data.keywords.length > 0) ? `
@@ -1071,6 +1089,8 @@
 
             if (window.location.hash === '#dashboard' || currentViewMode === 'dashboard') {
                 switchCollectionView('dashboard');
+            } else if (window.location.hash === '#variables' || currentViewMode === 'variables') {
+                switchCollectionView('variables');
             }
         }
 
@@ -1200,14 +1220,23 @@
             if (mode === 'dashboard') {
                 if (btnDash) btnDash.classList.add('active');
                 if (dashView) dashView.style.display = 'block';
+                if (window.history && window.history.replaceState) {
+                    window.history.replaceState(null, '', `/collections/${colId}#dashboard`);
+                }
                 renderCollectionDashboard(currentCollectionData, currentSubcollectionsData);
             } else if (mode === 'variables') {
                 if (btnVars) btnVars.classList.add('active');
                 if (varsView) varsView.style.display = 'block';
+                if (window.history && window.history.replaceState) {
+                    window.history.replaceState(null, '', `/collections/${colId}/variables`);
+                }
                 loadAndRenderVariables(false);
             } else {
                 if (btnCards) btnCards.classList.add('active');
                 if (cardsView) cardsView.style.display = 'block';
+                if (window.history && window.history.replaceState) {
+                    window.history.replaceState(null, '', `/collections/${colId}`);
+                }
             }
         }
 
@@ -1540,16 +1569,189 @@
                 <button class="var-page-btn" onclick="goToVarPage(${totalPages})" ${currentVarPage === totalPages ? 'disabled' : ''} title="Last page">Last &raquo;</button>
             `;
 
+            function getExportBtnHtml(targetPrefix) {
+                return `
+                    <div style="position: relative; display: inline-block; margin-left: 6px;">
+                        <button type="button" class="var-page-btn" onclick="toggleVariablesExportMenu(event, '${targetPrefix}')" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 500; background: #ffffff; color: #0f766e; border-color: #99f6e4;" title="Export variables in CSV or JSON format">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                            <span>Export</span>
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                        </button>
+                        <div id="${targetPrefix}-var-export-dropdown" class="var-export-dropdown-menu" style="display: none; position: absolute; right: 0; ${targetPrefix === 'bottom' ? 'bottom: 100%; margin-bottom: 5px;' : 'top: 100%; margin-top: 5px;'} background: #ffffff; border: 1px solid #d1d5db; border-radius: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.15); z-index: 10005; min-width: 195px; padding: 4px 0; text-align: left;">
+                            <a href="javascript:void(0)" onclick="exportCollectionVariables('csv')" style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: #1f2937; text-decoration: none; font-size: 0.82rem; font-weight: 500;" onmouseover="this.style.background='#f3f4f6';" onmouseout="this.style.background='transparent';">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></svg>
+                                <span>CSV Format (.csv)</span>
+                            </a>
+                            <a href="javascript:void(0)" onclick="exportCollectionVariables('json')" style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: #1f2937; text-decoration: none; font-size: 0.82rem; font-weight: 500;" onmouseover="this.style.background='#f3f4f6';" onmouseout="this.style.background='transparent';">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><circle cx="10" cy="13" r="1"></circle><circle cx="14" cy="13" r="1"></circle></svg>
+                                <span>JSON Format (.json)</span>
+                            </a>
+                            <a href="javascript:void(0)" onclick="exportCollectionVariables('croissant')" style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: #1f2937; text-decoration: none; font-size: 0.82rem; font-weight: 500; border-top: 1px solid #f3f4f6;" onmouseover="this.style.background='#f3f4f6';" onmouseout="this.style.background='transparent';">
+                                <span style="font-size: 1rem; line-height: 1;">🥐</span>
+                                <span>Croissant JSON-LD</span>
+                            </a>
+                        </div>
+                    </div>
+                `;
+            }
+
             if (paginationBar && pageInfo && pageControls) {
                 paginationBar.style.display = 'flex';
                 pageInfo.textContent = showingText;
-                pageControls.innerHTML = ctrlHtml;
+                pageControls.innerHTML = ctrlHtml + getExportBtnHtml('bottom');
             }
 
             if (paginationBarTop && pageInfoTop && pageControlsTop) {
                 paginationBarTop.style.display = 'flex';
                 pageInfoTop.textContent = showingText;
-                pageControlsTop.innerHTML = ctrlHtml;
+                pageControlsTop.innerHTML = ctrlHtml + getExportBtnHtml('top');
+            }
+        }
+
+        function toggleVariablesExportMenu(event, targetPrefix) {
+            if (event) event.stopPropagation();
+            const dd = document.getElementById(`${targetPrefix}-var-export-dropdown`);
+            if (!dd) return;
+            const isVisible = dd.style.display === 'block';
+            closeAllVariablesExportMenus();
+            if (!isVisible) {
+                dd.style.display = 'block';
+            }
+        }
+
+        function closeAllVariablesExportMenus() {
+            document.querySelectorAll('.var-export-dropdown-menu').forEach(el => {
+                el.style.display = 'none';
+            });
+        }
+
+        // Close variables export dropdown on outside click
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.var-export-dropdown-menu') && !e.target.closest('button[onclick*="toggleVariablesExportMenu"]')) {
+                closeAllVariablesExportMenus();
+            }
+        });
+
+        async function fetchAllCollectionVariables() {
+            if (cachedVariablesData && cachedVariablesData.variables && !cachedVariablesData.has_more) {
+                return cachedVariablesData.variables;
+            }
+            try {
+                const res = await fetch(`/api/collections/${colId}/variables`);
+                if (res.ok) {
+                    const fullData = await res.json();
+                    if (fullData && fullData.variables) {
+                        cachedVariablesData = fullData;
+                        return fullData.variables;
+                    }
+                }
+            } catch (err) {
+                console.warn('Failed to fetch all variables for export, using cached list:', err);
+            }
+            return (cachedVariablesData && cachedVariablesData.variables) ? cachedVariablesData.variables : [];
+        }
+
+        async function exportCollectionVariables(format) {
+            closeAllVariablesExportMenus();
+
+            if (format === 'croissant') {
+                // Open the collection's full Croissant JSON-LD export in a new window/tab immediately
+                window.open(`/api/collections/${colId}/export`, '_blank', 'noopener,noreferrer');
+                return;
+            }
+
+            // Prefer full list of variables from collection
+            const allVars = await fetchAllCollectionVariables();
+            if (!allVars || allVars.length === 0) {
+                alert('No variables available to export.');
+                return;
+            }
+
+            const safeColName = (currentCollectionData && currentCollectionData.name) 
+                ? currentCollectionData.name.replace(/[^a-z0-9_-]/gi, '_').replace(/_+/g, '_')
+                : 'collection_variables';
+
+            if (format === 'csv') {
+                const headers = [
+                    'Variable Name',
+                    'Display Label',
+                    'Description',
+                    'Data Type',
+                    'Unit',
+                    'Location',
+                    'Source File',
+                    'Source File URL',
+                    'Dataset ID',
+                    'Dataset Title',
+                    'Dataset URL',
+                    'CDIF Export URL'
+                ];
+
+                const escapeCsv = (val) => {
+                    const s = String(val === undefined || val === null ? '' : val).replace(/"/g, '""');
+                    return `"${s}"`;
+                };
+
+                const rows = [headers.join(',')];
+                allVars.forEach(v => {
+                    rows.push([
+                        escapeCsv(v.variable_name || ''),
+                        escapeCsv(v.display_label || ''),
+                        escapeCsv(v.description || ''),
+                        escapeCsv(v.data_type || ''),
+                        escapeCsv(v.unit || ''),
+                        escapeCsv(v.location || 'Global'),
+                        escapeCsv(v.file_name || ''),
+                        escapeCsv(v.file_url || ''),
+                        escapeCsv(v.dataset_id || ''),
+                        escapeCsv(v.dataset_title || ''),
+                        escapeCsv(v.dataset_url || ''),
+                        escapeCsv(v.cdif_export_url || '')
+                    ].join(','));
+                });
+
+                const csvContent = '\uFEFF' + rows.join('\r\n');
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${safeColName}_variables.csv`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            } else if (format === 'json') {
+                const exportData = {
+                    collection_id: colId,
+                    collection_name: (currentCollectionData && currentCollectionData.name) || '',
+                    total_variables: allVars.length,
+                    exported_at: new Date().toISOString(),
+                    variables: allVars.map(v => ({
+                        variable_name: v.variable_name || '',
+                        display_label: v.display_label || '',
+                        description: v.description || '',
+                        data_type: v.data_type || '',
+                        unit: v.unit || '',
+                        location: v.location || 'Global',
+                        file_name: v.file_name || '',
+                        file_url: v.file_url || '',
+                        dataset_id: v.dataset_id || '',
+                        dataset_title: v.dataset_title || '',
+                        dataset_url: v.dataset_url || '',
+                        cdif_export_url: v.cdif_export_url || ''
+                    }))
+                };
+
+                const jsonStr = JSON.stringify(exportData, null, 2);
+                const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${safeColName}_variables.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
             }
         }
 

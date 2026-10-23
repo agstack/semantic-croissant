@@ -8290,6 +8290,137 @@ Please answer the question based ONLY on the context provided above (including t
                         part_obj["includedInDataCatalog"] = doc_data.get("includedInDataCatalog")
                     has_parts.append(part_obj)
 
+                # Query CDIF variables for this collection to generate full Croissant RecordSets and Fields
+                cdif_file_map = {}
+                cdif_records = {}
+                try:
+                    es_url_cdif = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+                    cdif_payload = {
+                        "query": {"term": {"collection_id": cid}},
+                        "size": 1000,
+                        "_source": [
+                            "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url",
+                            "cdif_jsonld.DDICDIModels.@type",
+                            "cdif_jsonld.DDICDIModels.name",
+                            "cdif_jsonld.DDICDIModels.displayLabel",
+                            "cdif_jsonld.DDICDIModels.physicalDataType",
+                            "cdif_jsonld.DDICDIModels.dct:description",
+                            "cdif_jsonld.DDICDIModels.definition",
+                            "cdif_jsonld.DDICDIModels.schema:unitText"
+                        ]
+                    }
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        cdif_res = await client.post(f"{es_url_cdif}/cdif/_search", json=cdif_payload)
+                        if cdif_res.status_code == 200:
+                            c_hits = cdif_res.json().get("hits", {}).get("hits", [])
+                            for ch in c_hits:
+                                c_src = ch.get("_source", {})
+                                c_fname = c_src.get("file_name", "") or "tabular_file"
+                                c_furl = c_src.get("file_url", "")
+                                c_durl = c_src.get("dataset_url", "")
+                                c_did = c_src.get("dataset_id", "")
+                                c_export = c_src.get("cdif_export_url", "")
+                                
+                                file_key = c_furl or c_fname
+                                if file_key not in cdif_file_map:
+                                    cdif_file_map[file_key] = {
+                                        "file_name": c_fname,
+                                        "file_url": c_furl,
+                                        "dataset_url": c_durl,
+                                        "dataset_id": c_did,
+                                        "cdif_export_url": c_export
+                                    }
+                                    cdif_records[file_key] = []
+
+                                models = c_src.get("cdif_jsonld", {}).get("DDICDIModels", [])
+                                for m in models:
+                                    if isinstance(m, dict) and m.get("@type") == "InstanceVariable":
+                                        raw_name = m.get("name", {})
+                                        v_name = raw_name.get("name", "") if isinstance(raw_name, dict) else str(raw_name or "")
+                                        raw_disp = m.get("displayLabel", {})
+                                        loc_var = raw_disp.get("locationVariant", {}) if isinstance(raw_disp, dict) else {}
+                                        d_label = loc_var.get("entryValue", "") if isinstance(loc_var, dict) else str(loc_var or "")
+                                        raw_dt = m.get("physicalDataType", {})
+                                        p_dt = raw_dt.get("entryValue", "") if isinstance(raw_dt, dict) else str(raw_dt or "")
+                                        desc = m.get("dct:description") or ""
+                                        if not desc:
+                                            raw_def = m.get("definition", {})
+                                            desc = raw_def.get("content", "") if isinstance(raw_def, dict) else str(raw_def or "")
+                                        unit = m.get("schema:unitText") or ""
+
+                                        # Map to Croissant DataType
+                                        dt_lower = (p_dt or "").lower()
+                                        if any(x in dt_lower for x in ["int", "long", "short"]):
+                                            cr_data_type = "sc:Integer"
+                                        elif any(x in dt_lower for x in ["float", "double", "num", "decimal"]):
+                                            cr_data_type = "sc:Float"
+                                        elif any(x in dt_lower for x in ["date", "time"]):
+                                            cr_data_type = "sc:Date"
+                                        elif "bool" in dt_lower:
+                                            cr_data_type = "sc:Boolean"
+                                        else:
+                                            cr_data_type = "sc:Text"
+
+                                        field_obj = {
+                                            "@type": "cr:Field",
+                                            "@id": f"field/{v_name}",
+                                            "name": v_name,
+                                            "description": desc or d_label or v_name,
+                                            "dataType": cr_data_type,
+                                            "source": {
+                                                "fileObject": {"@id": f"file-{file_key}"},
+                                                "extract": {"column": v_name}
+                                            }
+                                        }
+                                        if d_label and d_label != v_name:
+                                            field_obj["alternateName"] = d_label
+                                        if unit:
+                                            field_obj["unitText"] = unit
+                                        
+                                        cdif_records[file_key].append(field_obj)
+                except Exception as cdif_fetch_err:
+                    print(f"Warning: error loading cdif variables for Croissant export: {cdif_fetch_err}", file=sys.stderr)
+
+                # Add FileObjects and RecordSets from CDIF variables to distributions and record_sets
+                existing_dist_urls = set(d.get("contentUrl") for d in distributions if d.get("contentUrl"))
+                for file_key, f_meta in cdif_file_map.items():
+                    f_name = f_meta["file_name"]
+                    f_url = f_meta["file_url"]
+                    if f_url and f_url not in existing_dist_urls:
+                        # Determine encoding format
+                        enc_format = "text/csv"
+                        ext = f_name.rsplit(".", 1)[-1].lower() if "." in f_name else ""
+                        if ext in ["xlsx", "xls"]:
+                            enc_format = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        elif ext == "tsv":
+                            enc_format = "text/tab-separated-values"
+                        elif ext in ["dta", "stata"]:
+                            enc_format = "application/x-stata"
+                        elif ext == "parquet":
+                            enc_format = "application/vnd.apache.parquet"
+
+                        distributions.append({
+                            "@type": "cr:FileObject",
+                            "@id": f"file-{file_key}",
+                            "name": f_name,
+                            "description": f"Tabular data file: {f_name}",
+                            "contentUrl": f_url,
+                            "encodingFormat": enc_format
+                        })
+                        existing_dist_urls.add(f_url)
+
+                    # Build cr:RecordSet for this file's fields
+                    fields = cdif_records.get(file_key, [])
+                    if fields:
+                        safe_rs_name = re.sub(r"[^a-zA-Z0-9_-]", "_", f_name)
+                        record_sets.append({
+                            "@type": "cr:RecordSet",
+                            "@id": f"recordSet/{safe_rs_name}",
+                            "name": safe_rs_name,
+                            "description": f"Variables extracted from {f_name}",
+                            "field": fields
+                        })
+
                 col_name = col_data.get("name") or "Collection"
                 col_desc = col_data.get("description") or f"Croissant dataset collection {cid}"
                 created_date = col_data.get("created_at")
@@ -8298,6 +8429,7 @@ Please answer the question based ONLY on the context provided above (including t
                     "@context": {
                         "@vocab": "https://schema.org/",
                         "schema": "https://schema.org/",
+                        "sc": "https://schema.org/",
                         "cr": "http://mlcommons.org/croissant/",
                         "odrl": "http://www.w3.org/ns/odrl/2/",
                         "dct": "http://purl.org/dc/terms/",
@@ -8317,6 +8449,8 @@ Please answer the question based ONLY on the context provided above (including t
                     "distribution": distributions,
                     "hasPart": has_parts
                 }
+                if record_sets:
+                    croissant_doc["recordSet"] = record_sets
                 if created_date:
                     croissant_doc["dateCreated"] = created_date
 
@@ -10491,6 +10625,10 @@ Output a JSON object with:
                 Route("/api/collections/{id}/ask", endpoint=api_collections_ask, methods=["POST"]),
                 Route("/api/collectionsindex/ask", endpoint=api_collections_index_ask, methods=["POST"]),
                 Route("/collections/{es_id}", endpoint=collection_es_doc_html),
+                Route("/collections/{es_id}/variables", endpoint=collection_es_doc_html),
+                Route("/collections/{es_id}/variables/", endpoint=collection_es_doc_html),
+                Route("/collections/{es_id}/varibles", endpoint=collection_es_doc_html),
+                Route("/collections/{es_id}/varibles/", endpoint=collection_es_doc_html),
                 Route("/api/collections/{id}", endpoint=api_collections_put, methods=["PUT"]),
                 Route("/api/collections/{id}/add", endpoint=api_collections_add_item, methods=["POST"]),
                 Route("/api/collections/{id}/remove", endpoint=api_collections_remove_item, methods=["POST"]),
