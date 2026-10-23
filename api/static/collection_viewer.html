@@ -526,20 +526,26 @@
         <div style="width: 274px; padding: 0; height: 100%; border-right: 1px solid var(--border-color); display: flex; align-items: center; box-sizing: border-box;">
             {{VAULT_LOGO_HTML}}
         </div>
-        <div style="display:flex; gap:10px; align-items:center;">
-            <nav class="top-nav-bar" style="display: flex; align-items: center; gap: 4px; background: rgba(0, 0, 0, 0.03); border: 1px solid var(--border-color); padding: 3px 6px; border-radius: 20px; font-size: 0.82rem; margin-right: 10px;">
-                <a href="/" id="menu-chat" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg> Chat</a>
-                <a href="/collectionsindex" id="menu-collections" class="nav-pill active" style="color: var(--accent-color); background: rgba(26, 115, 232, 0.1); text-decoration: none; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Collections</a>
-                <a href="/variableindex" id="menu-variables" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><circle cx="18" cy="17" r="2"/></svg> Variables</a>
-                <a href="/groups" id="menu-groups" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg> Groups</a>
-                <a href="/#vault" id="menu-vault" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg> Vault</a>
-                <a href="/#history" id="menu-history" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> History</a>
-            </nav>
-            <button class="theme-toggle" onclick="document.getElementById('add-text-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-text-input').focus(), 50);" style="background-color: #008855; color: white; border: none; font-weight: 500;">Add text</button>
-            <button class="theme-toggle" onclick="document.getElementById('add-resource-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-resource-input').focus(), 50);" style="background-color: #006bb3; color: white; border: none; font-weight: 500;">Add resource</button>
-            <input type="text" id="global-search" placeholder="Search across all collections..." style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); width: 300px; font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') window.location.href = '/?q=' + encodeURIComponent('Search Croissant datasets for: ' + this.value)">
-            <button class="theme-toggle" onclick="window.location.href='/'" style="background-color: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); font-weight: 500;">Back to App</button>
-            {{LOGIN_BUTTON_HTML}}
+        <div style="display:flex; flex-direction:column; justify-content:center; gap:8px; align-items:flex-end; flex:1; padding-left:15px; height:100%;">
+            <!-- Line 1: Vault, History and User pictogram higher on one line -->
+            <div style="display:flex; gap:10px; align-items:center;">
+                <a href="/#vault" id="menu-vault" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 14px; border: 1px solid var(--border-color); background: rgba(0, 0, 0, 0.03); font-size: 0.8rem; transition: all 0.15s ease;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg> Vault</a>
+                <a href="/#history" id="menu-history" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 14px; border: 1px solid var(--border-color); background: rgba(0, 0, 0, 0.03); font-size: 0.8rem; transition: all 0.15s ease;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> History</a>
+                {{LOGIN_BUTTON_HTML}}
+            </div>
+            <!-- Line 2: Chat, Collections, Variables, Groups and Action Controls -->
+            <div style="display:flex; gap:10px; align-items:center;">
+                <nav class="top-nav-bar" style="display: flex; align-items: center; gap: 4px; background: rgba(0, 0, 0, 0.03); border: 1px solid var(--border-color); padding: 3px 6px; border-radius: 20px; font-size: 0.82rem; margin-right: 5px;">
+                    <a href="/" id="menu-chat" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg> Chat</a>
+                    <a href="/collectionsindex" id="menu-collections" class="nav-pill active" style="color: var(--accent-color); background: rgba(26, 115, 232, 0.1); text-decoration: none; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Collections</a>
+                    <a href="/variableindex" id="menu-variables" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><circle cx="18" cy="17" r="2"/></svg> Variables</a>
+                    <a href="/groups" id="menu-groups" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg> Groups</a>
+                </nav>
+                <button class="theme-toggle" onclick="document.getElementById('add-text-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-text-input').focus(), 50);" style="background-color: #008855; color: white; border: none; font-weight: 500;">Add text</button>
+                <button class="theme-toggle" onclick="document.getElementById('add-resource-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-resource-input').focus(), 50);" style="background-color: #006bb3; color: white; border: none; font-weight: 500;">Add resource</button>
+                <input type="text" id="global-search" placeholder="Search across all collections..." style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); width: 280px; font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') window.location.href = '/?q=' + encodeURIComponent('Search Croissant datasets for: ' + this.value)">
+                <button class="theme-toggle" onclick="window.location.href='/'" style="background-color: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); font-weight: 500;">Back to App</button>
+            </div>
         </div>
     </div>
 
@@ -936,18 +942,17 @@
                             <table class="variables-table">
                                 <thead>
                                     <tr>
-                                        <th style="width: 18%;">Variable Name</th>
-                                        <th style="width: 17%;">Display Label</th>
-                                        <th style="width: 10%;">Data Type</th>
-                                        <th style="width: 9%;">Unit</th>
-                                        <th style="width: 14%;">Location</th>
-                                        <th style="width: 18%;">Source File</th>
-                                        <th style="width: 7%; text-align: center;">Dataset</th>
-                                        <th style="width: 7%; text-align: center;">CDIF Export</th>
+                                        <th style="width: 20%;">Variable Name</th>
+                                        <th style="width: 22%;">Display Label</th>
+                                        <th style="width: 12%;">Data Type</th>
+                                        <th style="width: 10%;">Unit</th>
+                                        <th style="width: 20%;">Source File</th>
+                                        <th style="width: 8%; text-align: center;">Dataset</th>
+                                        <th style="width: 8%; text-align: center;">CDIF</th>
                                     </tr>
                                 </thead>
                                 <tbody id="dash-var-table-body">
-                                    <tr><td colspan="8" style="text-align: center; padding: 25px; color: #6b7280;">Loading variables...</td></tr>
+                                    <tr><td colspan="7" style="text-align: center; padding: 25px; color: #6b7280;">Loading variables...</td></tr>
                                 </tbody>
                             </table>
                             <!-- Bottom Pagination Bar (100 per page) -->
@@ -1305,7 +1310,7 @@
             if (tableBody) {
                 tableBody.innerHTML = `
                     <tr>
-                        <td colspan="8" style="text-align: center; padding: 40px 20px; color: #4b5563;">
+                        <td colspan="7" style="text-align: center; padding: 40px 20px; color: #4b5563;">
                             <div style="display: inline-flex; align-items: center; gap: 10px; font-weight: 500; font-size: 0.95rem;">
                                 <span class="var-spinner"></span>
                                 <span>Loading CDIF variables...</span>
@@ -1345,7 +1350,7 @@
             } catch (err) {
                 console.error('Error fetching CDIF variables:', err);
                 if (tableBody) {
-                    tableBody.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 25px; color: #dc3545;">Error loading variables: ${escapeHtml(err.message)}</td></tr>`;
+                    tableBody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 25px; color: #dc3545;">Error loading variables: ${escapeHtml(err.message)}</td></tr>`;
                 }
                 if (countBadge) countBadge.textContent = 'Error';
             }
@@ -1452,7 +1457,7 @@
 
             const total = filteredVariablesList.length;
             if (total === 0) {
-                tableBody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 25px; color: #6b7280;">No variables match your search filter.</td></tr>';
+                tableBody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 25px; color: #6b7280;">No variables match your search filter.</td></tr>';
                 if (paginationBar) paginationBar.style.display = 'none';
                 if (paginationBarTop) paginationBarTop.style.display = 'none';
                 return;
@@ -1496,16 +1501,12 @@
 
                 const cdifLink = v.cdif_export_url ? `<a href="${escapeHtml(v.cdif_export_url)}" target="_blank" rel="noopener noreferrer" style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; font-size: 0.78rem; font-weight: 500; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; border-radius: 4px; text-decoration: none;" title="Open CDIF JSON-LD for this file"><span>CDIF</span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></a>` : '<span style="color: #9ca3af;">—</span>';
 
-                const locText = v.location ? escapeHtml(v.location) : 'Global';
-                const locBadge = `<span style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 12px; font-size: 0.78rem; font-weight: 500; background: ${locText === 'Global' ? '#f3f4f6' : '#eff6ff'}; color: ${locText === 'Global' ? '#6b7280' : '#1d4ed8'}; border: 1px solid ${locText === 'Global' ? '#e5e7eb' : '#bfdbfe'};" title="Geographic location: ${locText}"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"></path><circle cx="12" cy="10" r="3"></circle></svg><span>${locText}</span></span>`;
-
                 rowsHtml += `
                     <tr>
                         <td style="font-weight: 600; color: #111827; font-family: monospace; font-size: 0.88rem;">${varName}</td>
                         <td>${displayLabel}${desc}</td>
                         <td><span class="var-type-badge ${typeClass}">${escapeHtml(v.data_type || 'unspecified')}</span></td>
                         <td>${unit}</td>
-                        <td style="max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${locBadge}</td>
                         <td style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${fileLink}</td>
                         <td style="text-align: center;">${datasetVaultLink}</td>
                         <td style="text-align: center;">${cdifLink}</td>
