@@ -186,9 +186,32 @@ def transform_tool_to_doc(tool):
     full_texts.extend(collect_text_values(tool.get("contributors", [])))
     full_text_str = "\n".join([t for t in full_texts if t])
 
+    distributions = []
+    for idx, a_url in enumerate(accessible_at or ([primary_url] if primary_url else [])):
+        if a_url:
+            distributions.append({
+                "@type": "cr:FileObject",
+                "@id": f"file-{idx+1}",
+                "name": label or f"Resource {idx+1}",
+                "contentUrl": a_url,
+                "encodingFormat": "text/html"
+            })
+
     doc = {
-        "@context": "https://schema.org/",
-        "@type": "SoftwareApplication",
+        "@context": {
+            "@language": "en",
+            "@vocab": "https://schema.org/",
+            "sc": "https://schema.org/",
+            "cr": "http://mlcommons.org/croissant/",
+            "dct": "http://purl.org/dc/terms/",
+            "conformsTo": "dct:conformsTo",
+            "distribution": "cr:distribution",
+            "recordSet": "cr:recordSet",
+            "field": "cr:field",
+            "dataType": "cr:dataType"
+        },
+        "@type": ["schema:SoftwareApplication", "schema:Dataset", "cr:Dataset"],
+        "conformsTo": "http://mlcommons.org/croissant/1.1",
         "id": str(tool.get("id")),
         "persistentId": pid,
         "name": label,
@@ -196,6 +219,7 @@ def transform_tool_to_doc(tool):
         "description": description,
         "url": primary_url,
         "accessibleAt": accessible_at,
+        "distribution": distributions,
         "category": tool.get("category", "tool-or-service"),
         "status": tool.get("status"),
         "lastInfoUpdate": tool.get("lastInfoUpdate"),

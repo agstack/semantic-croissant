@@ -74,24 +74,26 @@ def get_elasticsearch_lookup_urls() -> list[str]:
     profile_name = os.environ.get("PROFILE_NAME", "").strip().lower()
 
     # 1. Profile-specific elastic settings from nodes.conf
+    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+    container_es = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+    if in_docker and container_es not in urls:
+        urls.append(container_es)
+
     if profile_name and profile_name in nodes:
         pdata = nodes[profile_name]
         ip = pdata.get("ip", "").strip()
         es_port = pdata.get("es_port", "").strip()
         es_u = pdata.get("elasticsearch_url", "").strip().rstrip("/")
         
-        # When inside docker container (ciat-mcp), local profile elastic is http://elasticsearch:9200
-        in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
-        if in_docker and (not ip or ip in ["localhost", "127.0.0.1", "0.0.0.0"]):
-            container_es = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
-            if container_es not in urls:
-                urls.append(container_es)
-        elif ip and es_port:
+        if ip and es_port:
             candidate = f"http://{ip}:{es_port}"
-            if candidate not in urls:
+            if in_docker and ip in ["localhost", "127.0.0.1", "0.0.0.0"]:
+                pass
+            elif candidate not in urls:
                 urls.append(candidate)
         elif es_u and es_u not in urls:
-            urls.append(es_u)
+            if not (in_docker and any(h in es_u for h in ["localhost", "127.0.0.1", "0.0.0.0"])):
+                urls.append(es_u)
 
     # 2. Add other nodes as secondary fallbacks
     for sname, sdata in nodes.items():
@@ -100,6 +102,11 @@ def get_elasticsearch_lookup_urls() -> list[str]:
         ip = sdata.get("ip", "").strip()
         es_port = sdata.get("es_port", "").strip()
         es_u = sdata.get("elasticsearch_url", "").strip().rstrip("/")
+
+        if in_docker and ip in ["localhost", "127.0.0.1", "0.0.0.0"]:
+            continue
+        if in_docker and es_u and any(h in es_u for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+            continue
 
         if ip and es_port:
             candidate = f"http://{ip}:{es_port}"
@@ -116,7 +123,7 @@ def get_elasticsearch_lookup_urls() -> list[str]:
     if env_es and env_es not in urls:
         urls.append(env_es)
 
-    return urls or (["http://elasticsearch:9200"] if (os.environ.get("IN_DOCKER") or os.path.exists("/.dockerenv")) else ["http://localhost:9200"])
+    return urls or (["http://elasticsearch:9200"] if in_docker else ["http://localhost:9200"])
 
 def get_minio_lookup_urls() -> list[str]:
     """
@@ -459,11 +466,20 @@ async def get_collection_documents(collection_id: str, limit: int = 50) -> list[
             if not col_data:
                 return [types.TextContent(type="text", text=f"Collection '{collection_id}' not found.")]
             
-            items = col_data.get("_source", {}).get("items", [])
+            raw_items = col_data.get("_source", {}).get("items", []) or col_data.get("items", [])
+            items = []
+            for itm in raw_items:
+                if isinstance(itm, str):
+                    items.append(itm)
+                elif isinstance(itm, dict):
+                    doc_id_val = itm.get("id") or itm.get("_id") or itm.get("doc_id") or itm.get("url")
+                    if doc_id_val:
+                        items.append(str(doc_id_val))
+            
             if not items:
                 return [types.TextContent(type="text", text=f"Collection '{collection_id}' has no documents.")]
                 
-            # 2. Get summaries of documents from trump, croissant, and dataverse indices
+            # 2. Get summaries of documents from candidate indices
             doc_ids = items[:limit]
             payload = {
                 "query": {
@@ -478,7 +494,7 @@ async def get_collection_documents(collection_id: str, limit: int = 50) -> list[
             es_docs = {}
             for es_url in es_nodes:
                 try:
-                    docs_resp = await client.post(f"{es_url}/croissant,dataverse,trump,openml/_search", json=payload)
+                    docs_resp = await client.post(f"{es_url}/croissant,dataverse,trump,openml,sshoc/_search?ignore_unavailable=true", json=payload)
                     if docs_resp.status_code == 200:
                         hits = docs_resp.json().get("hits", {}).get("hits", [])
                         for h in hits:
@@ -489,7 +505,7 @@ async def get_collection_documents(collection_id: str, limit: int = 50) -> list[
             
             md = [f"### Documents in Collection '{col_data.get('_source', {}).get('name', collection_id)}' (Showing {len(doc_ids)} of {len(items)})"]
             
-            HOST = os.environ.get("HOST", HOST)
+            host_url = os.environ.get("HOST", "https://ai.mediaquantum.eu")
             for doc_id in doc_ids:
                 if doc_id in es_docs:
                     h = es_docs[doc_id]
@@ -540,7 +556,7 @@ async def get_collection_documents(collection_id: str, limit: int = 50) -> list[
                     if len(desc) > 200:
                         desc = desc[:197] + "..."
                     
-                doc_link = f"[{name}]({HOST}/vault/doc/{doc_id})"
+                doc_link = f"[{name}]({host_url}/vault/doc/{doc_id})"
                 md.append(f"- **{doc_link}** (ID: {doc_id})\n  {desc}")
                 
             return [types.TextContent(type="text", text="\n\n".join(md))]
@@ -731,7 +747,12 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
             "hips": "hips",
             "ollama": "ollama",
             "huggingface": "huggingface",
-            "delpher": "delpher"
+            "delpher": "delpher",
+            "sshoc": "sshoc",
+            "ssh open cloud": "sshoc",
+            "ssh-open-cloud": "sshoc",
+            "ssh": "sshoc",
+            "tools": "sshoc"
         }
         idx = expert_index.lower().strip()
         if idx.endswith(" expert"):
@@ -771,23 +792,31 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
 
         # Step 1: Query the expert
         if expert_index_resolved != "delpher":
-            payload = {
-                "size": effective_limit,
-                "_source": False,
-                "query": {
-                    "query_string": {
-                        "query": es_query,
-                        "fields": ["_full_text", "_markdown_text", "name", "description", "schema:name", "schema:description", "title", "dcterms:title", "dsDescription.dsDescriptionValue", "citation:dsDescriptionValue", "*"]
+            def make_query_payload(q_str):
+                if not q_str or q_str == "*":
+                    return {
+                        "size": effective_limit,
+                        "_source": False,
+                        "query": {"match_all": {}}
+                    }
+                return {
+                    "size": effective_limit,
+                    "_source": False,
+                    "query": {
+                        "query_string": {
+                            "query": q_str,
+                            "fields": ["_full_text", "_markdown_text", "name", "description", "schema:name", "schema:description", "title", "dcterms:title", "dsDescription.dsDescriptionValue", "citation:dsDescriptionValue", "label", "keywords", "*"]
+                        }
                     }
                 }
-            }
-            
+
             doc_ids = []
             last_err = None
             async with httpx.AsyncClient(timeout=90.0) as client:
                 for es_url in es_nodes:
                     try:
-                        docs_resp = await client.post(f"{es_url}/{expert_index_resolved}/_search", json=payload)
+                        # 1. Try with the processed es_query
+                        docs_resp = await client.post(f"{es_url}/{expert_index_resolved}/_search", json=make_query_payload(es_query))
                         if docs_resp.status_code == 200:
                             hits = docs_resp.json().get("hits", {}).get("hits", [])
                             doc_ids = [h.get("_id") for h in hits if h.get("_id")]
@@ -795,6 +824,17 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
                                 break
                         else:
                             last_err = docs_resp.text
+
+                        # 2. If no hits and query was not '*', fallback to match_all if user query is general (e.g. 'tools', 'all', 'services')
+                        if not doc_ids and es_query != "*":
+                            clean_q_lower = (clean_query or "").strip().lower()
+                            if clean_q_lower in ["tools", "services", "tools and services", "tool", "service", "all", "everything", "all tools"]:
+                                fallback_resp = await client.post(f"{es_url}/{expert_index_resolved}/_search", json=make_query_payload("*"))
+                                if fallback_resp.status_code == 200:
+                                    hits = fallback_resp.json().get("hits", {}).get("hits", [])
+                                    doc_ids = [h.get("_id") for h in hits if h.get("_id")]
+                                    if doc_ids:
+                                        break
                     except Exception as e:
                         last_err = str(e)
                         continue
@@ -930,7 +970,12 @@ async def ask_expert(index: str, q: str, limit: int = 10) -> list[types.TextCont
         "hips": "hips",
         "ollama": "ollama",
         "huggingface": "huggingface",
-        "delpher": "delpher"
+        "delpher": "delpher",
+        "sshoc": "sshoc",
+        "ssh open cloud": "sshoc",
+        "ssh-open-cloud": "sshoc",
+        "ssh": "sshoc",
+        "tools": "sshoc"
     }
     idx = (index or "").lower().strip()
     if idx.endswith(" expert"):
@@ -1031,7 +1076,7 @@ async def read_vault_article(url_or_filename: str) -> list[types.TextContent]:
     if raw_doc_id:
         clean_id = raw_doc_id.replace(".md", "").replace(".jsonld", "").replace(".csv", "")
         es_nodes = get_elasticsearch_lookup_urls()
-        candidate_indices = ["dataverse", "croissant", "trump", "openml", "cdif"]
+        candidate_indices = ["dataverse", "croissant", "trump", "openml", "sshoc", "cdif"]
         
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as es_client:
             for es_url in es_nodes:
@@ -2446,7 +2491,7 @@ async def get_cdif_summary(url_or_id: str) -> list[types.TextContent]:
 
                 # A: Try direct ID lookup if raw_id is a document ID (e.g. 16-hex hash or string ID)
                 if not croissant_doc and not target_doi and not target_file:
-                    for idx in ["croissant", "dataverse", "openml", "_all"]:
+                    for idx in ["croissant", "dataverse", "openml", "sshoc", "_all"]:
                         try:
                             r_id = await client.get(f"{es_url}/{idx}/_doc/{raw_id}", timeout=5.0)
                             if r_id.status_code == 200:
@@ -3034,7 +3079,7 @@ async def extract_variables_from_croissant(dataset_id_or_url: str) -> list[types
                 try:
                     # If we have a document ID, check direct ID in indices
                     if raw_id_cand:
-                        for idx in ["dataverse", "croissant", "openml", "_all"]:
+                        for idx in ["dataverse", "croissant", "openml", "sshoc", "_all"]:
                             try:
                                 r_get = await client.get(f"{es_url}/{idx}/_doc/{raw_id_cand}", timeout=5.0)
                                 if r_get.status_code == 200:
@@ -3055,7 +3100,7 @@ async def extract_variables_from_croissant(dataset_id_or_url: str) -> list[types
                         if es_res.status_code == 200:
                             hits = es_res.json().get("hits", {}).get("hits", [])
                     if not hits:
-                        for idx in ["croissant", "dataverse", "openml", "hips"]:
+                        for idx in ["croissant", "dataverse", "openml", "sshoc", "hips"]:
                             try:
                                 fallback_res = await client.get(f"{es_url}/{idx}/_search", params={"q": search_term}, timeout=5.0)
                                 if fallback_res.status_code == 200:
@@ -4179,7 +4224,7 @@ SYSTEM INSTRUCTION FOR LLM - Navigation Guide:
 
 7. If the user asks to analyze/describe a URL or file, use the 'url_to_croissant' tool first.
 
-8. If the user asks to search for datasets generally, use the 'ask_expert' tool. Available expert collections in Elasticsearch include: 'trump' (for Trump expert/collection), 'croissant' (for Croissant expert/collection), 'dataverse', 'openml', 'honduras', 'hips', 'ollama', 'huggingface'. Start by querying the relevant index (e.g. 'trump' for Trump queries, 'croissant' for general Croissant datasets).
+8. If the user asks to search for datasets generally, use the 'ask_expert' tool. Available expert collections in Elasticsearch include: 'sshoc' (for SSHOC / SSH Open Cloud Marketplace tools and services expert), 'trump' (for Trump expert/collection), 'croissant' (for Croissant expert/collection), 'dataverse', 'openml', 'honduras', 'hips', 'ollama', 'huggingface'. Start by querying the relevant index (e.g. 'sshoc' for tools and services, 'trump' for Trump queries, 'croissant' for general Croissant datasets).
 
 9. CRITICAL: If you list or extract variables from datasets, you MUST ALWAYS provide clickable Markdown hyperlinks to both the variables and the datasets!
    - Each dataset MUST have a link to its dataset URL, DOI, or vault viewer (e.g. `[Dataset Title](url)`).
@@ -4188,9 +4233,9 @@ SYSTEM INSTRUCTION FOR LLM - Navigation Guide:
 
 10. Do NOT use the 'save_to_vault' tool manually unless specifically requested. The system will automatically save your final results to the vault.
 
-11. If the user asks to create a collection from an expert or source (e.g. "Create collection Trump and ask Trump expert to fill it", "Create collection Trump diesel deal and ask trump expert to fill it on diesel without limit", "Create collection Tesla by filling papers from Delpher on Nikola Tesla", or "Create Malawi datasets collection and ask Dataverse expert to fill it"):
+11. If the user asks to create a collection from an expert or source (e.g. "Create collection Tools and ask SSHOC expert to fill it", "Create collection Trump and ask Trump expert to fill it", "Create collection Trump diesel deal and ask trump expert to fill it on diesel without limit", "Create collection Tesla by filling papers from Delpher on Nikola Tesla", or "Create Malawi datasets collection and ask Dataverse expert to fill it"):
    - You MUST use the 'build_collection_from_expert' tool immediately!
-   - Provide collection_name (e.g. 'Trump diesel deal'), expert_index (e.g. 'trump' for Trump expert, 'croissant' for Croissant expert, 'delpher', 'dataverse', etc.), and query (e.g. 'diesel' or 'Donald Trump').
+   - Provide collection_name (e.g. 'Tools', 'Trump diesel deal'), expert_index (e.g. 'sshoc' for SSHOC expert, 'trump' for Trump expert, 'croissant' for Croissant expert, 'delpher', 'dataverse', etc.), and query (e.g. '*' or search keywords). For SSHOC expert, you MUST use expert_index='sshoc'!
    - If the user specifies "without limit", "no limit", or similar, pass limit=10000 (or include "without limit" in the query).
    - Do NOT call elasticsearch_fulltext_search or other tools first; call 'build_collection_from_expert' directly.
 
@@ -4214,7 +4259,7 @@ Here is detailed information about how every tool works:
 - planner: Get navigation and instructions on which tool to use based on the user's intent.
 - search_croissant_datasets: Search for datasets across the Semantic Croissant database using keywords.
 - elasticsearch_fulltext_search: Query the Elasticsearch index directly for indexed Croissant datasets (includes full-text search over full Markdown and metadata).
-- ask_expert: Query one of the semantic expert indices in Elasticsearch: 'trump' (Trump expert/collection), 'croissant' (Croissant expert/collection), 'dataverse', 'openml', 'honduras', 'hips', 'ollama', 'huggingface'.
+- ask_expert: Query one of the semantic expert indices in Elasticsearch: 'sshoc' (SSHOC / SSH Open Cloud Marketplace tools and services), 'trump' (Trump expert/collection), 'croissant' (Croissant expert/collection), 'dataverse', 'openml', 'honduras', 'hips', 'ollama', 'huggingface'.
 - get_croissant_dataset: Get the full Croissant JSON-LD payload for a specific dataset ID. IMPORTANT: You MUST read the JSON payload and print a summary of the dataset (Title, Description, Creator, URL) for the user in readable Markdown. Do not hide the payload.
 - get_cdif_summary: Read both Croissant and CDIF (DDI-CDI) representations for a dataset or export URL (e.g. export?ds=...&file=...) and summarize dataset metadata, distributions, and DDI-CDI variables.
 - cdif_variables: Explore, search, read, and manage CDIF (DDI-CDI) tabular variables in the CDIF Variables Registry. Actions: 'search' (search CDIF index files & variables), 'list' (list variables), 'read' (read variable details and DDI-CDI models), 'add' (register variable).
@@ -4230,11 +4275,11 @@ Here is detailed information about how every tool works:
 - extract_keyfigures: Extract ALL numbers, key figures, and numerical data points from a text file or vault document and return them as a CSV.
 - finalize_keyfigures: After generating the CSV from extract_keyfigures, call this tool to save the CSV and the corresponding Croissant JSON-LD to the vault.
 - google-drive: Perform operations on Google Drive (search, read, upload).
-- build_collection_from_expert: A macro tool that queries an expert index for a specific topic, automatically creates a new Collection, and fills it with the returned documents. Available expert indices include: 'trump', 'croissant', 'dataverse', 'openml', 'honduras', 'hips', 'ollama', 'huggingface', 'delpher'.
+- build_collection_from_expert: A macro tool that queries an expert index for a specific topic, automatically creates a new Collection, and fills it with the returned documents. Available expert indices include: 'sshoc', 'trump', 'croissant', 'dataverse', 'openml', 'honduras', 'hips', 'ollama', 'huggingface', 'delpher'.
 
-11. If the user asks to create a collection from an expert or source (e.g. "Create collection Trump and ask Trump expert to fill it", "Create collection Trump diesel deal and ask trump expert to fill it on diesel without limit", "Create collection Tesla by filling papers from Delpher on Nikola Tesla", or "Create Malawi datasets collection and ask Dataverse expert to fill it"):
+11. If the user asks to create a collection from an expert or source (e.g. "Create collection Tools and ask SSHOC expert to fill it", "Create collection Trump and ask Trump expert to fill it", "Create collection Trump diesel deal and ask trump expert to fill it on diesel without limit", "Create collection Tesla by filling papers from Delpher on Nikola Tesla", or "Create Malawi datasets collection and ask Dataverse expert to fill it"):
    - You MUST use the 'build_collection_from_expert' tool immediately!
-   - Provide collection_name (e.g. 'Trump diesel deal'), expert_index (e.g. 'trump' for Trump expert, 'croissant' for Croissant expert, 'delpher', 'dataverse', etc.), and query (e.g. 'diesel' or 'Donald Trump').
+   - Provide collection_name (e.g. 'Tools', 'Trump diesel deal'), expert_index (e.g. 'sshoc' for SSHOC expert, 'trump' for Trump expert, 'croissant' for Croissant expert, 'delpher', 'dataverse', etc.), and query (e.g. '*' or search keywords). For SSHOC expert, you MUST use expert_index='sshoc'!
    - If the user specifies "without limit", "no limit", or similar, pass limit=10000 (or include "without limit" in the query).
    - Do NOT call elasticsearch_fulltext_search or other tools first; call 'build_collection_from_expert' directly.
 
@@ -4512,18 +4557,18 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="build_collection_from_expert",
-            description="A macro tool that queries an expert index for a specific topic, automatically creates a new Collection, and fills it with the returned documents. Available expert indices include: 'trump', 'croissant', 'dataverse', 'openml', 'honduras', 'hips', 'ollama', 'huggingface', 'delpher'.",
+            description="A macro tool that queries an expert index for a specific topic, automatically creates a new Collection, and fills it with the returned documents. Available expert indices include: 'sshoc', 'trump', 'croissant', 'dataverse', 'openml', 'honduras', 'hips', 'ollama', 'huggingface', 'delpher'.",
             inputSchema={
                 "type": "object",
                 "required": ["collection_name", "expert_index", "query"],
                 "properties": {
                     "collection_name": {
                         "type": "string",
-                        "description": "The name of the collection to create (e.g., 'Trump', 'Climate Change in the Netherlands')."
+                        "description": "The name of the collection to create (e.g., 'Tools', 'Trump', 'Climate Change in the Netherlands')."
                     },
                     "expert_index": {
                         "type": "string",
-                        "description": "The specific elastic index for the expert (e.g., 'trump', 'croissant', 'dataverse', 'openml', 'delpher'). For Trump expert, use 'trump'. For Croissant expert, use 'croissant'."
+                        "description": "The specific elastic index for the expert (e.g., 'sshoc', 'trump', 'croissant', 'dataverse', 'openml', 'delpher'). For SSHOC expert, use 'sshoc'. For Trump expert, use 'trump'. For Croissant expert, use 'croissant'."
                     },
                     "query": {
                         "type": "string",
@@ -4543,12 +4588,12 @@ async def list_tools() -> list[types.Tool]:
         
         types.Tool(
             name="ask_expert",
-            description="Query the specific elastic index for the expert by name. Available collections/indices: 'trump', 'croissant', 'dataverse', 'ollama', 'huggingface', 'openml', 'hips', 'honduras'. For Trump expert use 'trump'. For Croissant expert use 'croissant'.",
+            description="Query the specific elastic index for the expert by name. Available collections/indices: 'sshoc', 'trump', 'croissant', 'dataverse', 'ollama', 'huggingface', 'openml', 'hips', 'honduras'. For SSHOC expert use 'sshoc'. For Trump expert use 'trump'. For Croissant expert use 'croissant'.",
             inputSchema={
                 "type": "object",
                 "required": ["index", "q"],
                 "properties": {
-                    "index": {"type": "string", "description": "The elastic index for the expert (e.g. 'honduras' or 'hips')"},
+                    "index": {"type": "string", "description": "The elastic index for the expert (e.g. 'sshoc', 'honduras' or 'hips')"},
                     "q": {"type": "string", "description": "The search query to ask the expert"},
                     "limit": {"type": "integer", "description": "Max number of results (default 10)", "default": 10}
                 }
@@ -5638,30 +5683,88 @@ Please answer the question based ONLY on the context provided above (including t
                 if filename.endswith(".jsonld"):
                     try:
                         es_id = filename[:-7]
-                        es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+                        es_nodes = get_elasticsearch_lookup_urls()
+                        candidate_indices = ["sshoc", "dataverse", "croissant", "trump", "openml", "cdif"]
                         import httpx
                         import json
                         from starlette.responses import Response
                         async with httpx.AsyncClient(timeout=10.0) as es_client:
-                            es_resp = None
-                            for idx_name in ["trump", "croissant"]:
-                                r = await es_client.get(f"{es_url}/{idx_name}/_doc/{es_id}")
-                                if r.status_code == 200:
-                                    es_resp = r
+                            es_data = None
+                            for es_url in es_nodes:
+                                for idx_name in candidate_indices:
+                                    try:
+                                        r = await es_client.get(f"{es_url}/{idx_name}/_doc/{es_id}")
+                                        if r.status_code == 200:
+                                            es_data = r.json().get("_source", {})
+                                            break
+                                    except Exception:
+                                        pass
+                                if es_data:
                                     break
-                            if not es_resp:
-                                r_all = await es_client.post(f"{es_url}/_all/_search", json={"query": {"term": {"_id": es_id}}, "size": 1})
-                                if r_all.status_code == 200:
-                                    hits = r_all.json().get("hits", {}).get("hits", [])
-                                    if hits:
-                                        es_resp = type("DummyResp", (), {"status_code": 200, "json": lambda: hits[0]})()
-                            if es_resp and es_resp.status_code == 200:
-                                es_data = es_resp.json().get("_source", {})
+                                try:
+                                    r_search = await es_client.post(
+                                        f"{es_url}/_search",
+                                        json={"query": {"bool": {"should": [{"term": {"_id": es_id}}, {"term": {"persistentId.keyword": es_id}}, {"term": {"id": es_id}}]}}, "size": 1}
+                                    )
+                                    if r_search.status_code == 200:
+                                        hits = r_search.json().get("hits", {}).get("hits", [])
+                                        if hits:
+                                            es_data = hits[0].get("_source", {})
+                                            break
+                                except Exception:
+                                    pass
+
+                            if es_data:
                                 es_data.pop("_full_text", None)
                                 es_data.pop("_markdown_text", None)
                                 es_data.pop("_source_url", None)
+                                es_data.pop("raw", None)
                                 es_data = fix_croissant_dataverse_distributions(es_data)
                                 
+                                # If the document is from sshoc or a tool/service, enrich to full Croissant 1.1 format
+                                if es_data.get("conformsTo") != "http://mlcommons.org/croissant/1.1":
+                                    ctx = {
+                                        "@language": "en",
+                                        "@vocab": "https://schema.org/",
+                                        "sc": "https://schema.org/",
+                                        "cr": "http://mlcommons.org/croissant/",
+                                        "dct": "http://purl.org/dc/terms/",
+                                        "conformsTo": "dct:conformsTo",
+                                        "distribution": "cr:distribution",
+                                        "recordSet": "cr:recordSet",
+                                        "field": "cr:field",
+                                        "dataType": "cr:dataType"
+                                    }
+                                    orig_ctx = es_data.get("@context")
+                                    if isinstance(orig_ctx, dict):
+                                        ctx.update(orig_ctx)
+                                    es_data["@context"] = ctx
+                                    es_data["conformsTo"] = "http://mlcommons.org/croissant/1.1"
+
+                                    types_list = es_data.get("@type", [])
+                                    if isinstance(types_list, str):
+                                        types_list = [types_list]
+                                    for t in ["sc:Dataset", "cr:Dataset"]:
+                                        if t not in types_list and "Dataset" not in types_list:
+                                            types_list.append(t)
+                                    es_data["@type"] = types_list
+
+                                    # Build distributions from accessibleAt or external links if none exist
+                                    if not es_data.get("distribution"):
+                                        dists = []
+                                        access_urls = es_data.get("accessibleAt", []) or ([es_data.get("url")] if es_data.get("url") else [])
+                                        for idx, a_url in enumerate(access_urls):
+                                            if a_url:
+                                                dists.append({
+                                                    "@type": "cr:FileObject",
+                                                    "@id": f"file-{idx+1}",
+                                                    "name": es_data.get("name") or f"Resource {idx+1}",
+                                                    "contentUrl": a_url,
+                                                    "encodingFormat": "text/html"
+                                                })
+                                        if dists:
+                                            es_data["distribution"] = dists
+
                                 data = json.dumps(es_data, indent=2).encode("utf-8")
                                 media_type = "application/ld+json; charset=utf-8"
                                 
@@ -6983,7 +7086,7 @@ Please answer the question based ONLY on the context provided above (including t
             md_text = None
             media_type = "text/markdown"
             es_nodes = get_elasticsearch_lookup_urls()
-            candidate_indices = ["dataverse", "croissant", "trump", "openml", "cdif"]
+            candidate_indices = ["dataverse", "croissant", "trump", "openml", "sshoc", "cdif"]
             
             async with httpx.AsyncClient(timeout=10.0) as client:
                 try:
@@ -7150,7 +7253,7 @@ Please answer the question based ONLY on the context provided above (including t
 
         async def proxy_expert(request):
             index_name = request.path_params.get("index_name")
-            valid_indices = ["croissant", "dataverse", "ollama", "huggingface", "openml", "hips", "honduras"]
+            valid_indices = ["croissant", "dataverse", "ollama", "huggingface", "openml", "hips", "honduras", "sshoc"]
             if index_name not in valid_indices:
                 from starlette.responses import Response
                 return Response("Invalid index", status_code=400)
@@ -7890,7 +7993,12 @@ Please answer the question based ONLY on the context provided above (including t
                             "hips": "hips",
                             "ollama": "ollama",
                             "huggingface": "huggingface",
-                            "delpher": "delpher"
+                            "delpher": "delpher",
+                            "sshoc": "sshoc",
+                            "ssh open cloud": "sshoc",
+                            "ssh-open-cloud": "sshoc",
+                            "ssh": "sshoc",
+                            "tools": "sshoc"
                         }
                         expert_resolved = expert_map.get(expert_idx.lower().strip(), expert_idx)
                         
@@ -8043,7 +8151,7 @@ Please answer the question based ONLY on the context provided above (including t
                             }
                             for es_url in es_nodes:
                                 try:
-                                    docs_resp = await client.post(f"{es_url}/croissant,dataverse,trump,openml/_search", json=payload)
+                                    docs_resp = await client.post(f"{es_url}/croissant,dataverse,trump,openml,sshoc/_search", json=payload)
                                     if docs_resp.status_code == 200:
                                         hits = docs_resp.json().get("hits", {}).get("hits", [])
                                         for h in hits:
@@ -8063,7 +8171,7 @@ Please answer the question based ONLY on the context provided above (including t
                             # If not in bulk search, try direct get across candidate indices
                             if doc_id not in es_docs:
                                 for es_url in es_nodes:
-                                    for cand_idx in ["dataverse", "croissant", "trump", "openml"]:
+                                    for cand_idx in ["dataverse", "croissant", "trump", "openml", "sshoc"]:
                                         try:
                                             r_doc = await client.get(f"{es_url}/{cand_idx}/_doc/{doc_id}")
                                             if r_doc.status_code == 200:
@@ -8246,7 +8354,7 @@ Please answer the question based ONLY on the context provided above (including t
                     # Check if this item is a Dataset (e.g. from Dataverse, Croissant index, or item marked Dataset)
                     item_is_dataset = (
                         is_dataverse_col or
-                        doc_data.get("_index") in ["dataverse", "openml"] or
+                        doc_data.get("_index") in ["dataverse", "openml", "sshoc"] or
                         doc_data.get("@type") in ["Dataset", "sc:Dataset", "cr:Dataset", "schema:Dataset"] or
                         "dataverse" in doc_url.lower() or
                         "doi.org/10.7910" in doc_url or
