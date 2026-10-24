@@ -2021,43 +2021,51 @@ async def update_vault_document(target_id: str, referenced_ids: list[str], new_c
             except Exception:
                 pass # It's okay if the .jsonld file doesn't exist
             
-        if not original_jsonld or "@context" not in original_jsonld or "name" not in original_jsonld:
-            # Fallback to ES if this is a newly annotated search document or was saved improperly
+        if not original_jsonld or not original_jsonld.get("distribution") or "@context" not in original_jsonld:
+            # Fallback to ES across all candidate indices and nodes to incorporate the original document metadata
             import httpx
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_nodes = get_elasticsearch_lookup_urls()
+            candidate_indices = ["sshoc", "dataverse", "croissant", "trump", "openml", "cdif"]
             try:
-                # We need synchronous requests here or use asyncio, but we are inside an async function!
-                async with httpx.AsyncClient() as hc:
-                    r = await hc.get(f"{es_url}/croissant/_doc/{target_id}")
-                    if r.status_code == 200:
-                        source = r.json().get("_source", {})
-                        es_jsonld = None
-                        if "_markdown_text" in source:
+                async with httpx.AsyncClient(timeout=10.0) as hc:
+                    es_source = None
+                    for es_url in es_nodes:
+                        for idx_name in candidate_indices:
                             try:
-                                # In our ES schema, _markdown_text sometimes holds the raw JSON-LD for datasets
-                                parsed_md = json.loads(source["_markdown_text"])
-                                es_jsonld = parsed_md
+                                r = await hc.get(f"{es_url}/{idx_name}/_doc/{target_id}")
+                                if r.status_code == 200:
+                                    es_source = r.json().get("_source", {})
+                                    break
                             except Exception:
                                 pass
+                        if es_source:
+                            break
+                        try:
+                            r_search = await hc.post(
+                                f"{es_url}/_search",
+                                json={"query": {"bool": {"should": [{"term": {"_id": target_id}}, {"term": {"persistentId.keyword": target_id}}, {"term": {"id": target_id}}]}}, "size": 1}
+                            )
+                            if r_search.status_code == 200:
+                                hits = r_search.json().get("hits", {}).get("hits", [])
+                                if hits:
+                                    es_source = hits[0].get("_source", {})
+                                    break
+                        except Exception:
+                            pass
+
+                    if es_source:
+                        es_source.pop("_full_text", None)
+                        es_source.pop("_markdown_text", None)
+                        es_source.pop("_source_url", None)
+                        es_source.pop("raw", None)
+                        es_source = fix_croissant_dataverse_distributions(es_source)
                         
-                        if not es_jsonld:
-                            es_jsonld = {
-                                "@context": {
-                                    "@vocab": "https://schema.org/",
-                                    "cr": "http://mlcommons.org/croissant/"
-                                },
-                                "@type": "cr:Dataset",
-                                "name": source.get("name", target_id),
-                                "url": source.get("url", source.get("_source_url", "")),
-                                "description": source.get("description", "")
-                            }
-                        
-                        # Merge ES fields into original_jsonld
-                        for k, v in es_jsonld.items():
-                            if k not in original_jsonld:
+                        # Preserve existing original_jsonld fields (e.g. isBasedOn) while incorporating full original croissant
+                        for k, v in es_source.items():
+                            if k not in original_jsonld or not original_jsonld[k]:
                                 original_jsonld[k] = v
-            except Exception:
-                pass
+            except Exception as es_e:
+                print(f"Error fetching original doc from ES in update_vault_document: {es_e}", file=sys.stderr)
             
         current_host = os.environ.get("HOST", HOST)
         if not current_host.startswith("http"):
@@ -2110,6 +2118,49 @@ async def update_vault_document(target_id: str, referenced_ids: list[str], new_c
             if not any(isinstance(x, dict) and x.get("name") == new_item["name"] for x in final_jsonld["isBasedOn"]):
                 final_jsonld["isBasedOn"].append(new_item)
                 
+        # Ensure final_jsonld is in full Croissant 1.1 format
+        if final_jsonld.get("conformsTo") != "http://mlcommons.org/croissant/1.1":
+            ctx = {
+                "@language": "en",
+                "@vocab": "https://schema.org/",
+                "sc": "https://schema.org/",
+                "cr": "http://mlcommons.org/croissant/",
+                "dct": "http://purl.org/dc/terms/",
+                "conformsTo": "dct:conformsTo",
+                "distribution": "cr:distribution",
+                "recordSet": "cr:recordSet",
+                "field": "cr:field",
+                "dataType": "cr:dataType"
+            }
+            orig_ctx = final_jsonld.get("@context")
+            if isinstance(orig_ctx, dict):
+                ctx.update(orig_ctx)
+            final_jsonld["@context"] = ctx
+            final_jsonld["conformsTo"] = "http://mlcommons.org/croissant/1.1"
+
+            types_list = final_jsonld.get("@type", [])
+            if isinstance(types_list, str):
+                types_list = [types_list]
+            for t in ["sc:Dataset", "cr:Dataset"]:
+                if t not in types_list and "Dataset" not in types_list:
+                    types_list.append(t)
+            final_jsonld["@type"] = types_list
+
+            if not final_jsonld.get("distribution"):
+                dists = []
+                access_urls = final_jsonld.get("accessibleAt", []) or ([final_jsonld.get("url")] if final_jsonld.get("url") else [])
+                for idx, a_url in enumerate(access_urls):
+                    if a_url:
+                        dists.append({
+                            "@type": "cr:FileObject",
+                            "@id": f"file-{idx+1}",
+                            "name": final_jsonld.get("name") or f"Resource {idx+1}",
+                            "contentUrl": a_url,
+                            "encodingFormat": "text/html"
+                        })
+                if dists:
+                    final_jsonld["distribution"] = dists
+
         # 6. Save new objects
         md_bytes = final_md.encode("utf-8")
         await asyncio.to_thread(
@@ -5601,22 +5652,84 @@ Please answer the question based ONLY on the context provided above (including t
                                         except Exception as e:
                                             item["annotationTextError"] = str(e)
                         # If the vault JSON-LD lacks distributions or conformsTo, enrich from Elasticsearch
-                        if not jdata.get("distribution") or not jdata.get("conformsTo"):
+                        if not jdata.get("distribution") or jdata.get("conformsTo") != "http://mlcommons.org/croissant/1.1":
                             try:
                                 es_id = filename[:-7]
-                                es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+                                es_nodes = get_elasticsearch_lookup_urls()
+                                candidate_indices = ["sshoc", "dataverse", "croissant", "trump", "openml", "cdif"]
                                 import httpx
                                 async with httpx.AsyncClient(timeout=5.0) as es_merge_client:
-                                    r_es = await es_merge_client.get(f"{es_url}/croissant/_doc/{es_id}")
-                                    if r_es.status_code == 200:
-                                        es_src = r_es.json().get("_source", {})
-                                        for key in ["conformsTo", "distribution", "creator", "keywords", "license", "datePublished", "dateModified", "includedInDataCatalog", "publisher", "version", "citeAs", "recordSet"]:
-                                            if key not in jdata and key in es_src:
+                                    es_src = None
+                                    for es_url in es_nodes:
+                                        for idx_name in candidate_indices:
+                                            try:
+                                                r_es = await es_merge_client.get(f"{es_url}/{idx_name}/_doc/{es_id}")
+                                                if r_es.status_code == 200:
+                                                    es_src = r_es.json().get("_source", {})
+                                                    break
+                                            except Exception:
+                                                pass
+                                        if es_src:
+                                            break
+                                        try:
+                                            r_search = await es_merge_client.post(
+                                                f"{es_url}/_search",
+                                                json={"query": {"bool": {"should": [{"term": {"_id": es_id}}, {"term": {"persistentId.keyword": es_id}}, {"term": {"id": es_id}}]}}, "size": 1}
+                                            )
+                                            if r_search.status_code == 200:
+                                                hits = r_search.json().get("hits", {}).get("hits", [])
+                                                if hits:
+                                                    es_src = hits[0].get("_source", {})
+                                                    break
+                                        except Exception:
+                                            pass
+
+                                    if es_src:
+                                        for key in ["conformsTo", "distribution", "creator", "keywords", "license", "datePublished", "dateModified", "includedInDataCatalog", "publisher", "version", "citeAs", "recordSet", "accessibleAt"]:
+                                            if (key not in jdata or not jdata[key]) and key in es_src:
                                                 jdata[key] = es_src[key]
-                                        if "@context" in es_src and isinstance(jdata.get("@context"), dict) and isinstance(es_src["@context"], dict):
-                                            for ck, cv in es_src["@context"].items():
-                                                if ck not in jdata["@context"]:
-                                                    jdata["@context"][ck] = cv
+
+                                # Ensure full Croissant 1.1 context, conformsTo, and distributions
+                                ctx = {
+                                    "@language": "en",
+                                    "@vocab": "https://schema.org/",
+                                    "sc": "https://schema.org/",
+                                    "cr": "http://mlcommons.org/croissant/",
+                                    "dct": "http://purl.org/dc/terms/",
+                                    "conformsTo": "dct:conformsTo",
+                                    "distribution": "cr:distribution",
+                                    "recordSet": "cr:recordSet",
+                                    "field": "cr:field",
+                                    "dataType": "cr:dataType"
+                                }
+                                orig_ctx = jdata.get("@context")
+                                if isinstance(orig_ctx, dict):
+                                    ctx.update(orig_ctx)
+                                jdata["@context"] = ctx
+                                jdata["conformsTo"] = "http://mlcommons.org/croissant/1.1"
+
+                                types_list = jdata.get("@type", [])
+                                if isinstance(types_list, str):
+                                    types_list = [types_list]
+                                for t in ["sc:Dataset", "cr:Dataset"]:
+                                    if t not in types_list and "Dataset" not in types_list:
+                                        types_list.append(t)
+                                jdata["@type"] = types_list
+
+                                if not jdata.get("distribution"):
+                                    dists = []
+                                    access_urls = jdata.get("accessibleAt", []) or ([jdata.get("url")] if jdata.get("url") else [])
+                                    for idx, a_url in enumerate(access_urls):
+                                        if a_url:
+                                            dists.append({
+                                                "@type": "cr:FileObject",
+                                                "@id": f"file-{idx+1}",
+                                                "name": jdata.get("name") or f"Resource {idx+1}",
+                                                "contentUrl": a_url,
+                                                "encodingFormat": "text/html"
+                                            })
+                                    if dists:
+                                        jdata["distribution"] = dists
                             except Exception as es_e:
                                 print(f"Error merging from ES: {es_e}", file=sys.stderr)
 
