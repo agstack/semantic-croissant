@@ -5949,13 +5949,49 @@ Please answer the question based ONLY on the context provided above (including t
                 canon_redir_url = f"/export?{urllib.parse.urlencode(canon_params)}"
                 return RedirectResponse(url=canon_redir_url, status_code=301)
 
-            ddi_cdi_base = os.environ.get("DDI_CDI_BASE_URL", "http://10.147.18.186:8088").rstrip("/")
+            req_format = request.query_params.get("format", "cdif").lower().strip()
+            # Canonical format names: "ddi-cdi" vs "cdif" (default)
+            is_ddi_cdi = (req_format == "ddi-cdi")
+
+            ddi_cdi_service = os.environ.get("DDI_CDI_SERVICE") or os.environ.get("DDI_CDI_BASE_URL", "http://10.147.18.186:8088")
+            if ddi_cdi_service.isdigit():
+                ddi_cdi_base = f"http://localhost:{ddi_cdi_service}".rstrip("/")
+            elif ":" not in ddi_cdi_service and not ddi_cdi_service.startswith("http"):
+                ddi_cdi_base = f"http://{ddi_cdi_service}".rstrip("/")
+            elif not ddi_cdi_service.startswith("http://") and not ddi_cdi_service.startswith("https://"):
+                ddi_cdi_base = f"http://{ddi_cdi_service}".rstrip("/")
+            else:
+                ddi_cdi_base = ddi_cdi_service.rstrip("/")
+
+            # Inside docker containers, replace localhost with internal service alias or host.docker.internal
+            if "localhost:8083" in ddi_cdi_base or "127.0.0.1:8083" in ddi_cdi_base:
+                ddi_cdi_base = "http://ddicdi:8000"
+            elif "localhost:8082" in ddi_cdi_base or "127.0.0.1:8082" in ddi_cdi_base:
+                ddi_cdi_base = "http://converters:8000"
+
             api_key = os.environ.get("DDI_CDI_API_KEY", "")
+
+            cdif_service = os.environ.get("CDIF_SERVICE") or os.environ.get("CDIF_CONVERTER_URL", "http://converters:8000")
+            if cdif_service.isdigit():
+                cdif_converter_url = f"http://localhost:{cdif_service}".rstrip("/")
+            elif ":" not in cdif_service and not cdif_service.startswith("http"):
+                cdif_converter_url = f"http://{cdif_service}".rstrip("/")
+            elif not cdif_service.startswith("http://") and not cdif_service.startswith("https://"):
+                cdif_converter_url = f"http://{cdif_service}".rstrip("/")
+            else:
+                cdif_converter_url = cdif_service.rstrip("/")
+
+            if "localhost:8082" in cdif_converter_url or "127.0.0.1:8082" in cdif_converter_url:
+                cdif_converter_url = "http://converters:8000"
 
             minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
             minio_endpoint = minio_base.replace("http://", "").replace("https://", "")
-            vault_cache_key = f"cdif_cache_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
-            doc_cache_id = hashlib.sha256((target_url + (ds_url or "")).encode("utf-8")).hexdigest()[:24]
+            cache_prefix = "ddicdi" if is_ddi_cdi else "cdif_v2"
+            vault_cache_key = f"{cache_prefix}_cache_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
+            doc_cache_id = f"{cache_prefix}_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:24]}"
+            # For backward compatibility: if ddi-cdi is requested, also check legacy key cdif_cache_
+            legacy_vault_cache_key = f"cdif_cache_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:20]}.jsonld" if is_ddi_cdi else None
+            legacy_doc_cache_id = hashlib.sha256((target_url + (ds_url or "")).encode("utf-8")).hexdigest()[:24] if is_ddi_cdi else None
             es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
 
             # Check if requesting client is an AI assistant, crawler or bot that needs lightweight schema
@@ -5975,56 +6011,58 @@ Please answer the question based ONLY on the context provided above (including t
                         return cdif_data
 
                 cdif_spec_uri = "https://ddialliance.org/Specification/DDI-CDI/1.0/"
-                if "dct:conformsTo" not in cdif_data and "conformsTo" not in cdif_data:
-                    cdif_data["dct:conformsTo"] = cdif_spec_uri
-                    for m in cdif_data.get("DDICDIModels", []):
-                        if isinstance(m, dict) and (m.get("@id") in ["#wideDataSet", "#tabularTextDataSet"] or "DataSet" in m.get("@type", "")):
-                            m["dct:conformsTo"] = cdif_spec_uri
+                if isinstance(cdif_data, dict):
+                    if is_ddi_cdi:
+                        if "dct:conformsTo" not in cdif_data and "conformsTo" not in cdif_data:
+                            cdif_data["dct:conformsTo"] = cdif_spec_uri
+                            for m in cdif_data.get("DDICDIModels", []):
+                                if isinstance(m, dict) and (m.get("@id") in ["#wideDataSet", "#tabularTextDataSet"] or "DataSet" in m.get("@type", "")):
+                                    m["dct:conformsTo"] = cdif_spec_uri
 
-                if is_llm_or_bot:
-                    heavy_types = {
-                        "DataPoint", "DataPointPosition", "InstanceValue",
-                        "PhysicalMappingPosition", "ComponentPosition", "TextMapping",
-                        "SegmentPosition", "Segment", "SubstantiveValueDomain",
-                        "ValueAndConceptDescription", "MeasureComponent"
-                    }
-                    models = cdif_data.get("DDICDIModels", [])
-                    filtered_models = []
-                    for m in models:
-                        if not isinstance(m, dict):
-                            continue
-                        m_type = m.get("@type")
-                        if m_type in heavy_types:
-                            continue
-                        if m_type in ["WideDataSet", "TabularTextDataSet", "LogicalRecord", "WideDataStructure"]:
-                            m_copy = dict(m)
-                            for k, v in list(m_copy.items()):
-                                if isinstance(v, list) and len(v) > 20:
-                                    m_copy[k] = v[:20]
-                            for ref_key in ["has_DataPoint_OF_DataSet", "has_DataPointPosition", "has_DataPoint", "has_ComponentPosition", "has_PhysicalMappingPosition"]:
-                                m_copy.pop(ref_key, None)
-                            filtered_models.append(m_copy)
-                        elif m_type == "InstanceVariable":
-                            # Retain clean, essential variable schema (name, displayLabel, physicalDataType, definition)
-                            iv = {
-                                "@id": m.get("@id"),
-                                "@type": "InstanceVariable",
-                                "name": m.get("name"),
-                                "displayLabel": m.get("displayLabel"),
-                                "physicalDataType": m.get("physicalDataType"),
-                                "definition": m.get("definition")
+                        if is_llm_or_bot:
+                            heavy_types = {
+                                "DataPoint", "DataPointPosition", "InstanceValue",
+                                "PhysicalMappingPosition", "ComponentPosition", "TextMapping",
+                                "SegmentPosition", "Segment", "SubstantiveValueDomain",
+                                "ValueAndConceptDescription", "MeasureComponent"
                             }
-                            if m.get("schema:unitText"):
-                                iv["schema:unitText"] = m.get("schema:unitText")
-                            if m.get("dct:description"):
-                                iv["dct:description"] = m.get("dct:description")
-                            filtered_models.append(iv)
-                        else:
-                            filtered_models.append(m)
-                    cdif_data = dict(cdif_data)
-                    cdif_data["DDICDIModels"] = filtered_models
+                            models = cdif_data.get("DDICDIModels", [])
+                            filtered_models = []
+                            for m in models:
+                                if not isinstance(m, dict):
+                                    continue
+                                m_type = m.get("@type")
+                                if m_type in heavy_types:
+                                    continue
+                                if m_type in ["WideDataSet", "TabularTextDataSet", "LogicalRecord", "WideDataStructure"]:
+                                    m_copy = dict(m)
+                                    for k, v in list(m_copy.items()):
+                                        if isinstance(v, list) and len(v) > 20:
+                                            m_copy[k] = v[:20]
+                                    for ref_key in ["has_DataPoint_OF_DataSet", "has_DataPointPosition", "has_DataPoint", "has_ComponentPosition", "has_PhysicalMappingPosition"]:
+                                        m_copy.pop(ref_key, None)
+                                    filtered_models.append(m_copy)
+                                elif m_type == "InstanceVariable":
+                                    # Retain clean, essential variable schema (name, displayLabel, physicalDataType, definition)
+                                    iv = {
+                                        "@id": m.get("@id"),
+                                        "@type": "InstanceVariable",
+                                        "name": m.get("name"),
+                                        "displayLabel": m.get("displayLabel"),
+                                        "physicalDataType": m.get("physicalDataType"),
+                                        "definition": m.get("definition")
+                                    }
+                                    if m.get("schema:unitText"):
+                                        iv["schema:unitText"] = m.get("schema:unitText")
+                                    if m.get("dct:description"):
+                                        iv["dct:description"] = m.get("dct:description")
+                                    filtered_models.append(iv)
+                                else:
+                                    filtered_models.append(m)
+                            cdif_data = dict(cdif_data)
+                            cdif_data["DDICDIModels"] = filtered_models
 
-                return json.dumps(cdif_data).encode("utf-8")
+                return json.dumps(cdif_data, indent=2).encode("utf-8")
 
             
             # Check 1: MinIO vault cache first for instant response
@@ -6037,73 +6075,207 @@ Please answer the question based ONLY on the context provided above (including t
                     secure=False
                 )
                 if m_cache_client.bucket_exists("vault"):
-                    try:
-                        cached_obj = m_cache_client.get_object("vault", vault_cache_key)
-                        cached_bytes = cached_obj.read()
-                        cached_obj.close()
-                        cached_obj.release_conn()
+                    for candidate_key in [vault_cache_key, legacy_vault_cache_key]:
+                        if not candidate_key:
+                            continue
                         try:
-                            cached_json = json.loads(cached_bytes.decode("utf-8"))
+                            cached_obj = m_cache_client.get_object("vault", candidate_key)
+                            cached_bytes = cached_obj.read()
+                            cached_obj.close()
+                            cached_obj.release_conn()
+                            try:
+                                cached_json = json.loads(cached_bytes.decode("utf-8"))
+                            except Exception:
+                                cached_json = None
+                            
+                            resp_bytes = prepare_cdif_response(cached_json if cached_json is not None else cached_bytes)
+                            out_filename = "export_ddi_cdi.jsonld" if is_ddi_cdi else "export_cdif.jsonld"
+                            return Response(
+                                content=resp_bytes,
+                                status_code=200,
+                                media_type="application/ld+json; charset=utf-8",
+                                headers={
+                                    "Content-Disposition": f'inline; filename="{out_filename}"',
+                                    "Access-Control-Allow-Origin": "*",
+                                    "X-Cache": "HIT"
+                                }
+                            )
                         except Exception:
-                            cached_json = None
-                        
-                        resp_bytes = prepare_cdif_response(cached_json if cached_json is not None else cached_bytes)
-                        return Response(
-                            content=resp_bytes,
-                            status_code=200,
-                            media_type="application/ld+json; charset=utf-8",
-                            headers={
-                                "Content-Disposition": f'inline; filename="export_cdif.jsonld"',
-                                "Access-Control-Allow-Origin": "*",
-                                "X-Cache": "HIT"
-                            }
-                        )
-                    except Exception:
-                        pass
+                            pass
             except Exception as minio_init_err:
                 pass
 
             # Check 2: Elasticsearch 'cdif' index BEFORE downloading the file
             try:
                 async with httpx.AsyncClient(timeout=10.0) as es_check_client:
-                    r_es_cache = await es_check_client.get(f"{es_url}/cdif/_doc/{doc_cache_id}")
-                    if r_es_cache.status_code == 200:
-                        hit_src = r_es_cache.json().get("_source", {})
-                        cached_cdif = hit_src.get("cdif_jsonld")
-                        if cached_cdif:
-                            if isinstance(cached_cdif, str):
-                                try:
-                                    cached_cdif = json.loads(cached_cdif)
-                                except Exception:
-                                    pass
-                            cached_bytes = json.dumps(cached_cdif, indent=2).encode("utf-8")
-                            
-                            # Also backfill to MinIO vault cache for even faster subsequent reads
-                            try:
-                                if m_cache_client and m_cache_client.bucket_exists("vault"):
-                                    m_cache_client.put_object(
-                                        "vault",
-                                        vault_cache_key,
-                                        io.BytesIO(cached_bytes),
-                                        length=len(cached_bytes),
-                                        content_type="application/ld+json; charset=utf-8"
+                    for candidate_id in [doc_cache_id, legacy_doc_cache_id]:
+                        if not candidate_id:
+                            continue
+                        try:
+                            r_es_cache = await es_check_client.get(f"{es_url}/cdif/_doc/{candidate_id}")
+                            if r_es_cache.status_code == 200:
+                                hit_src = r_es_cache.json().get("_source", {})
+                                cached_cdif = hit_src.get("cdif_jsonld")
+                                if cached_cdif:
+                                    if isinstance(cached_cdif, str):
+                                        try:
+                                            cached_cdif = json.loads(cached_cdif)
+                                        except Exception:
+                                            pass
+                                    cached_bytes = json.dumps(cached_cdif, indent=2).encode("utf-8")
+                                    
+                                    # Also backfill to MinIO vault cache for even faster subsequent reads
+                                    try:
+                                        if m_cache_client and m_cache_client.bucket_exists("vault"):
+                                            m_cache_client.put_object(
+                                                "vault",
+                                                vault_cache_key,
+                                                io.BytesIO(cached_bytes),
+                                                length=len(cached_bytes),
+                                                content_type="application/ld+json; charset=utf-8"
+                                            )
+                                    except Exception:
+                                        pass
+
+                                    resp_bytes = prepare_cdif_response(cached_cdif if cached_cdif is not None else cached_bytes)
+                                    out_filename = "export_ddi_cdi.jsonld" if is_ddi_cdi else "export_cdif.jsonld"
+                                    return Response(
+                                        content=resp_bytes,
+                                        status_code=200,
+                                        media_type="application/ld+json; charset=utf-8",
+                                        headers={
+                                            "Content-Disposition": f'inline; filename="{out_filename}"',
+                                            "Access-Control-Allow-Origin": "*",
+                                            "X-Cache": "HIT-ELASTICSEARCH"
+                                        }
                                     )
+                        except Exception:
+                            pass
+            except Exception as es_cache_err:
+                pass
+
+            # If default CDIF format is requested, check if we have the dataset's Croissant metadata in ES
+            # and convert directly via the new CDIF converters service
+            if not is_ddi_cdi:
+                try:
+                    async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as cdif_fetch_client:
+                        croissant_doc = None
+                        matched_doc_id = None
+                        matched_ds_url = ds_url
+
+                        # 1. If ds_url provided, search ES croissant index
+                        if matched_ds_url:
+                            norm_doi = matched_ds_url
+                            if "doi.org/" in norm_doi:
+                                norm_doi = "https://doi.org/" + norm_doi.split("doi.org/")[-1]
+                            h1 = hashlib.sha256(norm_doi.encode("utf-8")).hexdigest()[:16]
+                            try:
+                                r_c = await cdif_fetch_client.get(f"{es_url}/croissant/_doc/{h1}")
+                                if r_c.status_code == 200:
+                                    matched_doc_id = h1
+                                    matched_ds_url = norm_doi
+                                    croissant_doc = r_c.json().get("_source", {})
                             except Exception:
                                 pass
 
-                            resp_bytes = prepare_cdif_response(cached_cdif if cached_cdif is not None else cached_bytes)
-                            return Response(
-                                content=resp_bytes,
-                                status_code=200,
-                                media_type="application/ld+json; charset=utf-8",
-                                headers={
-                                    "Content-Disposition": f'inline; filename="export_cdif.jsonld"',
-                                    "Access-Control-Allow-Origin": "*",
-                                    "X-Cache": "HIT-ELASTICSEARCH"
+                        # 2. If not found by direct hash, query distribution contentUrl
+                        if not croissant_doc:
+                            try:
+                                q_nested = {
+                                    "query": {
+                                        "nested": {
+                                            "path": "distribution",
+                                            "query": {
+                                                "term": {"distribution.contentUrl": target_url}
+                                            }
+                                        }
+                                    },
+                                    "_source": True,
+                                    "size": 1
                                 }
+                                r_nested = await cdif_fetch_client.post(f"{es_url}/_all/_search", json=q_nested)
+                                if r_nested.status_code == 200:
+                                    hits = r_nested.json().get("hits", {}).get("hits", [])
+                                    if hits:
+                                        matched_doc_id = hits[0].get("_id")
+                                        croissant_doc = hits[0].get("_source", {})
+                                        if not matched_ds_url:
+                                            matched_ds_url = croissant_doc.get("url") or croissant_doc.get("identifier")
+                            except Exception:
+                                pass
+
+                        # If croissant_doc found in ES, send it directly to CDIF converter
+                        if croissant_doc:
+                            clean_doc = {k: v for k, v in croissant_doc.items() if not k.startswith("_")}
+                            conv_files = {
+                                "file": ("dataset.json", json.dumps(clean_doc).encode("utf-8"), "application/json")
+                            }
+                            conv_data = {"target_format": "cdif"}
+                            r_conv = await cdif_fetch_client.post(
+                                f"{cdif_converter_url}/api/convert",
+                                files=conv_files,
+                                data=conv_data,
+                                timeout=45.0
                             )
-            except Exception as es_cache_err:
-                pass
+                            if r_conv.status_code == 200:
+                                conv_res = r_conv.json()
+                                converted_cdif = conv_res[0] if isinstance(conv_res, list) and conv_res else conv_res
+                                
+                                # Canonical @id
+                                if matched_ds_url:
+                                    query_string = urllib.parse.urlencode([("ds", matched_ds_url), ("file", target_url)])
+                                else:
+                                    query_string = urllib.parse.urlencode([("file", target_url)])
+                                export_id = f"{base_host}/export?{query_string}"
+                                if isinstance(converted_cdif, dict):
+                                    converted_cdif["@id"] = export_id
+                                    # Set prov:wasDerivedFrom to target file
+                                    converted_cdif["prov:wasDerivedFrom"] = {"@id": target_url}
+
+                                resp_bytes = json.dumps(converted_cdif, indent=2).encode("utf-8")
+
+                                # Cache in MinIO
+                                try:
+                                    if m_cache_client and m_cache_client.bucket_exists("vault"):
+                                        m_cache_client.put_object(
+                                            "vault",
+                                            vault_cache_key,
+                                            io.BytesIO(resp_bytes),
+                                            length=len(resp_bytes),
+                                            content_type="application/ld+json; charset=utf-8"
+                                        )
+                                except Exception:
+                                    pass
+
+                                # Cache in Elasticsearch
+                                try:
+                                    es_record = {
+                                        "dataset_id": matched_doc_id or "",
+                                        "dataset_url": matched_ds_url or ds_url or "",
+                                        "file_url": target_url,
+                                        "cdif_export_url": export_id,
+                                        "title": croissant_doc.get("name") or "CDIF Dataset",
+                                        "description": croissant_doc.get("description") or "",
+                                        "status": "success",
+                                        "format": "cdif",
+                                        "cdif_jsonld": converted_cdif
+                                    }
+                                    await cdif_fetch_client.put(f"{es_url}/cdif/_doc/{doc_cache_id}", json=es_record)
+                                except Exception:
+                                    pass
+
+                                return Response(
+                                    content=resp_bytes,
+                                    status_code=200,
+                                    media_type="application/ld+json; charset=utf-8",
+                                    headers={
+                                        "Content-Disposition": 'inline; filename="export_cdif.jsonld"',
+                                        "Access-Control-Allow-Origin": "*",
+                                        "X-Cache": "MISS"
+                                    }
+                                )
+                except Exception as cdif_conv_err:
+                    print(f"Error in CDIF converter flow: {cdif_conv_err}")
 
             try:
                 # 1. Download file from target_url with streaming and strict size limits (max 50 MB)

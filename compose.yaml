@@ -122,6 +122,9 @@ services:
       - API_BASE=http://api:8000
       - MCP_TRANSPORT=sse
       - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - CDIF_CONVERTER_URL=${CDIF_CONVERTER_URL:-http://converters:8000}
+      - CDIF_SERVICE=${CDIF_SERVICE:-http://converters:8000}
+      - DDI_CDI_SERVICE=${DDI_CDI_SERVICE:-http://ddicdi:8000}
     volumes:
       - ./shapes:/app/shapes:ro
       - ./convertors:/app/convertors:ro
@@ -157,4 +160,43 @@ services:
     command: server /data --console-address ":9001"
     volumes:
       - ${VOLUME_DIR:-./volumes}/${PROFILE_NAME:-croissant-live}/minio:/data
+
+  converters:
+    container_name: ${PROFILE_NAME:-croissant-live}-converters
+    profiles:
+      - ${PROFILE_NAME:-croissant-live}
+    build:
+      context: ./tools/converters
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${CONVERTERS_PORT:-8082}:8000"
+    environment:
+      - PORT=8000
+      - CONVERTER_API_KEY=${CONVERTER_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  ddicdi:
+    container_name: ${PROFILE_NAME:-croissant-live}-ddicdi
+    profiles:
+      - ${PROFILE_NAME:-croissant-live}
+    image: ddicdi-studio:latest
+    restart: unless-stopped
+    ports:
+      - "${DDI_CDI_PORT:-8083}:8000"
+    environment:
+      - PORT=8000
+      - DDI_API_KEY=${DDI_CDI_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
 

@@ -166,6 +166,8 @@ def print_collections_table(collections: List[Dict[str, Any]], client: Optional[
                 status_str = "[bold green]Analyzed[/bold green]"
             elif c_info and c_info.get("status") == "partial":
                 status_str = "[bold yellow]Partial[/bold yellow]"
+            elif c_info and c_info.get("status") == "no_tabular_files":
+                status_str = "[dim italic]No Tabular[/dim italic]"
             else:
                 status_str = "[dim]Pending[/dim]"
 
@@ -174,15 +176,22 @@ def print_collections_table(collections: List[Dict[str, Any]], client: Optional[
         console.print(table)
         console.print(f"\n[dim]Total collections: {len(collections)} | Endpoint: {client.base_url if client else DEFAULT_SERVER_URL}[/dim]\n")
     else:
-        print(f"\n{'#':>3}  {'Collection ID':<38}  {'Items':<6}  {'Status':<10}  {'Name'}")
+        print(f"\n{'#':>3}  {'Collection ID':<38}  {'Items':<6}  {'Status':<12}  {'Name'}")
         print("-" * 90)
         for idx, col in enumerate(collections, 1):
             cid = col.get("id", "N/A")
             name = col.get("name") or "Untitled"
             items_cnt = len(col.get("items", []))
             c_info = processed_collections.get(cid)
-            status_str = "Analyzed" if (c_info and c_info.get("status") == "success") else "Pending"
-            print(f"{idx:>3}. {cid:<38}  {items_cnt:<6}  {status_str:<10}  {name}")
+            if c_info and c_info.get("status") == "success":
+                status_str = "Analyzed"
+            elif c_info and c_info.get("status") == "partial":
+                status_str = "Partial"
+            elif c_info and c_info.get("status") == "no_tabular_files":
+                status_str = "No Tabular"
+            else:
+                status_str = "Pending"
+            print(f"{idx:>3}. {cid:<38}  {items_cnt:<6}  {status_str:<12}  {name}")
         print(f"\nTotal: {len(collections)} collections.\n")
 
 
@@ -376,7 +385,12 @@ def analyze_collection(client: CDIFClient, cid: str, report_file: str = DEFAULT_
             print(f"Registered variables in Elasticsearch: {var_count}")
 
     # Record completion in log report
-    processed_status = "success" if summary_result["failed"] == 0 else "partial"
+    if summary_result["total_files"] == 0:
+        processed_status = "no_tabular_files"
+    elif summary_result["failed"] == 0 and summary_result["successful"] > 0:
+        processed_status = "success"
+    else:
+        processed_status = "partial"
     processed_cols[cid] = {
         "id": cid,
         "name": col_name,

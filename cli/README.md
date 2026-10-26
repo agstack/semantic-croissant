@@ -102,12 +102,12 @@ python3 cli/cdif_agent.py --all
 ### 4. Custom Backend Server
 If your service runs on a different port or domain (e.g. production host or remote profile):
 ```bash
-python3 cli/cdif_agent.py --server "https://ai.mediaquantum.eu" --list
-python3 cli/cdif_agent.py --server "https://ai.mediaquantum.eu" -c 3b64074d-c75b-4b27-a705-0e5986c48de5
+python3 cli/cdif_agent.py --server "https://ai.cdif4eosc.eu" --list
+python3 cli/cdif_agent.py --server "https://ai.cdif4eosc.eu" -c 3b64074d-c75b-4b27-a705-0e5986c48de5
 ```
 Or configure it globally using the environment variable:
 ```bash
-export CDIF_SERVER_URL="https://ai.mediaquantum.eu"
+export CDIF_SERVER_URL="https://ai.cdif4eosc.eu"
 python3 cli/cdif_agent.py -c 3b64074d-c75b-4b27-a705-0e5986c48de5
 ```
 
@@ -125,3 +125,27 @@ Once the analysis completes, variables can be explored via:
    ```bash
    curl -s "http://127.0.0.1:9222/cdif/_search?size=5" | jq .
    ```
+
+---
+
+## CDIF Synchronization CLI (`cdif-sync.py`)
+
+Synchronizes collections, member dataset documents in S3 MinIO storage / vault, and linked CDIF variables between two MCP endpoints (e.g., `ai.cdif4eosc.eu` and `ai.codata.org`), ensuring both collections metadata, vault documents, and Elasticsearch `cdif` indices match.
+
+### Usage:
+```bash
+# List available collections on the source endpoint
+python3 cli/cdif-sync.py -l ai.cdif4eosc.eu
+
+# Sync all collections, S3 MinIO documents, and CDIF variables from default source to target
+python3 cli/cdif-sync.py ai.cdif4eosc.eu ai.codata.org
+
+# Dry run preview without making changes
+python3 cli/cdif-sync.py ai.cdif4eosc.eu ai.codata.org --dry-run
+
+# Synchronize a specific collection by UUID with custom batch size (default: 100)
+python3 cli/cdif-sync.py ai.cdif4eosc.eu ai.codata.org -c <collectionID> --batch-size 100
+
+# Synchronize collections and CDIF variables while skipping S3 MinIO documents
+python3 cli/cdif-sync.py ai.cdif4eosc.eu ai.codata.org --no-docs
+```
