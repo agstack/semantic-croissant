@@ -39,7 +39,7 @@ All agents acting in this environment SHOULD identify themselves through a **Dec
 | `get_croissant_dataset` | Get full Croissant JSON-LD for a dataset by ID or URL. |
 | `read_croissant_file` | Read the contents of a specific file from a Croissant dataset's distribution. |
 | `elasticsearch_fulltext_search` | Full-text search across all indexed datasets. |
-| `ask_expert` | Query a specific expert index: `croissant`, `dataverse`, `ollama`, `huggingface`, `openml`, `hips`, `honduras`. |
+| `ask_expert` | Query a specific expert index: `sshoc`, `croissant`, `dataverse`, `ollama`, `huggingface`, `openml`, `hips`, `honduras`. |
 
 ### Content Generation & Ingestion
 | Tool | Description |
