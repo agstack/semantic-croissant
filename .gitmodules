@@ -10,3 +10,6 @@
 [submodule "lot"]
 	path = lot
 	url = https://github.com/CA4EOSC/lot
+[submodule "tools/tools/converters"]
+	path = tools/tools/converters
+	url = https://github.com/Cross-Domain-Interoperability-Framework/converters.git
