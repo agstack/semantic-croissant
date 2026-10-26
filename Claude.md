@@ -244,6 +244,7 @@ The system maintains dedicated Elasticsearch indexes that can be queried via the
 
 | Index | Content |
 |---|---|
+| `sshoc` | SSH Open Cloud Marketplace tools and services |
 | `croissant` | Croissant datasets from the QLever store |
 | `dataverse` | Datasets from Dataverse repositories |
 | `ollama` | Ollama model registry metadata |

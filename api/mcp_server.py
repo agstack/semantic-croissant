@@ -5899,6 +5899,32 @@ Please answer the question based ONLY on the context provided above (including t
             
             from starlette.responses import Response
             return Response("Not Found", status_code=404)
+
+        async def view_robots_txt(request):
+            """
+            Serve a friendly robots.txt allowing search crawlers, Claude, and AI assistants.
+            """
+            from starlette.responses import PlainTextResponse
+            robots_content = (
+                "User-agent: *\n"
+                "Allow: /\n"
+                "\n"
+                "User-agent: ClaudeBot\n"
+                "Allow: /\n"
+                "\n"
+                "User-agent: Claude-Web\n"
+                "Allow: /\n"
+                "\n"
+                "User-agent: anthropic-ai\n"
+                "Allow: /\n"
+                "\n"
+                "User-agent: GPTBot\n"
+                "Allow: /\n"
+                "\n"
+                "User-agent: ChatGPT-User\n"
+                "Allow: /\n"
+            )
+            return PlainTextResponse(robots_content, media_type="text/plain; charset=utf-8")
             
         async def export_to_cdif(request):
             """
@@ -5996,7 +6022,14 @@ Please answer the question based ONLY on the context provided above (including t
 
             # Check if requesting client is an AI assistant, crawler or bot that needs lightweight schema
             user_agent = request.headers.get("user-agent", "").lower()
+            accept_header = request.headers.get("accept", "").lower()
             is_llm_or_bot = any(k in user_agent for k in ["claude", "anthropic", "chatgpt", "python-requests", "bot"])
+
+            # Content negotiation: if HTML is specifically preferred over JSON or explicitly requested via format=html
+            explicit_format = request.query_params.get("format", "").lower()
+            wants_html = (explicit_format == "html") or (
+                "text/html" in accept_header and "application/ld+json" not in accept_header and "application/json" not in accept_header
+            )
 
             def prepare_cdif_response(cdif_data):
                 """
@@ -6064,6 +6097,85 @@ Please answer the question based ONLY on the context provided above (including t
 
                 return json.dumps(cdif_data, indent=2).encode("utf-8")
 
+            def build_export_response(content_bytes, out_filename, cache_header="HIT"):
+                """
+                Builds response with content negotiation: returns HTML view when requested by a browser / web reader,
+                or application/ld+json for API / programmatic clients.
+                """
+                if wants_html:
+                    try:
+                        parsed_json = json.loads(content_bytes.decode("utf-8"))
+                        pretty_json = json.dumps(parsed_json, indent=2)
+                        title = parsed_json.get("schema:name") or parsed_json.get("title") or "CDIF Export"
+                    except Exception:
+                        pretty_json = content_bytes.decode("utf-8", errors="replace")
+                        title = "CDIF Export"
+
+                    import html
+                    escaped_json = html.escape(pretty_json)
+                    escaped_title = html.escape(str(title))
+                    raw_dl_url = request.url.include_query_params(format="raw") if "format" not in request.query_params else request.url
+                    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{escaped_title} - CDIF Export</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace; margin: 0; padding: 20px; background: #0f172a; color: #e2e8f0; }}
+        header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 15px; margin-bottom: 15px; flex-wrap: wrap; gap: 10px; }}
+        h1 {{ font-size: 1.15rem; margin: 0; color: #38bdf8; }}
+        .badge {{ background: #164e63; color: #38bdf8; padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; border: 1px solid #0891b2; }}
+        pre {{ background: #1e293b; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 0.82rem; line-height: 1.45; border: 1px solid #334155; color: #cbd5e1; }}
+        a.raw-btn {{ display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: #0284c7; color: white; border-radius: 6px; text-decoration: none; font-size: 0.85rem; font-weight: 500; }}
+        a.raw-btn:hover {{ background: #0369a1; }}
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>{escaped_title}</h1>
+            <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 4px;">
+                <span class="badge">CDIF 1.1 JSON-LD</span> &bull; <span>File: {html.escape(out_filename)}</span>
+            </div>
+        </div>
+        <div>
+            <a href="{html.escape(str(raw_dl_url))}" class="raw-btn">Download Raw JSON-LD</a>
+        </div>
+    </header>
+    <pre><code>{escaped_json}</code></pre>
+</body>
+</html>"""
+                    headers = {
+                        "Access-Control-Allow-Origin": "*",
+                        "X-Cache": cache_header
+                    }
+                    if is_llm_or_bot:
+                        headers["X-Robots-Tag"] = "index, follow"
+                    return Response(
+                        content=html_content.encode("utf-8"),
+                        status_code=200,
+                        media_type="text/html; charset=utf-8",
+                        headers=headers
+                    )
+
+                headers = {
+                    "Access-Control-Allow-Origin": "*",
+                    "X-Cache": cache_header
+                }
+                # When client is an LLM or bot, omit Content-Disposition so crawler reads content directly in body
+                if not is_llm_or_bot:
+                    headers["Content-Disposition"] = f'inline; filename="{out_filename}"'
+                else:
+                    headers["X-Robots-Tag"] = "index, follow"
+
+                return Response(
+                    content=content_bytes,
+                    status_code=200,
+                    media_type="application/ld+json; charset=utf-8",
+                    headers=headers
+                )
+
             
             # Check 1: MinIO vault cache first for instant response
             try:
@@ -6090,16 +6202,7 @@ Please answer the question based ONLY on the context provided above (including t
                             
                             resp_bytes = prepare_cdif_response(cached_json if cached_json is not None else cached_bytes)
                             out_filename = "export_ddi_cdi.jsonld" if is_ddi_cdi else "export_cdif.jsonld"
-                            return Response(
-                                content=resp_bytes,
-                                status_code=200,
-                                media_type="application/ld+json; charset=utf-8",
-                                headers={
-                                    "Content-Disposition": f'inline; filename="{out_filename}"',
-                                    "Access-Control-Allow-Origin": "*",
-                                    "X-Cache": "HIT"
-                                }
-                            )
+                            return build_export_response(resp_bytes, out_filename, cache_header="HIT")
                         except Exception:
                             pass
             except Exception as minio_init_err:
@@ -6139,16 +6242,7 @@ Please answer the question based ONLY on the context provided above (including t
 
                                     resp_bytes = prepare_cdif_response(cached_cdif if cached_cdif is not None else cached_bytes)
                                     out_filename = "export_ddi_cdi.jsonld" if is_ddi_cdi else "export_cdif.jsonld"
-                                    return Response(
-                                        content=resp_bytes,
-                                        status_code=200,
-                                        media_type="application/ld+json; charset=utf-8",
-                                        headers={
-                                            "Content-Disposition": f'inline; filename="{out_filename}"',
-                                            "Access-Control-Allow-Origin": "*",
-                                            "X-Cache": "HIT-ELASTICSEARCH"
-                                        }
-                                    )
+                                    return build_export_response(resp_bytes, out_filename, cache_header="HIT-ELASTICSEARCH")
                         except Exception:
                             pass
             except Exception as es_cache_err:
@@ -6264,16 +6358,7 @@ Please answer the question based ONLY on the context provided above (including t
                                 except Exception:
                                     pass
 
-                                return Response(
-                                    content=resp_bytes,
-                                    status_code=200,
-                                    media_type="application/ld+json; charset=utf-8",
-                                    headers={
-                                        "Content-Disposition": 'inline; filename="export_cdif.jsonld"',
-                                        "Access-Control-Allow-Origin": "*",
-                                        "X-Cache": "MISS"
-                                    }
-                                )
+                                return build_export_response(resp_bytes, "export_cdif.jsonld", cache_header="MISS")
                 except Exception as cdif_conv_err:
                     print(f"Error in CDIF converter flow: {cdif_conv_err}")
 
@@ -7154,16 +7239,7 @@ Please answer the question based ONLY on the context provided above (including t
                             pass
 
                         final_resp_bytes = prepare_cdif_response(enriched_json if enriched_json is not None else resp_content)
-                        return Response(
-                            content=final_resp_bytes,
-                            status_code=200,
-                            media_type="application/ld+json; charset=utf-8",
-                            headers={
-                                "Content-Disposition": f'inline; filename="{base_cdif_filename}"',
-                                "Access-Control-Allow-Origin": "*",
-                                "X-Cache": "MISS"
-                            }
-                        )
+                        return build_export_response(final_resp_bytes, base_cdif_filename, cache_header="MISS")
                     else:
                         return Response(
                             content=conv_resp.content,
@@ -11027,6 +11103,7 @@ Output a JSON object with:
                 Route("/api/collections/{id}/remove", endpoint=api_collections_remove_item, methods=["POST"]),
 
                 Route("/api/collections/{id}", endpoint=api_collections_delete, methods=["DELETE"]),
+                Route("/robots.txt", endpoint=view_robots_txt, methods=["GET"]),
                 Route("/export", endpoint=export_to_cdif, methods=["GET", "POST"]),
                 Route("/api/export", endpoint=export_to_cdif, methods=["GET", "POST"]),
                 Route("/vault/doc/{es_id}", endpoint=vault_es_doc_html),
