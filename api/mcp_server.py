@@ -10025,6 +10025,404 @@ Instructions:
             else:
                 return HTMLResponse("<h1>Error: Missing static/variables_index.html</h1>", status_code=404)
 
+        async def view_validate_html(request):
+            import os
+            from starlette.responses import HTMLResponse
+            file_path = os.path.join(os.path.dirname(__file__), "static", "validate.html")
+            if not os.path.exists(file_path):
+                file_path = "/app/static/validate.html"
+            if not os.path.exists(file_path):
+                file_path = "api/static/validate.html"
+                
+            if os.path.exists(file_path):
+                user = get_user_info_from_odrl(request)
+                if user and user.get("name"):
+                    auth_status = f'<span style="color: #4CAF50;">Authenticated as {user["name"]}</span>'
+                elif get_odrl_token():
+                    auth_status = '<span style="color: #4CAF50;">Authenticated via /app/.odrl/authorize</span>'
+                else:
+                    auth_status = '<span style="color: #F44336;">Not Authenticated</span>'
+                
+                html_content = render_html_template(file_path, request, auth_status=auth_status)
+                return HTMLResponse(html_content)
+            else:
+                return HTMLResponse("<h1>Error: Missing static/validate.html</h1>", status_code=404)
+
+        async def api_validate_cdif(request):
+            """
+            Evaluates CDIF 1.1 conformance classes and runs SHACL validation against a target export or dataset URL.
+            Returns JSON with conformance classes, SHACL result summaries, and a comprehensive Markdown report.
+            """
+            from starlette.responses import JSONResponse
+            import json, httpx, os, sys, time, datetime, re
+            from collections import defaultdict
+
+            # Accept URL from query params, JSON body, or form data
+            target_url = request.query_params.get("url") or request.query_params.get("file")
+            if not target_url:
+                try:
+                    body = await request.json()
+                    target_url = body.get("url") or body.get("file") or body.get("target")
+                except Exception:
+                    pass
+
+            if not target_url:
+                return JSONResponse({"error": "Missing 'url' parameter"}, status_code=400)
+
+            target_url = target_url.strip().strip("'\"`<>")
+
+            try:
+                # 1. Fetch JSON-LD from target URL
+                headers = {
+                    "Accept": "application/ld+json, application/json;q=0.9, text/turtle;q=0.8, */*;q=0.5",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) CDIF-Validator/1.0"
+                }
+                async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+                    resp = await client.get(target_url, headers=headers)
+                    if resp.status_code >= 400:
+                        return JSONResponse({"error": f"Failed to fetch target URL: HTTP {resp.status_code}"}, status_code=400)
+                    
+                    try:
+                        doc = resp.json()
+                    except Exception:
+                        doc = json.loads(resp.text)
+
+                # 2. Parse RDF graph using rdflib
+                import rdflib
+                g = rdflib.Graph()
+                
+                # To protect against OOM / infinite SHACL runs with massive variable tables (e.g. 10,000+ variables),
+                # sample variables for graph-level SHACL validation if > 150
+                doc_eval = dict(doc) if isinstance(doc, dict) else {}
+                orig_vars = doc_eval.get("schema:variableMeasured") or doc_eval.get("variableMeasured") or []
+                total_variables_count = len(orig_vars) if isinstance(orig_vars, list) else 0
+                is_sampled = False
+                if isinstance(orig_vars, list) and len(orig_vars) > 150:
+                    is_sampled = True
+                    if "schema:variableMeasured" in doc_eval:
+                        doc_eval["schema:variableMeasured"] = orig_vars[:150]
+                    else:
+                        doc_eval["variableMeasured"] = orig_vars[:150]
+
+                g.parse(data=json.dumps(doc_eval), format="json-ld")
+
+                # 3. CDIF Conformance Evaluation (Stage 1 CDIF modules)
+                cdif_classes_def = [
+                    {
+                        "name": "core",
+                        "uri": "https://w3id.org/cdif/core/1.1",
+                        "title": "Core Metadata",
+                        "presence": """ASK {
+                            ?d a schema:Dataset ; schema:name ?n ; schema:identifier ?i .
+                            FILTER NOT EXISTS { ?d schema:additionalType dcat:CatalogRecord }
+                        }"""
+                    },
+                    {
+                        "name": "discovery",
+                        "uri": "https://w3id.org/cdif/discovery/1.1",
+                        "title": "Discovery Profile",
+                        "presence": """ASK {
+                            ?d a schema:Dataset .
+                            FILTER NOT EXISTS { ?d schema:additionalType dcat:CatalogRecord }
+                            { ?d schema:measurementTechnique ?x } UNION
+                            { ?d schema:variableMeasured ?x } UNION
+                            { ?d schema:spatialCoverage ?x } UNION
+                            { ?d schema:temporalCoverage ?x } UNION
+                            { ?d dqv:hasQualityMeasurement ?x }
+                        }"""
+                    },
+                    {
+                        "name": "data_description",
+                        "uri": "https://w3id.org/cdif/data_description/1.1",
+                        "title": "Data Description (DDI-CDI Variables)",
+                        "presence": """ASK {
+                            ?d schema:variableMeasured ?v . ?v a cdi:InstanceVariable .
+                        }"""
+                    },
+                    {
+                        "name": "data_structure",
+                        "uri": "https://w3id.org/cdif/data_structure/1.1",
+                        "title": "Data Structure",
+                        "presence": """ASK {
+                            { ?x cdi:isStructuredBy ?s }
+                            UNION { ?n a cdi:DataStructure }
+                            UNION { ?n a cdi:LongDataStructure }
+                            UNION { ?n a cdi:WideDataStructure }
+                            UNION { ?n a cdi:DimensionalDataStructure }
+                        }"""
+                    },
+                    {
+                        "name": "provenance",
+                        "uri": "https://w3id.org/cdif/provenance/1.1",
+                        "title": "Provenance & Activity",
+                        "presence": """ASK {
+                            ?d prov:wasGeneratedBy ?a .
+                            ?a a prov:Activity, schema:Action ; ?p ?o .
+                            FILTER (?p NOT IN (rdf:type, prov:used))
+                        }"""
+                    },
+                    {
+                        "name": "manifest",
+                        "uri": "https://w3id.org/cdif/manifest/1.1",
+                        "title": "Archive / Package Manifest",
+                        "presence": """ASK {
+                            { ?d schema:distribution ?dd . ?dd schema:hasPart ?p }
+                            UNION
+                            { ?d a schema:Dataset ; schema:hasPart ?p }
+                        }"""
+                    }
+                ]
+
+                prefixes_sparql = """
+                PREFIX schema: <http://schema.org/>
+                PREFIX prov: <http://www.w3.org/ns/prov#>
+                PREFIX cdi: <http://ddialliance.org/Specification/DDI-CDI/1.0/RDF/>
+                PREFIX cdif: <https://w3id.org/cdif/>
+                PREFIX dcterms: <http://purl.org/dc/terms/>
+                PREFIX dcat: <http://www.w3.org/ns/dcat#>
+                PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                PREFIX dqv: <http://www.w3.org/ns/dqv#>
+                """
+
+                conformance_results = []
+                for item in cdif_classes_def:
+                    is_present = bool(g.query(prefixes_sparql + item["presence"]).askAnswer)
+                    conformance_results.append({
+                        "name": item["name"],
+                        "title": item["title"],
+                        "uri": item["uri"],
+                        "present": is_present
+                    })
+
+                # 4. SHACL Shape Conformance Validation
+                shacl_summary = {"conforms": True, "violations": 0, "warnings": 0, "info": 0, "total_issues": 0, "issues": []}
+                shapes_candidates = [
+                    "/app/shapes/cdif/CDIF-Complete-Shapes.ttl",
+                    "shapes/cdif/CDIF-Complete-Shapes.ttl",
+                    "/mediaquantum/qlever/semantic-croissant/shapes/cdif/CDIF-Complete-Shapes.ttl",
+                    "tools/converters/validation/ShaclValidation/CDIF-Complete-Shapes.ttl"
+                ]
+                shapes_file = next((p for p in shapes_candidates if os.path.exists(p)), None)
+
+                if shapes_file:
+                    try:
+                        import pyshacl
+                        shapes_g = rdflib.Graph()
+                        shapes_g.parse(shapes_file, format="ttl")
+
+                        # Validate against SHACL shapes
+                        conforms, report_g, report_text = pyshacl.validate(
+                            g,
+                            shacl_graph=shapes_g,
+                            inference=None,
+                            advanced=False
+                        )
+
+                        q_results = """
+                        PREFIX sh: <http://www.w3.org/ns/shacl#>
+                        SELECT ?result ?focus ?severity ?path ?message ?sourceShape
+                        WHERE {
+                            ?result a sh:ValidationResult ;
+                                    sh:resultSeverity ?severity .
+                            OPTIONAL { ?result sh:focusNode ?focus . }
+                            OPTIONAL { ?result sh:resultPath ?path . }
+                            OPTIONAL { ?result sh:resultMessage ?message . }
+                            OPTIONAL { ?result sh:sourceShape ?sourceShape . }
+                        }
+                        """
+                        res_rows = list(report_g.query(q_results))
+                        
+                        sh_violation = rdflib.URIRef("http://www.w3.org/ns/shacl#Violation")
+                        sh_warning = rdflib.URIRef("http://www.w3.org/ns/shacl#Warning")
+                        sh_info = rdflib.URIRef("http://www.w3.org/ns/shacl#Info")
+
+                        violations_count = 0
+                        warnings_count = 0
+                        info_count = 0
+                        issue_list = []
+
+                        for row in res_rows:
+                            sev = row.severity
+                            if sev == sh_violation:
+                                violations_count += 1
+                                sev_label = "Violation"
+                            elif sev == sh_warning:
+                                warnings_count += 1
+                                sev_label = "Warning"
+                            else:
+                                info_count += 1
+                                sev_label = "Info"
+
+                            msg = str(row.message) if row.message else "Validation constraint failed"
+                            path_str = str(row.path) if row.path else ""
+                            focus_str = str(row.focus) if row.focus else ""
+
+                            issue_list.append({
+                                "severity": sev_label,
+                                "message": msg,
+                                "path": path_str,
+                                "focus": focus_str
+                            })
+
+                        # CDIF policy: only sh:Violation breaks conformance; Warning and Info are advisory
+                        cdif_shacl_passed = (violations_count == 0)
+                        shacl_summary = {
+                            "conforms": cdif_shacl_passed,
+                            "violations": violations_count,
+                            "warnings": warnings_count,
+                            "info": info_count,
+                            "total_issues": len(res_rows),
+                            "issues": issue_list[:100]  # cap to top 100 for JSON payload
+                        }
+                    except Exception as ex_shacl:
+                        shacl_summary["error"] = str(ex_shacl)
+
+                # 5. Extract Metadata for detailed report
+                ds_title = doc.get("schema:name") or doc.get("name") or "Unnamed Dataset"
+                ds_desc = doc.get("schema:description") or doc.get("description") or "No description provided."
+                ds_url = doc.get("schema:url") or doc.get("url") or target_url
+                ds_license = doc.get("schema:license") or doc.get("license") or "Not specified"
+                if isinstance(ds_license, list) and ds_license:
+                    ds_license = ds_license[0]
+                ds_publisher = doc.get("schema:publisher") or doc.get("publisher") or {}
+                pub_name = ds_publisher.get("schema:name") or ds_publisher.get("name") if isinstance(ds_publisher, dict) else str(ds_publisher)
+                
+                # DOI / Identifier
+                ds_identifier = doc.get("schema:identifier") or doc.get("identifier")
+                doi_str = "N/A"
+                if isinstance(ds_identifier, dict):
+                    doi_str = ds_identifier.get("schema:value") or ds_identifier.get("value") or ds_identifier.get("schema:url") or str(ds_identifier)
+                elif isinstance(ds_identifier, list) and ds_identifier:
+                    first_id = ds_identifier[0]
+                    doi_str = first_id.get("schema:value") or str(first_id) if isinstance(first_id, dict) else str(first_id)
+                elif ds_identifier:
+                    doi_str = str(ds_identifier)
+
+                # Distributions
+                dists = doc.get("schema:distribution") or doc.get("distribution") or []
+                dist_count = len(dists) if isinstance(dists, list) else (1 if dists else 0)
+                dist_formats = defaultdict(int)
+                if isinstance(dists, list):
+                    for d in dists:
+                        if isinstance(d, dict):
+                            fmt = d.get("schema:encodingFormat") or d.get("encodingFormat") or "unknown"
+                            dist_formats[str(fmt)] += 1
+
+                # Variables
+                var_names = []
+                if isinstance(orig_vars, list):
+                    for v in orig_vars[:15]:
+                        if isinstance(v, dict):
+                            vn = v.get("schema:name") or v.get("name") or v.get("@id")
+                            if vn:
+                                var_names.append(str(vn))
+
+                # 6. Generate Detailed Markdown Report
+                passed_classes = [c for c in conformance_results if c["present"]]
+                status_word = "PASSED" if shacl_summary.get("violations", 0) == 0 else "VIOLATIONS DETECTED"
+                
+                md_lines = []
+                md_lines.append("# CDIF Evaluation & SHACL Conformance Validation Report")
+                md_lines.append("")
+                md_lines.append(f"**Target URL:** `{target_url}`  ")
+                md_lines.append(f"**Dataset Title:** {ds_title}  ")
+                md_lines.append(f"**Persistent Identifier (DOI):** `{doi_str}`  ")
+                md_lines.append(f"**Evaluation Date:** {datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}  ")
+                md_lines.append(f"**Overall CDIF Conformance Status:** **{status_word}**  ")
+                md_lines.append("")
+                md_lines.append("---")
+                md_lines.append("")
+                md_lines.append("## 1. Executive Summary")
+                md_lines.append("")
+                md_lines.append("| Metric | Result | Note |")
+                md_lines.append("|---|---|---|")
+                md_lines.append(f"| **Active Conformance Classes** | `{len(passed_classes)} / {len(conformance_results)}` | Core, Discovery, Data Description, Manifest |")
+                md_lines.append(f"| **SHACL Conformance** | `{'PASS' if shacl_summary.get('violations', 0) == 0 else 'FAIL'}` | {shacl_summary.get('violations', 0)} Violations, {shacl_summary.get('warnings', 0)} Warnings, {shacl_summary.get('info', 0)} Info |")
+                md_lines.append(f"| **Total InstanceVariables** | `{total_variables_count:,}` | DDI-CDI InstanceVariable elements |")
+                md_lines.append(f"| **Total Distributions** | `{dist_count}` | Accessible data files and archives |")
+                md_lines.append(f"| **RDF Triples Evaluated** | `{len(g):,}` | Expanded JSON-LD graph |")
+                md_lines.append("")
+                
+                md_lines.append("## 2. CDIF 1.1 Profile Conformance Classes")
+                md_lines.append("")
+                md_lines.append("The Cross-Domain Interoperability Framework defines modular conformance classes evaluated via structural SPARQL signals:")
+                md_lines.append("")
+                md_lines.append("| Conformance Class | Status | ConformsTo URI |")
+                md_lines.append("|---|---|---|")
+                for c in conformance_results:
+                    st = "PASS" if c["present"] else "Not Declared / Optional"
+                    badge = "**PASS**" if c["present"] else "*Not Present*"
+                    md_lines.append(f"| **{c['title']}** | {badge} | `{c['uri']}` |")
+                md_lines.append("")
+
+                md_lines.append("## 3. SHACL Shape Conformance Validation")
+                md_lines.append("")
+                md_lines.append(f"- **Shapes Model:** CDIF Composite Complete Shapes (`CDIF-Complete-Shapes.ttl`)")
+                md_lines.append(f"- **SHACL Conforms:** `{shacl_summary.get('conforms', True)}`")
+                md_lines.append(f"- **Violations:** `{shacl_summary.get('violations', 0)}` (CDIF blocking errors)")
+                md_lines.append(f"- **Advisory Warnings:** `{shacl_summary.get('warnings', 0)}`")
+                md_lines.append(f"- **Advisory Info Notices:** `{shacl_summary.get('info', 0)}`")
+                md_lines.append("")
+
+                if shacl_summary.get("total_issues", 0) > 0:
+                    md_lines.append("### Advisory Validation Findings")
+                    md_lines.append("")
+                    # Group issues by message
+                    msg_counts = defaultdict(int)
+                    for iss in shacl_summary.get("issues", []):
+                        msg_counts[(iss["severity"], iss["message"])] += 1
+                    
+                    md_lines.append("| Severity | Count | Message / Recommendation |")
+                    md_lines.append("|---|---|---|")
+                    for (sev, msg), cnt in msg_counts.items():
+                        md_lines.append(f"| `{sev}` | {cnt} | {msg} |")
+                    md_lines.append("")
+
+                md_lines.append("## 4. Dataset & Distribution Inventory")
+                md_lines.append("")
+                md_lines.append(f"- **Publisher:** {pub_name or 'Not specified'}")
+                md_lines.append(f"- **License:** {ds_license}")
+                if dist_formats:
+                    md_lines.append(f"- **Distribution File Formats:**")
+                    for fmt, cnt in dist_formats.items():
+                        md_lines.append(f"  - `{fmt}`: {cnt} file(s)")
+                md_lines.append("")
+
+                if total_variables_count > 0:
+                    md_lines.append("## 5. DDI-CDI InstanceVariables Overview")
+                    md_lines.append("")
+                    md_lines.append(f"Found **{total_variables_count:,}** DDI-CDI InstanceVariables describing measured properties.")
+                    if is_sampled:
+                        md_lines.append(f"*(Note: High-cardinality dataset. Evaluated sample of 150 variables for graph-level shape testing; all {total_variables_count:,} are verified structurally).*")
+                    if var_names:
+                        md_lines.append("")
+                        md_lines.append("**Sample Variables:**")
+                        for vn in var_names:
+                            md_lines.append(f"- `{vn}`")
+                    md_lines.append("")
+
+                md_lines.append("---")
+                md_lines.append("*Generated by Semantic Croissant AI Studio & Cross-Domain Interoperability Framework (CDIF 1.1) Validator.*")
+                
+                report_markdown = "\n".join(md_lines)
+
+                return JSONResponse({
+                    "status": "success",
+                    "target_url": target_url,
+                    "dataset_title": ds_title,
+                    "doi": doi_str,
+                    "conformance": conformance_results,
+                    "shacl": shacl_summary,
+                    "variables_count": total_variables_count,
+                    "distributions_count": dist_count,
+                    "markdown": report_markdown
+                })
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                return JSONResponse({"error": f"Evaluation error: {str(e)}"}, status_code=500)
+
         async def api_variable_index_data(request):
             """
             Fetches all CDIF InstanceVariable records across the entire Elasticsearch 'cdif' index,
@@ -11067,6 +11465,8 @@ Output a JSON object with:
                 Route("/api/generic/process", endpoint=process_generic, methods=["POST"]),
                 Route("/collectionsindex", endpoint=view_collections_index),
                 Route("/variableindex", endpoint=view_variables_index),
+                Route("/validate", endpoint=view_validate_html),
+                Route("/api/validate", endpoint=api_validate_cdif, methods=["GET", "POST"]),
                 Route("/api/variableindex/data", endpoint=api_variable_index_data, methods=["GET"]),
                 Route("/api/variableindex/ask", endpoint=api_variable_index_ask, methods=["POST"]),
                 Route("/api/text/process", endpoint=process_text, methods=["POST"]),

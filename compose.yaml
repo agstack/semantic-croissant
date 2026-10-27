@@ -99,6 +99,7 @@ services:
       - ./api/static/collection_viewer.html:/app/static/collection_viewer.html
       - ./api/static/groups_index.html:/app/static/groups_index.html
       - ./api/static/variables_index.html:/app/static/variables_index.html
+      - ./api/static/validate.html:/app/static/validate.html
       - ./api/static/profile.html:/app/static/profile.html
       - ./credentials.json:/app/credentials.json:ro
       - ./nodes.conf:/app/nodes.conf:ro
@@ -138,6 +139,7 @@ services:
       - ./api/static/collection_viewer.html:/app/static/collection_viewer.html
       - ./api/static/groups_index.html:/app/static/groups_index.html
       - ./api/static/variables_index.html:/app/static/variables_index.html
+      - ./api/static/validate.html:/app/static/validate.html
       - ./api/static/profile.html:/app/static/profile.html
       - ./credentials.json:/app/credentials.json:ro
       - ./nodes.conf:/app/nodes.conf:ro

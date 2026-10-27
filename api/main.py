@@ -1871,3 +1871,42 @@ async def view_variables_index(request: Request):
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/validate")
+async def view_validate(request: Request):
+    import httpx
+    from fastapi import Response, HTTPException
+    
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(f"http://mcp:7070/validate", headers=headers, params=dict(request.query_params))
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "text/html"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+@app.api_route("/api/validate", methods=["GET", "POST"])
+async def api_validate_proxy(request: Request):
+    import httpx
+    from fastapi import Response, HTTPException
+    
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    
+    body = await request.body()
+    
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        try:
+            resp = await client.request(
+                request.method,
+                f"http://mcp:7070/api/validate",
+                headers=headers,
+                params=dict(request.query_params),
+                content=body
+            )
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+
