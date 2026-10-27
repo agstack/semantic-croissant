@@ -1860,12 +1860,21 @@
                     body: JSON.stringify({query: query})
                 });
 
-                if (!res.ok) {
-                    throw new Error(`Server returned status ${res.status}`);
+                const rawText = await res.text();
+                let data = null;
+                try {
+                    data = JSON.parse(rawText);
+                } catch (jsonErr) {
+                    throw new Error(!res.ok 
+                        ? `Server returned HTTP ${res.status}: ${rawText.substring(0, 300)}` 
+                        : `Unexpected non-JSON response from server: ${rawText.substring(0, 300)}`);
                 }
 
-                const data = await res.json();
-                const answerText = data.answer || 'No response returned from the model.';
+                if (!res.ok) {
+                    throw new Error(data && (data.error || data.detail || data.message) ? (data.error || data.detail || data.message) : `Server error (${res.status})`);
+                }
+
+                const answerText = (data && data.answer) || 'No response returned from the model.';
                 lastVarQaRawAnswer = answerText;
 
                 if (contentBox) {
@@ -3521,14 +3530,28 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({query: queryInput})
                 });
-                const data = await res.json();
-                const answerText = data.answer || '';
+
+                const rawText = await res.text();
+                let data = null;
+                try {
+                    data = JSON.parse(rawText);
+                } catch (jsonErr) {
+                    throw new Error(!res.ok 
+                        ? `Server returned HTTP ${res.status}: ${rawText.substring(0, 300)}` 
+                        : `Unexpected non-JSON response from server: ${rawText.substring(0, 300)}`);
+                }
+
+                if (!res.ok) {
+                    throw new Error(data && (data.error || data.detail || data.message) ? (data.error || data.detail || data.message) : `Server error (${res.status})`);
+                }
+
+                const answerText = (data && data.answer) || '';
                 lastGenQaRawAnswer = answerText;
                 
-                if (data.action === "expert_task") {
+                if (data && data.action === "expert_task") {
                     document.getElementById('qa-result').style.display = 'none';
                     openExpertModal(data.subcollection_name, data.message);
-                } else if (data.action === "subcollections_created") {
+                } else if (data && data.action === "subcollections_created") {
                     if (typeof marked !== 'undefined') {
                         qaContentEl.innerHTML = marked.parse(answerText);
                     } else {
@@ -3542,7 +3565,7 @@
                     qaContentEl.innerText = answerText;
                 }
             } catch (e) {
-                qaContentEl.innerText = 'Error: ' + e;
+                qaContentEl.innerText = 'Error: ' + (e.message || e);
             }
             
             btn.disabled = false;

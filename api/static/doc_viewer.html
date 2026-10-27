@@ -364,6 +364,167 @@
         .dist-tools-item svg {
             flex-shrink: 0;
         }
+
+        /* Clickable file link style */
+        .dist-file-link {
+            font-weight: 600;
+            color: var(--accent-color, #0066cc);
+            text-decoration: underline;
+            text-underline-offset: 3px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: color 0.15s ease, opacity 0.15s ease;
+        }
+        .dist-file-link:hover {
+            color: #2563eb;
+            opacity: 0.85;
+        }
+        .dist-file-link svg {
+            flex-shrink: 0;
+        }
+
+        /* Vault File Preview Modal */
+        #vault-file-viewer-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.65);
+            backdrop-filter: blur(4px);
+            z-index: 99999;
+            align-items: center;
+            justify-content: center;
+            box-sizing: border-box;
+            padding: 20px;
+        }
+        #vault-file-viewer-container {
+            background: var(--bg-color, #ffffff);
+            color: var(--text-color, #1e293b);
+            border: 1px solid var(--border-color, #e2e8f0);
+            border-radius: 12px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            width: 92%;
+            max-width: 1100px;
+            height: 88vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+        }
+        .vault-fv-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 20px;
+            background: var(--header-bg, #f8fafc);
+            border-bottom: 1px solid var(--border-color, #e2e8f0);
+            flex-shrink: 0;
+            gap: 15px;
+        }
+        .vault-fv-title-wrap {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+        .vault-fv-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: var(--accent-color, #0066cc);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin: 0;
+        }
+        .vault-fv-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+        .vault-fv-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            font-size: 0.82rem;
+            font-weight: 500;
+            border-radius: 6px;
+            border: 1px solid var(--border-color, #cbd5e1);
+            background: var(--bg-color, #fff);
+            color: var(--text-color, #334155);
+            cursor: pointer;
+            text-decoration: none !important;
+            transition: all 0.15s ease;
+        }
+        .vault-fv-btn:hover {
+            background: var(--header-bg, #f1f5f9);
+            border-color: #94a3b8;
+        }
+        .vault-fv-close {
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-color, #64748b);
+            font-size: 1.2rem;
+            line-height: 1;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+        .vault-fv-close:hover {
+            background: #fee2e2;
+            color: #ef4444;
+        }
+        .vault-fv-body {
+            flex: 1;
+            overflow: auto;
+            padding: 20px;
+            background: var(--bg-color, #ffffff);
+            position: relative;
+        }
+        .vault-fv-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+        .vault-fv-table th {
+            position: sticky;
+            top: 0;
+            background: var(--header-bg, #f1f5f9);
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 2px solid var(--border-color, #cbd5e1);
+            z-index: 2;
+        }
+        .vault-fv-table td {
+            padding: 6px 12px;
+            border-bottom: 1px solid var(--border-color, #e2e8f0);
+            white-space: nowrap;
+        }
+        .vault-fv-table tr:hover {
+            background: rgba(0, 0, 0, 0.02);
+        }
+        .vault-fv-code {
+            margin: 0;
+            padding: 16px;
+            border-radius: 6px;
+            background: var(--header-bg, #f8fafc);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+            border: 1px solid var(--border-color, #e2e8f0);
+        }
     </style>
 </head>
 <body>
@@ -404,6 +565,33 @@
     </div>
 
 
+    <!-- Vault File Viewer Modal -->
+    <div id="vault-file-viewer-modal" onclick="if(event.target === this) closeVaultFileViewer();">
+        <div id="vault-file-viewer-container">
+            <div class="vault-fv-header">
+                <div class="vault-fv-title-wrap">
+                    <span style="font-size: 1.25rem;">📄</span>
+                    <h3 id="vault-fv-title" class="vault-fv-title">File Preview</h3>
+                    <span id="vault-fv-badge" class="dist-badge-format">format</span>
+                </div>
+                <div class="vault-fv-actions">
+                    <a id="vault-fv-ext-link" href="#" target="_blank" class="vault-fv-btn" title="Open in new tab">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                        <span>Open Raw</span>
+                    </a>
+                    <a id="vault-fv-dl-link" href="#" download class="vault-fv-btn" title="Download File">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        <span>Download</span>
+                    </a>
+                    <button class="vault-fv-close" onclick="closeVaultFileViewer()" title="Close Viewer">&times;</button>
+                </div>
+            </div>
+            <div id="vault-fv-body" class="vault-fv-body">
+                <!-- File content rendered dynamically -->
+            </div>
+        </div>
+    </div>
+    
     <div id="share-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; justify-content:center; align-items:center;">
         <div style="background:var(--bg-color); padding:30px; border-radius:8px; border:1px solid var(--border-color); max-width:500px; width:90%; color:var(--text-color);">
             <h2 style="margin-top:0;">Open with External AI</h2>
@@ -1212,14 +1400,19 @@
                     let html = `<div style="font-family: var(--font-family, sans-serif); color: var(--text-color);">`;
                     
                     // Source banner linking extracted Markdown
-                    let sourceMdUrl = `/vault/doc/raw/${docId}`;
+                    let sourceMdUrl = `/vault/doc/${docId}.md`;
                     if (data.isBasedOn) {
                         const basedList = Array.isArray(data.isBasedOn) ? data.isBasedOn : [data.isBasedOn];
                         for (const b of basedList) {
                             const bUrl = typeof b === 'string' ? b : (b.contentUrl || b.url || b['@id'] || '');
-                            if (bUrl && (bUrl.endsWith('.md') || bUrl.includes('/vault/'))) {
-                                sourceMdUrl = bUrl;
-                                break;
+                            if (bUrl && bUrl.endsWith('.md')) {
+                                const cleanUrl = bUrl.split('?')[0].split('#')[0];
+                                const parts = cleanUrl.split('/');
+                                const filePart = parts.pop() || parts.pop();
+                                if (filePart) {
+                                    sourceMdUrl = `/vault/doc/${filePart}`;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -1230,7 +1423,7 @@
                             <span><strong>Source Document:</strong> Extracted markdown text is available for this Croissant dataset.</span>
                         </div>
                         <div style="display: flex; gap: 8px;">
-                            <a href="${sourceMdUrl}" target="_blank" style="background: #fff; border: 1px solid var(--border-color); color: var(--accent-color); padding: 5px 12px; border-radius: 4px; text-decoration: none; font-size: 0.85rem; font-weight: 600; display: inline-flex; align-items: center; gap: 5px;">
+                            <a href="${sourceMdUrl}" style="background: #fff; border: 1px solid var(--border-color); color: var(--accent-color); padding: 5px 12px; border-radius: 4px; text-decoration: none; font-size: 0.85rem; font-weight: 600; display: inline-flex; align-items: center; gap: 5px;">
                                 📝 View Extracted Markdown
                             </a>
                         </div>
@@ -1333,8 +1526,26 @@
                                     </div>
                                 </div>`;
                             }
+                            const safeName = name.replace(/"/g, '&quot;');
+                            const safeUrl = (d.contentUrl || '').replace(/"/g, '&quot;');
+                            const safeFmt = (d.encodingFormat || '').replace(/"/g, '&quot;');
+                            // Resolve target URL in Vault (e.g. /vault/doc/${docId}.md)
+                            let vaultFileDocUrl = `/vault/doc/${docId}.md`;
+                            if (safeUrl.endsWith('.md')) {
+                                const cleanUrl = safeUrl.split('?')[0].split('#')[0];
+                                const parts = cleanUrl.split('/');
+                                const filePart = parts.pop() || parts.pop();
+                                if (filePart) vaultFileDocUrl = `/vault/doc/${filePart}`;
+                            } else if (name.endsWith('.md')) {
+                                vaultFileDocUrl = `/vault/doc/${name}`;
+                            }
+                            const fileLinkHtml = `<a href="${vaultFileDocUrl}" class="dist-file-link" title="Open ${safeName} in Vault">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                                <span>${name}</span>
+                            </a>`;
+
                             html += `<tr>
-                                <td style="font-weight: 600; color: var(--accent-color);">${name}</td>
+                                <td>${fileLinkHtml}</td>
                                 <td style="color: #4b5563; font-size: 0.85rem;">${title}</td>
                                 <td>${fmt}</td>
                                 <td>${size}</td>
@@ -1496,30 +1707,55 @@
                 }
 
                 // Check for companion Croissant JSON-LD or raw JSON
+                const isExplicitMd = window.location.pathname.endsWith('.md');
                 let isCroissantRendered = false;
                 try {
                     const parsedJson = JSON.parse(markdown);
                     markdown = renderJsonLd(parsedJson);
                     isCroissantRendered = true;
                 } catch (e) {
-                    // If raw content is Markdown, check if a generated Croissant JSON-LD exists for this document
-                    try {
-                        const jsonldRes = await fetch(`/vault/${docId}.jsonld`);
-                        if (jsonldRes.ok) {
-                            const croissantJson = await jsonldRes.json();
-                            if (croissantJson && (croissantJson['@context'] || croissantJson['@type'] || croissantJson.name)) {
-                                markdown = renderJsonLd(croissantJson);
-                                isCroissantRendered = true;
+                    // Only auto-render as Croissant if user didn't explicitly request the .md document
+                    if (!isExplicitMd) {
+                        try {
+                            const jsonldRes = await fetch(`/vault/${docId}.jsonld`);
+                            if (jsonldRes.ok) {
+                                const croissantJson = await jsonldRes.json();
+                                if (croissantJson && (croissantJson['@context'] || croissantJson['@type'] || croissantJson.name)) {
+                                    markdown = renderJsonLd(croissantJson);
+                                    isCroissantRendered = true;
+                                }
                             }
+                        } catch(errJsonld) {
+                            // ignore and proceed with markdown
                         }
-                    } catch(errJsonld) {
-                        // ignore and proceed with markdown
                     }
                     if (!isCroissantRendered) {
+                        // Check if a companion Croissant dataset exists to show a linking banner
+                        let croissantBanner = '';
+                        try {
+                            const checkCroissant = await fetch(`/vault/${docId}.jsonld`);
+                            if (checkCroissant.ok) {
+                                croissantBanner = `<div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 10px 16px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                                    <div style="display: flex; align-items: center; gap: 8px; font-size: 0.95rem; color: #1e3a8a;">
+                                        <span style="font-size: 1.2rem;">🥐</span>
+                                        <span><strong>Croissant Dataset:</strong> A structured Croissant specification is available for this document.</span>
+                                    </div>
+                                    <div>
+                                        <a href="/vault/doc/${docId}" style="background: #2563eb; color: #fff; padding: 6px 14px; border-radius: 4px; text-decoration: none; font-size: 0.85rem; font-weight: 600; display: inline-flex; align-items: center; gap: 5px;">
+                                            🥐 View Croissant Dataset
+                                        </a>
+                                    </div>
+                                </div>\n\n`;
+                            }
+                        } catch(e) {}
+
                         // Not JSON, strip internal metadata rows if present in markdown table
                         markdown = markdown.replace(/\|\s*\*\*_(?:source_url|markdown_text|full_text)\*\*\s*\|[^\n]*\n?/g, '');
                         // Transform legacy Files & Distributions bullet list into a clean table
                         markdown = transformDistributionsToTable(markdown);
+                        if (croissantBanner) {
+                            markdown = croissantBanner + markdown;
+                        }
                     }
                 }
                 
@@ -1594,6 +1830,28 @@
                                     </div>`;
                                 }
                             });
+
+                            // Make file name cell clickable to open in Vault UI
+                            if (fileColIdx !== -1 && tr.children[fileColIdx]) {
+                                const fileTd = tr.children[fileColIdx];
+                                const rawName = fileTd.textContent.trim();
+                                if (rawName && !fileTd.querySelector('.dist-file-link')) {
+                                    const safeName = rawName.replace(/"/g, '&quot;');
+                                    let vaultFileDocUrl = `/vault/doc/${docId}.md`;
+                                    if (fileUrl && fileUrl.endsWith('.md')) {
+                                        const cleanUrl = fileUrl.split('?')[0].split('#')[0];
+                                        const parts = cleanUrl.split('/');
+                                        const filePart = parts.pop() || parts.pop();
+                                        if (filePart) vaultFileDocUrl = `/vault/doc/${filePart}`;
+                                    } else if (rawName.endsWith('.md')) {
+                                        vaultFileDocUrl = `/vault/doc/${rawName}`;
+                                    }
+                                    fileTd.innerHTML = `<a href="${vaultFileDocUrl}" class="dist-file-link" title="Open ${safeName} in Vault">
+                                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                                        <span>${rawName}</span>
+                                    </a>`;
+                                }
+                            }
                         });
 
                         // Format badges
@@ -2803,6 +3061,221 @@
                 if (oldModal) oldModal.remove();
                 showQAModal(question, null, err.message, promptContext, [], selectedModel, true);
             }
+        }
+
+        // Vault File Viewer implementation
+        function closeVaultFileViewer() {
+            const modal = document.getElementById('vault-file-viewer-modal');
+            if (modal) modal.style.display = 'none';
+            const body = document.getElementById('vault-fv-body');
+            if (body) body.innerHTML = '';
+        }
+
+        async function openVaultFileViewer(fileName, fileUrl, encodingFormat) {
+            const modal = document.getElementById('vault-file-viewer-modal');
+            const titleEl = document.getElementById('vault-fv-title');
+            const badgeEl = document.getElementById('vault-fv-badge');
+            const bodyEl = document.getElementById('vault-fv-body');
+            const extLinkEl = document.getElementById('vault-fv-ext-link');
+            const dlLinkEl = document.getElementById('vault-fv-dl-link');
+
+            if (!modal || !bodyEl) return;
+
+            const docId = getDocId();
+            titleEl.textContent = fileName || 'File Preview';
+            titleEl.title = fileName || 'File Preview';
+            badgeEl.textContent = encodingFormat || 'vault';
+            
+            // Show loading state
+            bodyEl.innerHTML = `
+                <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; min-height:250px; color:var(--text-color); gap:12px;">
+                    <div style="width:36px; height:36px; border:3px solid var(--border-color); border-top-color:var(--accent-color); border-radius:50%; animation:spin 0.8s linear infinite;"></div>
+                    <div style="font-size:0.95rem; font-weight:500;">Loading file from Vault...</div>
+                </div>
+                <style>@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }</style>
+            `;
+            modal.style.display = 'flex';
+
+            // Candidates to try fetching
+            const candidates = [];
+            
+            // 1. Direct Vault path if URL already contains /vault/
+            if (fileUrl && fileUrl.includes('/vault/')) {
+                const pathPart = fileUrl.split('/vault/').pop();
+                candidates.push({ url: `/vault/${pathPart}`, label: 'Vault Direct' });
+            }
+
+            // 2. Exact file name in vault
+            if (fileName && (fileName.includes('.') || !fileUrl)) {
+                candidates.push({ url: `/vault/${encodeURIComponent(fileName)}`, label: 'Vault by Name' });
+            }
+
+            // 3. Document-prefixed file names (e.g. {docId}_{fileName}, {docId}.md)
+            if (docId) {
+                if (fileName) {
+                    candidates.push({ url: `/vault/${docId}_${encodeURIComponent(fileName)}`, label: 'Vault Doc Prefixed' });
+                    candidates.push({ url: `/vault/${docId}_${encodeURIComponent(fileName)}.md`, label: 'Vault Doc MD' });
+                }
+                candidates.push({ url: `/vault/${docId}.md`, label: 'Vault Scraped MD' });
+                candidates.push({ url: `/vault/${docId}_datacard.md`, label: 'Vault Data Card' });
+            }
+
+            // 4. If remote external URL, can also try direct fetch
+            if (fileUrl && fileUrl.startsWith('http')) {
+                candidates.push({ url: fileUrl, label: 'Content URL' });
+            }
+
+            let loadedData = null;
+            let loadedContentType = '';
+            let resolvedUrl = fileUrl || '';
+
+            for (const cand of candidates) {
+                try {
+                    const res = await fetch(cand.url);
+                    if (res.ok) {
+                        loadedContentType = res.headers.get('content-type') || '';
+                        loadedData = await res.text();
+                        resolvedUrl = cand.url;
+                        break;
+                    }
+                } catch (e) {
+                    // continue to next candidate
+                }
+            }
+
+            // Configure action buttons in header
+            if (resolvedUrl) {
+                extLinkEl.style.display = 'inline-flex';
+                extLinkEl.href = resolvedUrl;
+                dlLinkEl.style.display = 'inline-flex';
+                dlLinkEl.href = resolvedUrl;
+                dlLinkEl.setAttribute('download', fileName || 'download');
+            } else {
+                extLinkEl.style.display = 'none';
+                dlLinkEl.style.display = 'none';
+            }
+
+            if (loadedData === null) {
+                bodyEl.innerHTML = `
+                    <div style="padding: 40px 20px; text-align: center; color: var(--text-color);">
+                        <div style="font-size: 2.2rem; margin-bottom: 10px;">📄</div>
+                        <h3 style="margin-top: 0; color: #ef4444;">File Not Directly Stored in Local Vault</h3>
+                        <p style="color: #64748b; max-width: 500px; margin: 0 auto 20px auto; font-size: 0.9rem;">
+                            The file <strong>${fileName}</strong> is referenced at an external content URL:
+                        </p>
+                        ${fileUrl ? `<div style="margin-bottom: 20px;"><a href="${fileUrl}" target="_blank" class="vault-fv-btn" style="background: var(--accent-color); color: #fff; font-weight: 600; padding: 8px 16px;">Open External Source &rarr;</a></div>` : ''}
+                        <p style="font-size: 0.8rem; color: #94a3b8;">URL: ${fileUrl || 'No external URL specified'}</p>
+                    </div>
+                `;
+                return;
+            }
+
+            // Determine rendering strategy based on encodingFormat, file extension, or content
+            const fnLower = (fileName || '').toLowerCase();
+            const fmtLower = (encodingFormat || loadedContentType || '').toLowerCase();
+
+            // 1. CSV or TSV rendering
+            if (fnLower.endsWith('.csv') || fnLower.endsWith('.tsv') || fmtLower.includes('csv') || fmtLower.includes('tab-separated')) {
+                const isTsv = fnLower.endsWith('.tsv') || fmtLower.includes('tab-separated');
+                const delimiter = isTsv ? '\t' : ',';
+                const lines = loadedData.trim().split(/\r?\n/);
+                const maxRows = Math.min(lines.length, 500);
+                
+                let tableHtml = `<div style="margin-bottom: 12px; font-size: 0.82rem; color: #64748b;">Showing ${maxRows} of ${lines.length} rows</div>`;
+                tableHtml += `<div style="overflow-x: auto;"><table class="vault-fv-table">`;
+                
+                // Simple CSV line splitter that handles quotes
+                const parseCsvLine = (line, delim) => {
+                    const result = [];
+                    let cur = '';
+                    let inQuotes = false;
+                    for (let i = 0; i < line.length; i++) {
+                        const char = line[i];
+                        if (char === '"') {
+                            inQuotes = !inQuotes;
+                        } else if (char === delim && !inQuotes) {
+                            result.push(cur.trim());
+                            cur = '';
+                        } else {
+                            cur += char;
+                        }
+                    }
+                    result.push(cur.trim());
+                    return result;
+                };
+
+                for (let r = 0; r < maxRows; r++) {
+                    const cols = parseCsvLine(lines[r], delimiter);
+                    if (r === 0) {
+                        tableHtml += '<thead><tr>';
+                        cols.forEach(c => {
+                            tableHtml += `<th>${c.replace(/</g, '&lt;')}</th>`;
+                        });
+                        tableHtml += '</tr></thead><tbody>';
+                    } else {
+                        tableHtml += '<tr>';
+                        cols.forEach(c => {
+                            tableHtml += `<td>${c.replace(/</g, '&lt;')}</td>`;
+                        });
+                        tableHtml += '</tr>';
+                    }
+                }
+                tableHtml += '</tbody></table></div>';
+                bodyEl.innerHTML = tableHtml;
+                return;
+            }
+
+            // 2. JSON or JSON-LD rendering
+            if (fnLower.endsWith('.json') || fnLower.endsWith('.jsonld') || fmtLower.includes('json')) {
+                let formattedJson = loadedData;
+                try {
+                    const parsed = JSON.parse(loadedData);
+                    formattedJson = JSON.stringify(parsed, null, 2);
+                } catch (e) { }
+                bodyEl.innerHTML = `
+                    <div style="position: relative;">
+                        <button class="vault-fv-btn" style="position: absolute; top: 10px; right: 10px; z-index: 5;" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent); alert('Copied to clipboard!');">Copy JSON</button>
+                        <pre class="vault-fv-code"><code>${formattedJson.replace(/</g, '&lt;')}</code></pre>
+                    </div>
+                `;
+                return;
+            }
+
+            // 3. Markdown rendering
+            if (fnLower.endsWith('.md') || fnLower.endsWith('.markdown') || fmtLower.includes('markdown')) {
+                try {
+                    bodyEl.innerHTML = `<div class="markdown-body" style="background: transparent; color: inherit;">${marked.parse(loadedData)}</div>`;
+                } catch (e) {
+                    bodyEl.innerHTML = `<pre class="vault-fv-code"><code>${loadedData.replace(/</g, '&lt;')}</code></pre>`;
+                }
+                return;
+            }
+
+            // 4. Image rendering
+            if (fnLower.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i) || fmtLower.includes('image/')) {
+                bodyEl.innerHTML = `
+                    <div style="display:flex; justify-content:center; align-items:center; min-height:300px; padding:20px;">
+                        <img src="${resolvedUrl}" alt="${fileName}" style="max-width:100%; max-height:75vh; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.15);" />
+                    </div>
+                `;
+                return;
+            }
+
+            // 5. HTML preview (sandboxed iframe)
+            if (fnLower.endsWith('.html') || fmtLower.includes('html')) {
+                bodyEl.innerHTML = `
+                    <iframe srcdoc="${loadedData.replace(/"/g, '&quot;')}" sandbox="allow-same-origin allow-scripts" style="width:100%; height:100%; min-height:550px; border:1px solid var(--border-color); border-radius:6px; background:#fff;"></iframe>
+                `;
+                return;
+            }
+
+            // 6. Default / Generic text or code viewer
+            bodyEl.innerHTML = `
+                <div style="position: relative;">
+                    <button class="vault-fv-btn" style="position: absolute; top: 10px; right: 10px; z-index: 5;" onclick="navigator.clipboard.writeText(this.nextElementSibling.textContent); alert('Copied to clipboard!');">Copy Content</button>
+                    <pre class="vault-fv-code"><code>${loadedData.replace(/</g, '&lt;')}</code></pre>
+                </div>
+            `;
         }
     </script>
     

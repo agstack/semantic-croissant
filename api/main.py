@@ -922,63 +922,56 @@ async def get_vault_file(filename: str):
         filename += ".md"
         
     from minio import Minio
-    from datetime import timedelta
+    from fastapi.responses import Response
     endpoint = minio_base.replace("http://", "").replace("https://", "")
-    try:
-        m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
-        base_minio_url_check = m_client.presigned_get_object("vault", filename, expires=timedelta(hours=1))
-    except Exception:
-        base_minio_url_check = f"{minio_base}/vault/{filename}"
+    m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
 
-    if filename.endswith(".jsonld"):
-        async with httpx.AsyncClient(timeout=10.0) as check_client:
+    # Determine media type
+    media_type = "application/octet-stream"
+    if filename.endswith(".md"): media_type = "text/markdown; charset=utf-8"
+    elif filename.endswith(".jsonld") or filename.endswith(".json"): media_type = "application/ld+json; charset=utf-8"
+    elif filename.endswith(".csv"): media_type = "text/csv; charset=utf-8"
+    elif filename.endswith(".html"): media_type = "text/html; charset=utf-8"
+    elif filename.endswith(".gz"): media_type = "application/gzip"
+
+    # 1. Try reading directly from MinIO
+    try:
+        res = m_client.get_object("vault", filename)
+        data = res.read()
+        res.close()
+        res.release_conn()
+        return Response(content=data, media_type=media_type)
+    except Exception:
+        # Check with .gz
+        if not filename.endswith(".gz"):
             try:
-                head_resp = await check_client.head(base_minio_url_check)
-                if head_resp.status_code == 404:
-                    es_id = filename[:-7]
-                    es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
-                    es_resp = await check_client.get(f"{es_url}/croissant/_doc/{es_id}")
-                    if es_resp.status_code == 200:
-                        es_data = es_resp.json().get("_source", {})
-                        es_data.pop("_full_text", None)
-                        es_data.pop("_markdown_text", None)
-                        es_data.pop("_source_url", None)
-                        
-                        from fastapi.responses import Response
-                        import json
-                        data = json.dumps(es_data, indent=2).encode("utf-8")
-                        return Response(content=data, media_type="application/ld+json; charset=utf-8")
+                res_gz = m_client.get_object("vault", filename + ".gz")
+                data_gz = res_gz.read()
+                res_gz.close()
+                res_gz.release_conn()
+                return Response(content=data_gz, media_type="application/gzip")
             except Exception:
                 pass
 
-        
-    async def stream_file():
-        from minio import Minio
-        from datetime import timedelta
-        endpoint = minio_base.replace("http://", "").replace("https://", "")
+    # 2. If JSON-LD not in MinIO, fallback to Elasticsearch
+    if filename.endswith(".jsonld"):
         try:
-            m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
-            base_minio_url = m_client.presigned_get_object("vault", filename, expires=timedelta(hours=1))
+            es_id = filename[:-7]
+            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            async with httpx.AsyncClient(timeout=5.0) as check_client:
+                es_resp = await check_client.get(f"{es_url}/croissant/_doc/{es_id}")
+                if es_resp.status_code == 200:
+                    es_data = es_resp.json().get("_source", {})
+                    es_data.pop("_full_text", None)
+                    es_data.pop("_markdown_text", None)
+                    es_data.pop("_source_url", None)
+                    import json
+                    data = json.dumps(es_data, indent=2).encode("utf-8")
+                    return Response(content=data, media_type="application/ld+json; charset=utf-8")
         except Exception:
-            base_minio_url = f"{minio_base}/vault/{filename}"
-            
-        async with httpx.AsyncClient() as client:
-            async with client.stream("GET", base_minio_url) as response:
-                if response.status_code == 404 and not filename.endswith(".gz"):
-                    try:
-                        m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
-                        gz_minio_url = m_client.presigned_get_object("vault", filename + ".gz", expires=timedelta(hours=1))
-                    except Exception:
-                        gz_minio_url = f"{minio_base}/vault/{filename}.gz"
-                    async with client.stream("GET", gz_minio_url) as response2:
-                        if response2.status_code == 200:
-                            async for chunk in response2.aiter_bytes():
-                                yield chunk
-                elif response.status_code == 200:
-                    async for chunk in response.aiter_bytes():
-                        yield chunk
-    
-    return StreamingResponse(stream_file())
+            pass
+
+    return Response(content="File not found in vault", status_code=404)
 
 @app.get("/search")
 def search_keyword(q: str, limit: int = 100, page: int = 1):
