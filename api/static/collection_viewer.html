@@ -1405,6 +1405,18 @@
                         .then(r => r.ok ? r.json() : null)
                         .then(fullData => {
                             if (fullData && fullData.variables) {
+                                // Preserve full population statistics from the cache
+                                if (initialData.total_variables && (!fullData.total_variables || fullData.total_variables < initialData.total_variables)) {
+                                    fullData.total_variables = initialData.total_variables;
+                                }
+                                if (initialData.total_files && (!fullData.total_files || fullData.total_files < initialData.total_files)) {
+                                    fullData.total_files = initialData.total_files;
+                                }
+                                if (initialData.numeric_variables) fullData.numeric_variables = initialData.numeric_variables;
+                                if (initialData.text_other_variables) fullData.text_other_variables = initialData.text_other_variables;
+                                if (initialData.total_numeric) fullData.total_numeric = initialData.total_numeric;
+                                if (initialData.total_other) fullData.total_other = initialData.total_other;
+
                                 cachedVariablesData = fullData;
                                 renderVariablesTable(fullData);
                             }
