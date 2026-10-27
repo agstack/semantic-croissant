@@ -773,10 +773,48 @@
 
         <!-- Filter & Search Controls Bar -->
         <div class="controls-card">
-            <!-- Search Box -->
-            <div class="search-group">
-                <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                <input type="text" id="var-search-input" class="search-input" placeholder="Search variable name, label, file, data type..." oninput="handleSearchInput()">
+            <!-- Search Box & Refresh Button -->
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 280px; max-width: 580px;">
+                <div class="search-group" style="flex: 1; max-width: none;">
+                    <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <input type="text" id="var-search-input" class="search-input" placeholder="Search variable name, label, file, data type..." oninput="handleSearchInput()">
+                </div>
+                <button id="btn-var-refresh" class="btn-modern" onclick="refreshVariablesView()" title="Refresh variables list" style="padding: 8px 14px; white-space: nowrap; font-size: 0.84rem; flex-shrink: 0;">
+                    <svg id="icon-var-refresh" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                    <span>Refresh</span>
+                </button>
+                <div class="row-export-dropdown-wrapper" style="position: relative; display: inline-flex; align-items: stretch; border: 1px solid rgba(16, 185, 129, 0.35); border-radius: var(--radius-sm); overflow: hidden; background: rgba(16, 185, 129, 0.08); flex-shrink: 0;">
+                    <button id="btn-var-export-cdif" onclick="exportFilteredVariablesCDIF('cdif')" title="Open CDIF 1.1 JSON-LD in new tab" style="border: none; background: transparent; padding: 8px 12px; font-size: 0.84rem; font-weight: 600; color: #047857; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                        <span>Export</span>
+                    </button>
+                    <button type="button" onclick="toggleMainExportMenu(event)" title="Choose export format" style="border: none; border-left: 1px solid rgba(16, 185, 129, 0.35); background: transparent; padding: 8px 8px; cursor: pointer; color: #047857; display: inline-flex; align-items: center; justify-content: center;">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </button>
+                    <div id="main-export-menu" class="row-export-dropdown-menu" style="right: 0; min-width: 215px; margin-top: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.15);">
+                        <a href="javascript:void(0)" onclick="exportFilteredVariablesCDIF('cdif')" class="row-export-item">
+                            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #10b981;"></span>
+                            <div>
+                                <div style="font-weight: 700; color: var(--text-color);">CDIF 1.1 JSON-LD</div>
+                                <div style="font-size: 0.72rem; color: var(--text-muted);">Current filtered variables</div>
+                            </div>
+                        </a>
+                        <a href="javascript:void(0)" onclick="exportFilteredVariablesCDIF('ddi-cdi')" class="row-export-item">
+                            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #2563eb;"></span>
+                            <div>
+                                <div style="font-weight: 600; color: var(--text-color);">DDI-CDI 1.1 JSON-LD</div>
+                                <div style="font-size: 0.72rem; color: var(--text-muted);">InstanceVariable & DataStructure</div>
+                            </div>
+                        </a>
+                        <a href="javascript:void(0)" onclick="exportFilteredVariablesCSV()" class="row-export-item" style="border-top: 1px solid var(--border-color);">
+                            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b;"></span>
+                            <div>
+                                <div style="font-weight: 600; color: var(--text-color);">CSV Format</div>
+                                <div style="font-size: 0.72rem; color: var(--text-muted);">Tabular table export</div>
+                            </div>
+                        </a>
+                    </div>
+                </div>
             </div>
 
             <!-- Ask AI Query Form -->
@@ -894,7 +932,7 @@
         let rawVariablesData = null;
         let filteredVariablesList = [];
         let currentVarPage = 1;
-        const varPageSize = 100;
+        let varPageSize = 100;
         let activeLetter = 'ALL';
         let lastVarQaRawAnswer = '';
 
@@ -921,12 +959,17 @@
                 .replace(/'/g, '&#039;');
         }
 
-        async function loadVariablesData(forceRefresh = false) {
+        async function loadVariablesData(forceRefresh = false, showAll = false) {
             const tableBody = document.getElementById('var-table-body');
             const countBadge = document.getElementById('badge-status-text');
             
             if (forceRefresh) {
                 rawVariablesData = null;
+            }
+
+            if (showAll) {
+                varPageSize = Infinity;
+                currentVarPage = 1;
             }
 
             if (tableBody) {
@@ -935,9 +978,9 @@
                         <td colspan="7" style="text-align: center; padding: 45px 20px; color: var(--text-muted);">
                             <div style="display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: 0.95rem;">
                                 <span class="var-spinner"></span>
-                                <span>Loading fast cache variables...</span>
+                                <span>${showAll ? 'Loading all variables without limit...' : 'Loading variables...'}</span>
                             </div>
-                            <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 6px;">Retrieving pre-synchronized cache from Elasticsearch...</div>
+                            <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 6px;">Retrieving variable metadata from CDIF Registry..</div>
                         </td>
                     </tr>
                 `;
@@ -950,10 +993,17 @@
                 const searchInput = document.getElementById('var-search-input');
                 const initialQuery = searchInput ? searchInput.value.trim() : '';
 
-                // Step 1: Request cache/initial 100 records - returns within ~100-200ms
-                const initialUrl = initialQuery 
-                    ? `/api/variableindex/data?q=${encodeURIComponent(initialQuery)}&limit=100&offset=0`
-                    : '/api/variableindex/data?limit=100&offset=0';
+                // If showAll is true, request without limit (or large size) to fetch all available variables
+                let initialUrl;
+                if (showAll) {
+                    initialUrl = initialQuery
+                        ? `/api/variableindex/data?q=${encodeURIComponent(initialQuery)}&offset=0`
+                        : '/api/variableindex/data?offset=0';
+                } else {
+                    initialUrl = initialQuery 
+                        ? `/api/variableindex/data?q=${encodeURIComponent(initialQuery)}&limit=100&offset=0`
+                        : '/api/variableindex/data?limit=100&offset=0';
+                }
 
                 const initialRes = await fetch(initialUrl);
                 if (!initialRes.ok) {
@@ -962,17 +1012,16 @@
                 const initialData = await initialRes.json();
                 rawVariablesData = initialData;
                 
-                // Immediately render dashboard statistics and first 100 records
+                // Render dashboard statistics and all records
                 renderDashboardSummary(initialData);
                 applyFilters();
 
                 if (countBadge) {
-                    countBadge.textContent = initialData.cached ? 'Fast Cache Synchronized' : 'Live Sync Active';
+                    countBadge.textContent = showAll ? `Showing All (${(initialData.variables || []).length.toLocaleString()} variables)` : (initialData.cached ? 'Fast Cache Synchronized' : 'Live Sync Active');
                 }
 
                 // Step 2: Trigger background cache update if on default view
-                if (!initialQuery) {
-                    // Update cache in background
+                if (!initialQuery && !showAll) {
                     triggerBackgroundCacheUpdate();
                 }
 
@@ -993,6 +1042,23 @@
                     console.log('Background cache update triggered:', data);
                 })
                 .catch(e => console.warn('Cache update trigger note:', e));
+        }
+
+        async function refreshVariablesView() {
+            const btn = document.getElementById('btn-var-refresh');
+            const icon = document.getElementById('icon-var-refresh');
+            if (btn) btn.disabled = true;
+            if (icon) icon.style.animation = 'spin 0.8s linear infinite';
+
+            try {
+                // When pressing Refresh, remove the 1-page 100-variable limit and display all variables
+                await loadVariablesData(true, true);
+            } catch (err) {
+                console.error('Refresh error:', err);
+            } finally {
+                if (icon) icon.style.animation = 'none';
+                if (btn) btn.disabled = false;
+            }
         }
 
         function triggerManualSync() {
@@ -1048,7 +1114,10 @@
                 const query = searchInput ? searchInput.value.trim() : '';
                 if (query.length > 2) {
                     // Server-side search if query is specific
-                    fetch(`/api/variableindex/data?q=${encodeURIComponent(query)}&limit=100&offset=0`)
+                    const fetchUrl = varPageSize === Infinity
+                        ? `/api/variableindex/data?q=${encodeURIComponent(query)}&offset=0`
+                        : `/api/variableindex/data?q=${encodeURIComponent(query)}&limit=100&offset=0`;
+                    fetch(fetchUrl)
                         .then(r => r.json())
                         .then(data => {
                             rawVariablesData = data;
@@ -1093,14 +1162,14 @@
                     const cids = Array.isArray(v.collection_id) ? v.collection_id.join(' ') : (v.collection_id || '');
                     const haystack = `${vName} ${vLabel} ${vType} ${vFile} ${vDesc} ${vDs} ${cids}`.toLowerCase();
                     const normHaystack = haystack.toLowerCase().replace(/[()/\-_]+/g, ' ').replace(/\s+/g, ' ');
-                    const rawTokens = query.split(/\s+/).filter(Boolean);
-                    const cleanTokens = query.replace(/[()/\-_]+/g, ' ').split(/\s+/).filter(Boolean);
+                    const rawTokens = query.split(/\s+/).filter(t => t && t.toLowerCase() !== 'and' && t !== '&');
+                    const cleanTokens = query.replace(/[()/\-_]+/g, ' ').split(/\s+/).filter(t => t && t.toLowerCase() !== 'and' && t !== '&');
 
                     const cleanMatch = cleanTokens.length > 0 && cleanTokens.every(tok => {
                         return normHaystack.includes(tok) || haystack.includes(tok);
                     });
 
-                    const rawMatch = rawTokens.every(token => {
+                    const rawMatch = rawTokens.length > 0 && rawTokens.every(token => {
                         if (haystack.includes(token)) return true;
                         if (token.includes('_')) {
                             const subparts = token.split('_').filter(Boolean);
@@ -1109,7 +1178,7 @@
                         return false;
                     });
 
-                    return cleanMatch || rawMatch;
+                    return cleanTokens.length > 0 ? (cleanMatch || rawMatch) : true;
                 }
                 return true;
             });
@@ -1153,24 +1222,32 @@
             if (total === 0) {
                 tableBody.innerHTML = '';
                 if (emptyBox) emptyBox.style.display = 'block';
+                if (pageInfoTop) pageInfoTop.textContent = 'Showing 0 variables';
+                if (pageInfoBottom) pageInfoBottom.textContent = 'Showing 0 variables';
+                if (pageControlsTop) pageControlsTop.innerHTML = '';
+                if (pageControlsBottom) pageControlsBottom.innerHTML = '';
                 return;
             }
 
             if (emptyBox) emptyBox.style.display = 'none';
 
-            const totalPages = Math.ceil(total / varPageSize) || 1;
+            const isAll = varPageSize === Infinity;
+            const totalPages = isAll ? 1 : (Math.ceil(total / varPageSize) || 1);
             if (currentVarPage > totalPages) currentVarPage = totalPages;
             if (currentVarPage < 1) currentVarPage = 1;
 
-            const startIdx = (currentVarPage - 1) * varPageSize;
-            const endIdx = Math.min(startIdx + varPageSize, total);
-            const pageVars = filteredVariablesList.slice(startIdx, endIdx);
+            const startIdx = isAll ? 0 : (currentVarPage - 1) * varPageSize;
+            const endIdx = isAll ? total : Math.min(startIdx + varPageSize, total);
+            const pageVars = isAll ? filteredVariablesList : filteredVariablesList.slice(startIdx, endIdx);
 
-            const pageInfoText = `Showing ${startIdx + 1}–${endIdx} of ${total.toLocaleString()} variables`;
+            const pageInfoText = isAll 
+                ? `Showing all ${total.toLocaleString()} variables`
+                : `Showing ${startIdx + 1}–${endIdx} of ${total.toLocaleString()} variables`;
             if (pageInfoTop) pageInfoTop.textContent = pageInfoText;
             if (pageInfoBottom) pageInfoBottom.textContent = pageInfoText;
 
             const makeControls = () => {
+                if (totalPages <= 1) return '';
                 let controlsHtml = `
                     <button class="page-btn" onclick="changeVarPage(-1)" ${currentVarPage === 1 ? 'disabled' : ''}>&larr; Prev</button>
                 `;
@@ -1360,6 +1437,16 @@
             });
         }
 
+        function toggleMainExportMenu(event) {
+            event.stopPropagation();
+            const menu = document.getElementById('main-export-menu');
+            const isOpen = menu && menu.style.display === 'block';
+            closeAllRowExportDropdowns();
+            if (menu && !isOpen) {
+                menu.style.display = 'block';
+            }
+        }
+
         function toggleRowExportDropdown(event, btn) {
             event.stopPropagation();
             const wrapper = btn.closest('.row-export-dropdown-wrapper');
@@ -1378,6 +1465,164 @@
         document.addEventListener('click', () => {
             closeAllRowExportDropdowns();
         });
+
+        function exportFilteredVariablesCDIF(format = 'cdif') {
+            closeAllRowExportDropdowns();
+            const vars = filteredVariablesList || [];
+            if (vars.length === 0) {
+                alert('No variables match your current filters to export.');
+                return;
+            }
+
+            const searchInput = document.getElementById('var-search-input');
+            const queryStr = searchInput ? searchInput.value.trim() : '';
+            const timestamp = new Date().toISOString();
+
+            // Construct valid CDIF 1.1 JSON-LD Graph for filtered variables
+            const isDdiCdi = format === 'ddi-cdi';
+            const context = {
+                "schema": "http://schema.org/",
+                "dcterms": "http://purl.org/dc/terms/",
+                "dcat": "http://www.w3.org/ns/dcat#",
+                "spdx": "http://spdx.org/rdf/terms#",
+                "cdi": "http://ddialliance.org/Specification/DDI-CDI/1.0/RDF/",
+                "cdif": "https://w3id.org/cdif/",
+                "csvw": "http://www.w3.org/ns/csvw#",
+                "prov": "http://www.w3.org/ns/prov#"
+            };
+
+            const instanceVariables = [];
+            const schemaVariables = [];
+
+            vars.forEach((v, idx) => {
+                const varId = `var_${idx + 1}_${(v.variable_name || 'v').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+                
+                // CDIF / DDI-CDI InstanceVariable
+                instanceVariables.push({
+                    "@id": `#${varId}`,
+                    "@type": [
+                        "cdi:InstanceVariable",
+                        "cdif:InstanceVariable",
+                        "schema:PropertyValue"
+                    ],
+                    "cdi:name": v.variable_name || "",
+                    "schema:name": v.variable_name || "",
+                    "schema:description": v.description || v.display_label || v.variable_name || "",
+                    "cdi:displayLabel": {
+                        "@type": "cdi:LabelForDisplay",
+                        "cdi:locationVariant": {
+                            "@type": "cdi:ControlledVocabularyEntry",
+                            "cdi:entryValue": v.display_label || v.variable_name || ""
+                        }
+                    },
+                    "cdi:physicalDataType": {
+                        "@type": "cdi:ControlledVocabularyEntry",
+                        "cdi:entryValue": v.data_type || "unspecified"
+                    },
+                    "schema:unitText": v.unit || undefined,
+                    "schema:isPartOf": v.dataset_url || v.dataset_id ? {
+                        "@type": "schema:Dataset",
+                        "schema:name": v.dataset_title || undefined,
+                        "schema:url": v.dataset_url || undefined,
+                        "schema:identifier": v.dataset_id || undefined
+                    } : undefined,
+                    "dcat:distribution": v.file_name ? {
+                        "@type": "dcat:Distribution",
+                        "schema:name": v.file_name,
+                        "schema:contentUrl": v.file_url || undefined
+                    } : undefined,
+                    "cdif:exportUrl": v.cdif_export_url || undefined
+                });
+
+                schemaVariables.push({
+                    "@type": "schema:PropertyValue",
+                    "@id": `#pv_${varId}`,
+                    "schema:name": v.variable_name || "",
+                    "schema:description": v.description || v.display_label || "",
+                    "schema:unitText": v.unit || undefined,
+                    "schema:value": v.data_type || undefined
+                });
+            });
+
+            const cdifGraph = {
+                "@context": context,
+                "@type": isDdiCdi ? ["cdi:DataStructure", "schema:Dataset"] : ["schema:Dataset", "cdif:DiscoveryProfile"],
+                "@id": `https://ai.mediaquantum.eu/variableindex?q=${encodeURIComponent(queryStr)}`,
+                "schema:name": queryStr ? `CDIF 1.1 Variables Export: ${queryStr}` : "CDIF 1.1 Variables Index Export",
+                "schema:description": `Exported ${vars.length.toLocaleString()} variable(s) conforming to CDIF 1.1 Discovery Profile and DDI-CDI 1.0 RDF specification.`,
+                "schema:datePublished": timestamp,
+                "schema:variableMeasured": isDdiCdi ? instanceVariables : schemaVariables,
+                "cdif_jsonld": {
+                    "DDICDIModels": instanceVariables
+                }
+            };
+
+            // Open canonical export URL with query parameters so Claude and other AI agents can read it directly
+            const exportUrl = queryStr
+                ? `/export?q=${encodeURIComponent(queryStr)}${isDdiCdi ? '&format=ddi-cdi' : ''}`
+                : `/export?variables=true${isDdiCdi ? '&format=ddi-cdi' : ''}`;
+            window.open(exportUrl, '_blank');
+        }
+
+        function exportFilteredVariablesCSV() {
+            closeAllRowExportDropdowns();
+            const vars = filteredVariablesList || [];
+            if (vars.length === 0) {
+                alert('No variables match your current filters to export.');
+                return;
+            }
+
+            const searchInput = document.getElementById('var-search-input');
+            const queryStr = searchInput ? searchInput.value.trim() : '';
+
+            const headers = [
+                'Variable Name',
+                'Display Label',
+                'Description',
+                'Data Type',
+                'Unit',
+                'Source File',
+                'Source File URL',
+                'Dataset ID',
+                'Dataset Title',
+                'Dataset URL',
+                'CDIF Export URL'
+            ];
+
+            const escapeCsv = (val) => {
+                const s = String(val === undefined || val === null ? '' : val).replace(/"/g, '""');
+                return `"${s}"`;
+            };
+
+            const rows = [headers.join(',')];
+            vars.forEach(v => {
+                rows.push([
+                    escapeCsv(v.variable_name || ''),
+                    escapeCsv(v.display_label || ''),
+                    escapeCsv(v.description || ''),
+                    escapeCsv(v.data_type || ''),
+                    escapeCsv(v.unit || ''),
+                    escapeCsv(v.file_name || ''),
+                    escapeCsv(v.file_url || ''),
+                    escapeCsv(v.dataset_id || ''),
+                    escapeCsv(v.dataset_title || ''),
+                    escapeCsv(v.dataset_url || ''),
+                    escapeCsv(v.cdif_export_url || '')
+                ].join(','));
+            });
+
+            const csvContent = '\uFEFF' + rows.join('\r\n');
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const safeQuery = queryStr ? queryStr.replace(/[^a-zA-Z0-9_-]/g, '_') : 'all';
+            a.href = url;
+            a.download = `variables_${safeQuery}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
 
         function submitAddText() {
             const btn = document.getElementById('add-text-submit');

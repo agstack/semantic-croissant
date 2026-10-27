@@ -5,6 +5,8 @@ import httpx
 import requests
 import json
 import os
+import urllib
+import urllib.parse
 import mcp.types as types
 from mcp.server.lowlevel import Server
 from starlette.responses import HTMLResponse
@@ -6014,90 +6016,9 @@ Please answer the question based ONLY on the context provided above (including t
             from starlette.responses import Response, JSONResponse
             import os, httpx, io, re, urllib.parse, csv, struct, zipfile, tempfile, hashlib, json
 
-            raw_file_param = request.query_params.get("file")
-            raw_url_param = request.query_params.get("url")
-            target_url = raw_file_param or raw_url_param
-            if not target_url:
-                return JSONResponse({"error": "Missing 'file' or 'url' query parameter, e.g. /export?file=<file_url>"}, status_code=400)
-
-            # Strip any accidental surrounding or trailing quotes/brackets (e.g. from copy-pasted URLs or JSON strings)
-            target_url = target_url.strip().strip("'\"`<>")
-            while target_url.endswith("%22") or target_url.endswith("%27"):
-                if target_url.endswith("%22"):
-                    target_url = target_url[:-3]
-                elif target_url.endswith("%27"):
-                    target_url = target_url[:-3]
-            target_url = target_url.strip().strip("'\"`<>")
-
-            ds_param = request.query_params.get("ds")
-            ds_url = None
-            if ds_param:
-                # Clean markdown links e.g. [https://doi.org/...](https://doi.org/...)
-                m_ds = re.search(r'\((https?://[^)]+)\)', ds_param)
-                if m_ds:
-                    ds_url = m_ds.group(1).strip()
-                else:
-                    m_ds2 = re.search(r'https?://[^\s\]\)]+', ds_param)
-                    if m_ds2:
-                        ds_url = m_ds2.group(0).strip()
-                    else:
-                        ds_url = ds_param.strip()
-
             base_host = f"https://{MCP_DOMAIN}"
-
-            # Canonical redirect: If called with legacy ?url= without ?file=, redirect (301) to canonical URL
-            if not raw_file_param and raw_url_param:
-                from starlette.responses import RedirectResponse
-                canon_params = {"file": target_url}
-                if ds_url:
-                    canon_params["ds"] = ds_url
-                canon_redir_url = f"/export?{urllib.parse.urlencode(canon_params)}"
-                return RedirectResponse(url=canon_redir_url, status_code=301)
-
             req_format = request.query_params.get("format", "cdif").lower().strip()
-            # Canonical format names: "ddi-cdi" vs "cdif" (default)
             is_ddi_cdi = (req_format == "ddi-cdi")
-
-            ddi_cdi_service = os.environ.get("DDI_CDI_SERVICE") or os.environ.get("DDI_CDI_BASE_URL", "http://10.147.18.186:8088")
-            if ddi_cdi_service.isdigit():
-                ddi_cdi_base = f"http://localhost:{ddi_cdi_service}".rstrip("/")
-            elif ":" not in ddi_cdi_service and not ddi_cdi_service.startswith("http"):
-                ddi_cdi_base = f"http://{ddi_cdi_service}".rstrip("/")
-            elif not ddi_cdi_service.startswith("http://") and not ddi_cdi_service.startswith("https://"):
-                ddi_cdi_base = f"http://{ddi_cdi_service}".rstrip("/")
-            else:
-                ddi_cdi_base = ddi_cdi_service.rstrip("/")
-
-            # Inside docker containers, replace localhost with internal service alias or host.docker.internal
-            if "localhost:8083" in ddi_cdi_base or "127.0.0.1:8083" in ddi_cdi_base:
-                ddi_cdi_base = "http://ddicdi:8000"
-            elif "localhost:8082" in ddi_cdi_base or "127.0.0.1:8082" in ddi_cdi_base:
-                ddi_cdi_base = "http://converters:8000"
-
-            api_key = os.environ.get("DDI_CDI_API_KEY", "")
-
-            cdif_service = os.environ.get("CDIF_SERVICE") or os.environ.get("CDIF_CONVERTER_URL", "http://converters:8000")
-            if cdif_service.isdigit():
-                cdif_converter_url = f"http://localhost:{cdif_service}".rstrip("/")
-            elif ":" not in cdif_service and not cdif_service.startswith("http"):
-                cdif_converter_url = f"http://{cdif_service}".rstrip("/")
-            elif not cdif_service.startswith("http://") and not cdif_service.startswith("https://"):
-                cdif_converter_url = f"http://{cdif_service}".rstrip("/")
-            else:
-                cdif_converter_url = cdif_service.rstrip("/")
-
-            if "localhost:8082" in cdif_converter_url or "127.0.0.1:8082" in cdif_converter_url:
-                cdif_converter_url = "http://converters:8000"
-
-            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
-            minio_endpoint = minio_base.replace("http://", "").replace("https://", "")
-            cache_prefix = "ddicdi" if is_ddi_cdi else "cdif_v2"
-            vault_cache_key = f"{cache_prefix}_cache_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
-            doc_cache_id = f"{cache_prefix}_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:24]}"
-            # For backward compatibility: if ddi-cdi is requested, also check legacy key cdif_cache_
-            legacy_vault_cache_key = f"cdif_cache_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:20]}.jsonld" if is_ddi_cdi else None
-            legacy_doc_cache_id = hashlib.sha256((target_url + (ds_url or "")).encode("utf-8")).hexdigest()[:24] if is_ddi_cdi else None
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
 
             # Check if requesting client is an AI assistant, crawler or bot that needs lightweight schema
             user_agent = request.headers.get("user-agent", "").lower()
@@ -6254,6 +6175,294 @@ Please answer the question based ONLY on the context provided above (including t
                     media_type="application/ld+json; charset=utf-8",
                     headers=headers
                 )
+
+            # Support exporting filtered variables (e.g. /export?q=... or /export?collection_id=...)
+            q_param = request.query_params.get("q", "").strip()
+            cid_param = request.query_params.get("collection_id") or request.query_params.get("cid", "")
+            raw_file_param = request.query_params.get("file")
+            raw_url_param = request.query_params.get("url")
+
+            if not raw_file_param and not raw_url_param and (q_param or cid_param or request.query_params.get("variables") == "true"):
+                # Handle filtered variable index export as full CDIF 1.1 Dataset conforming to schema
+                es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+
+                # Fetch variables matching query
+                tokens = [t.lower() for t in re.split(r"\s+", q_param) if t and t.lower() not in ["and", "or", "&"]]
+                all_variables = []
+                unique_files = set()
+                try:
+                    async with httpx.AsyncClient(timeout=25.0) as es_var_client:
+                        # 1. Search cdif index
+                        cdif_must = []
+                        if tokens:
+                            for t in tokens:
+                                cdif_must.append({
+                                    "bool": {
+                                        "should": [
+                                            {"match": {"cdif_jsonld.DDICDIModels.name": {"query": t, "boost": 3}}},
+                                            {"match": {"cdif_jsonld.DDICDIModels.displayLabel": {"query": t, "boost": 2}}},
+                                            {"match": {"cdif_jsonld.DDICDIModels.dct:description": {"query": t, "boost": 1}}},
+                                            {"match": {"file_name": {"query": t, "boost": 1}}}
+                                        ]
+                                    }
+                                })
+                        cdif_q = {"bool": {"must": cdif_must}} if cdif_must else {"match_all": {}}
+                        r_cdif = await es_var_client.post(
+                            f"{es_url}/cdif/_search",
+                            json={
+                                "query": cdif_q,
+                                "size": 1000,
+                                "_source": ["file_name", "file_url", "dataset_url", "dataset_id", "title", "cdif_export_url", "cdif_jsonld"]
+                            }
+                        )
+                        if r_cdif.status_code == 200:
+                            for hit in r_cdif.json().get("hits", {}).get("hits", []):
+                                src = hit.get("_source", {})
+                                fn = src.get("file_name", "")
+                                fu = src.get("file_url", "")
+                                du = src.get("dataset_url", "")
+                                dt = src.get("title", "")
+                                c_export = src.get("cdif_export_url", "")
+                                c_json = src.get("cdif_jsonld", {})
+                                for m in c_json.get("DDICDIModels", []):
+                                    if isinstance(m, dict) and ("InstanceVariable" in str(m.get("@type", "")) or "PropertyValue" in str(m.get("@type", ""))):
+                                        vname = m.get("schema:name") or m.get("name") or m.get("@id", "")
+                                        vname = str(vname).lstrip("#").strip()
+                                        if not vname: continue
+                                        all_variables.append({
+                                            "name": vname,
+                                            "label": m.get("schema:description") or m.get("displayLabel") or vname,
+                                            "type": str(m.get("cdif:physicalDataType") or m.get("physicalDataType") or "string").replace("xsd:", ""),
+                                            "desc": m.get("schema:description") or m.get("dct:description") or "",
+                                            "unit": m.get("schema:unitText") or m.get("unitText") or "",
+                                            "file_name": fn,
+                                            "file_url": fu,
+                                            "dataset_title": dt,
+                                            "dataset_url": du,
+                                            "cdif_url": c_export
+                                        })
+                                        if fn: unique_files.add(fn)
+
+                        # 2. Search dataverse / croissant dataset recordSet fields
+                        if tokens:
+                            ds_must = []
+                            for t in tokens:
+                                ds_must.append({
+                                    "bool": {
+                                        "should": [
+                                            {"match": {"recordSet.field.name": {"query": t, "boost": 3}}},
+                                            {"match": {"recordSet.field.description": {"query": t, "boost": 2}}},
+                                            {"match": {"title": {"query": t, "boost": 1}}},
+                                            {"match": {"name": {"query": t, "boost": 1}}}
+                                        ]
+                                    }
+                                })
+                            r_ds = await es_var_client.post(
+                                f"{es_url}/*,-.*,-collections,-history,-groups,-cdif/_search",
+                                json={
+                                    "query": {"bool": {"must": ds_must}},
+                                    "size": 50,
+                                    "_source": ["name", "title", "url", "_source_url", "distribution", "recordSet"]
+                                }
+                            )
+                            if r_ds.status_code == 200:
+                                for dh in r_ds.json().get("hits", {}).get("hits", []):
+                                    dsrc = dh.get("_source", {})
+                                    d_name = dsrc.get("name") or dsrc.get("title") or ""
+                                    d_url = dsrc.get("url") or dsrc.get("_source_url") or ""
+                                    rs_list = dsrc.get("recordSet", [])
+                                    for rs in (rs_list if isinstance(rs_list, list) else [rs_list]):
+                                        if not isinstance(rs, dict): continue
+                                        for fld in rs.get("field", []):
+                                            if not isinstance(fld, dict): continue
+                                            fname = str(fld.get("name") or "")
+                                            fdesc = str(fld.get("description") or fname)
+                                            ftype = str(fld.get("dataType") or "sc:Float")
+                                            all_variables.append({
+                                                "name": fname,
+                                                "label": fname,
+                                                "type": ftype,
+                                                "desc": fdesc,
+                                                "unit": "",
+                                                "file_name": rs.get("name", "Dataset RecordSet"),
+                                                "file_url": "",
+                                                "dataset_title": d_name,
+                                                "dataset_url": d_url,
+                                                "cdif_url": f"{base_host}/export?ds={urllib.parse.quote(d_url, safe='')}" if d_url else ""
+                                            })
+                                            if rs.get("name"): unique_files.add(rs.get("name"))
+                except Exception as var_fetch_err:
+                    print(f"Error fetching variables for export: {var_fetch_err}", file=sys.stderr)
+
+                # Filter tokens
+                if tokens:
+                    filtered = []
+                    for v in all_variables:
+                        hay = f"{v.get('name', '')} {v.get('label', '')} {v.get('desc', '')} {v.get('dataset_title', '')}".lower()
+                        if all(t in hay for t in tokens):
+                            filtered.append(v)
+                    all_variables = filtered
+
+                # Deduplicate by (name, file_name, dataset_title)
+                seen_vars = set()
+                deduped_vars = []
+                for v in all_variables:
+                    vk = (v.get("name"), v.get("file_name"), v.get("dataset_title"))
+                    if vk not in seen_vars:
+                        seen_vars.add(vk)
+                        deduped_vars.append(v)
+                all_variables = deduped_vars
+
+                # Build CDIF 1.1 structure matching the standard format
+                context = {
+                    "schema": "http://schema.org/",
+                    "dcterms": "http://purl.org/dc/terms/",
+                    "dcat": "http://www.w3.org/ns/dcat#",
+                    "spdx": "http://spdx.org/rdf/terms#",
+                    "cdi": "http://ddialliance.org/Specification/DDI-CDI/1.0/RDF/",
+                    "cdif": "https://w3id.org/cdif/",
+                    "csvw": "http://www.w3.org/ns/csvw#",
+                    "prov": "http://www.w3.org/ns/prov#",
+                    "dqv": "http://www.w3.org/ns/dqv#",
+                    "cr": "http://mlcommons.org/croissant/",
+                    "rai": "http://mlcommons.org/croissant/RAI/",
+                    "dct": "http://purl.org/dc/terms/",
+                    "sc": "https://schema.org/",
+                    "wd": "https://www.wikidata.org/wiki/"
+                }
+
+                variables_measured = []
+                for idx, v in enumerate(all_variables):
+                    var_id = f"#var_{idx + 1}_{re.sub(r'[^a-zA-Z0-9_-]', '_', v['name'])}"
+                    variables_measured.append({
+                        "@id": var_id,
+                        "@type": [
+                            "schema:PropertyValue",
+                            "cdi:InstanceVariable"
+                        ],
+                        "schema:name": v["name"],
+                        "schema:description": v["desc"] or v["label"],
+                        "cdif:physicalDataType": f"xsd:{v['type'].lower()}" if not v['type'].startswith("xsd:") else v['type'],
+                        "cdi:hasIntendedDataType": {
+                            "@id": f"https://www.w3.org/TR/xmlschema-2/#{v['type'].lower().replace('sc:', '')}"
+                        },
+                        "schema:isPartOf": {
+                            "@type": "schema:Dataset",
+                            "schema:name": v["dataset_title"],
+                            "schema:url": v["dataset_url"]
+                        } if v["dataset_title"] else None,
+                        "cdif:exportUrl": v["cdif_url"] or None
+                    })
+
+                export_doc = {
+                    "@context": context,
+                    "@type": ["schema:Dataset"],
+                    "@id": f"{base_host}/export?q={urllib.parse.quote(q_param, safe='')}",
+                    "schema:name": f"Filtered Variables Export: {q_param}" if q_param else "CDIF Variables Export",
+                    "schema:description": f"Collection of {len(all_variables)} variables across {len(unique_files)} tabular file(s) conforming to CDIF 1.1 Discovery Profile and DDI-CDI 1.0 RDF.",
+                    "schema:url": f"{base_host}/variableindex?q={urllib.parse.quote(q_param, safe='')}",
+                    "schema:datePublished": "2026-10-27",
+                    "schema:variableMeasured": variables_measured,
+                    "schema:subjectOf": {
+                        "@type": ["schema:Dataset"],
+                        "schema:additionalType": [{"@id": "dcat:CatalogRecord"}],
+                        "@id": f"{base_host}/export?q={urllib.parse.quote(q_param, safe='')}/metadata",
+                        "dcterms:conformsTo": [
+                            {"@id": "https://w3id.org/cdif/core/1.1"},
+                            {"@id": "https://w3id.org/cdif/discovery/1.1"},
+                            {"@id": "https://w3id.org/cdif/data_description/1.1"},
+                            {"@id": "https://w3id.org/cdif/manifest/1.1"}
+                        ]
+                    }
+                }
+
+                resp_bytes = json.dumps(export_doc, indent=2).encode("utf-8")
+                safe_q = re.sub(r'[^a-zA-Z0-9_-]', '_', q_param) if q_param else "all"
+                return build_export_response(resp_bytes, f"export_variables_{safe_q}.jsonld", cache_header="MISS")
+
+            target_url = raw_file_param or raw_url_param
+            if not target_url:
+                return JSONResponse({"error": "Missing 'file', 'url', or 'q' query parameter, e.g. /export?file=<file_url> or /export?q=<query>"}, status_code=400)
+
+            # Strip any accidental surrounding or trailing quotes/brackets (e.g. from copy-pasted URLs or JSON strings)
+            target_url = target_url.strip().strip("'\"`<>")
+            while target_url.endswith("%22") or target_url.endswith("%27"):
+                if target_url.endswith("%22"):
+                    target_url = target_url[:-3]
+                elif target_url.endswith("%27"):
+                    target_url = target_url[:-3]
+            target_url = target_url.strip().strip("'\"`<>")
+
+            ds_param = request.query_params.get("ds")
+            ds_url = None
+            if ds_param:
+                # Clean markdown links e.g. [https://doi.org/...](https://doi.org/...)
+                m_ds = re.search(r'\((https?://[^)]+)\)', ds_param)
+                if m_ds:
+                    ds_url = m_ds.group(1).strip()
+                else:
+                    m_ds2 = re.search(r'https?://[^\s\]\)]+', ds_param)
+                    if m_ds2:
+                        ds_url = m_ds2.group(0).strip()
+                    else:
+                        ds_url = ds_param.strip()
+
+            base_host = f"https://{MCP_DOMAIN}"
+
+            # Canonical redirect: If called with legacy ?url= without ?file=, redirect (301) to canonical URL
+            if not raw_file_param and raw_url_param:
+                from starlette.responses import RedirectResponse
+                canon_params = {"file": target_url}
+                if ds_url:
+                    canon_params["ds"] = ds_url
+                canon_redir_url = f"/export?{urllib.parse.urlencode(canon_params)}"
+                return RedirectResponse(url=canon_redir_url, status_code=301)
+
+            req_format = request.query_params.get("format", "cdif").lower().strip()
+            # Canonical format names: "ddi-cdi" vs "cdif" (default)
+            is_ddi_cdi = (req_format == "ddi-cdi")
+
+            ddi_cdi_service = os.environ.get("DDI_CDI_SERVICE") or os.environ.get("DDI_CDI_BASE_URL", "http://10.147.18.186:8088")
+            if ddi_cdi_service.isdigit():
+                ddi_cdi_base = f"http://localhost:{ddi_cdi_service}".rstrip("/")
+            elif ":" not in ddi_cdi_service and not ddi_cdi_service.startswith("http"):
+                ddi_cdi_base = f"http://{ddi_cdi_service}".rstrip("/")
+            elif not ddi_cdi_service.startswith("http://") and not ddi_cdi_service.startswith("https://"):
+                ddi_cdi_base = f"http://{ddi_cdi_service}".rstrip("/")
+            else:
+                ddi_cdi_base = ddi_cdi_service.rstrip("/")
+
+            # Inside docker containers, replace localhost with internal service alias or host.docker.internal
+            if "localhost:8083" in ddi_cdi_base or "127.0.0.1:8083" in ddi_cdi_base:
+                ddi_cdi_base = "http://ddicdi:8000"
+            elif "localhost:8082" in ddi_cdi_base or "127.0.0.1:8082" in ddi_cdi_base:
+                ddi_cdi_base = "http://converters:8000"
+
+            api_key = os.environ.get("DDI_CDI_API_KEY", "")
+
+            cdif_service = os.environ.get("CDIF_SERVICE") or os.environ.get("CDIF_CONVERTER_URL", "http://converters:8000")
+            if cdif_service.isdigit():
+                cdif_converter_url = f"http://localhost:{cdif_service}".rstrip("/")
+            elif ":" not in cdif_service and not cdif_service.startswith("http"):
+                cdif_converter_url = f"http://{cdif_service}".rstrip("/")
+            elif not cdif_service.startswith("http://") and not cdif_service.startswith("https://"):
+                cdif_converter_url = f"http://{cdif_service}".rstrip("/")
+            else:
+                cdif_converter_url = cdif_service.rstrip("/")
+
+            if "localhost:8082" in cdif_converter_url or "127.0.0.1:8082" in cdif_converter_url:
+                cdif_converter_url = "http://converters:8000"
+
+            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+            minio_endpoint = minio_base.replace("http://", "").replace("https://", "")
+            cache_prefix = "ddicdi" if is_ddi_cdi else "cdif_v2"
+            vault_cache_key = f"{cache_prefix}_cache_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
+            doc_cache_id = f"{cache_prefix}_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:24]}"
+            # For backward compatibility: if ddi-cdi is requested, also check legacy key cdif_cache_
+            legacy_vault_cache_key = f"cdif_cache_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:20]}.jsonld" if is_ddi_cdi else None
+            legacy_doc_cache_id = hashlib.sha256((target_url + (ds_url or "")).encode("utf-8")).hexdigest()[:24] if is_ddi_cdi else None
+            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+
 
             
             # Check 1: MinIO vault cache first for instant response
@@ -11103,33 +11312,17 @@ Instructions:
                 # If a query is provided, use multi_match with cross_fields or bool match so multi-token searches match
                 if q_param:
                     clean_q = re.sub(r"[()/\-_]+", " ", q_param).strip()
+                    tokens = [t.lower() for t in clean_q.split() if len(t) > 0 and t.lower() not in ("and", "&")]
+                    # Effective query without literal AND for Elasticsearch query string
+                    eff_q = " ".join(tokens) if tokens else clean_q
                     es_query = {
                         "bool": {
                             "should": [
                                 {
                                     "multi_match": {
-                                        "query": q_param,
+                                        "query": eff_q,
                                         "type": "cross_fields",
-                                        "operator": "or",
-                                        "fields": [
-                                            "title^3", "description^2", "file_name^2",
-                                            "cdif_jsonld.DDICDIModels.name^4",
-                                            "cdif_jsonld.DDICDIModels.displayLabel.locationVariant.entryValue^4",
-                                            "cdif_jsonld.DDICDIModels.dct:description^2",
-                                            "cdif_jsonld.DDICDIModels.definition.content^2",
-                                            "cdif_jsonld.DDICDIModels.physicalDataType.entryValue",
-                                            "cdif_jsonld.schema:variableMeasured.schema:name^4",
-                                            "cdif_jsonld.schema:variableMeasured.name^4",
-                                            "cdif_jsonld.schema:variableMeasured.schema:description^2",
-                                            "cdif_jsonld.variableMeasured.name^4"
-                                        ]
-                                    }
-                                },
-                                {
-                                    "multi_match": {
-                                        "query": clean_q or q_param,
-                                        "type": "cross_fields",
-                                        "operator": "or",
+                                        "operator": "and",
                                         "fields": [
                                             "title^3", "description^2", "file_name^2",
                                             "cdif_jsonld.DDICDIModels.name^4",
@@ -11311,17 +11504,19 @@ Instructions:
                     # If query is specified, search Croissant & Dataverse dataset indices for recordSet.field matches as well
                     if q_param:
                         try:
-                            tokens = [t for t in re.sub(r"[()/\-_]+", " ", q_param).split() if len(t) > 1]
-                            should_clauses = [
-                                {"match_phrase_prefix": {"recordSet.field.name": {"query": q_param, "boost": 4}}},
-                                {"match": {"recordSet.field.name": {"query": q_param, "boost": 3}}},
-                                {"match": {"recordSet.field.description": {"query": q_param, "boost": 2}}}
-                            ]
+                            ds_must = []
                             for t in tokens:
-                                should_clauses.append({"match": {"recordSet.field.name": {"query": t, "boost": 2}}})
-                                should_clauses.append({"match": {"recordSet.field.description": {"query": t, "boost": 1}}})
-
-                            ds_query = {"bool": {"should": should_clauses, "minimum_should_match": 1}}
+                                ds_must.append({
+                                    "bool": {
+                                        "should": [
+                                            {"match": {"recordSet.field.name": {"query": t, "boost": 3}}},
+                                            {"match": {"recordSet.field.description": {"query": t, "boost": 2}}},
+                                            {"match": {"title": {"query": t, "boost": 1}}},
+                                            {"match": {"name": {"query": t, "boost": 1}}}
+                                        ]
+                                    }
+                                })
+                            ds_query = {"bool": {"must": ds_must}} if ds_must else {"match_all": {}}
                             ds_search_resp = await client.post(
                                 f"{es_url}/*,-.*,-collections,-history,-groups,-cdif/_search",
                                 json={
@@ -11386,6 +11581,16 @@ Instructions:
                                             unit_match = re.search(r"\(([^)]+)\)", fld_name)
                                             extracted_unit = unit_match.group(1) if unit_match else ""
 
+                                            cdif_link = ""
+                                            if furl:
+                                                cdif_link = f"https://{MCP_DOMAIN}/export?file={urllib.parse.quote(furl, safe='')}"
+                                                if d_url:
+                                                    cdif_link += f"&ds={urllib.parse.quote(d_url, safe='')}"
+                                            elif d_url:
+                                                cdif_link = f"https://{MCP_DOMAIN}/export?ds={urllib.parse.quote(d_url, safe='')}"
+                                            elif d_id:
+                                                cdif_link = f"https://{MCP_DOMAIN}/export?id={d_id}"
+
                                             all_variables.append({
                                                 "variable_name": fld_name,
                                                 "display_label": fld_name,
@@ -11398,10 +11603,19 @@ Instructions:
                                                 "dataset_id": d_id,
                                                 "dataset_title": d_name,
                                                 "collection_id": "",
-                                                "cdif_export_url": f"https://{MCP_DOMAIN}/export?id={d_id}" if d_id else ""
+                                                "cdif_export_url": cdif_link
                                             })
                         except Exception as ds_fallback_err:
                             print(f"Warning: could not search dataset fields: {ds_fallback_err}", file=sys.stderr)
+
+                    if q_param and tokens:
+                        filtered_vars = []
+                        for v in all_variables:
+                            v_haystack = f"{v.get('variable_name', '')} {v.get('display_label', '')} {v.get('data_type', '')} {v.get('description', '')} {v.get('file_name', '')} {v.get('dataset_title', '')}".lower()
+                            v_norm = re.sub(r"[()/\-_]+", " ", v_haystack)
+                            if all(t in v_norm or t in v_haystack for t in tokens):
+                                filtered_vars.append(v)
+                        all_variables = filtered_vars
 
                     total_vars_count = len(all_variables)
                     returned_variables = all_variables
