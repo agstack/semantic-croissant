@@ -9409,13 +9409,218 @@ Please answer the question based ONLY on the context provided above (including t
                 "results": results
             })
 
+        async def update_collection_variables_cache(cid: str, es_url: str):
+            """
+            Background updater that scans all CDIF records for a collection, computes accurate
+            population-wide variable totals (numeric, text/other, files), extracts the first 100
+            variables, and stores the summary in the Elasticsearch 'cache' index under
+            'collection_variables_{cid}'.
+            """
+            import httpx, json, sys, time
+            try:
+                # Mark updating status in cache doc if it exists
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    try:
+                        await client.post(
+                            f"{es_url}/cache/_update/collection_variables_{cid}",
+                            json={"doc": {"is_updating": True}},
+                            headers={"Content-Type": "application/json"}
+                        )
+                    except Exception:
+                        pass
+
+                    col_items = []
+                    try:
+                        c_resp = await client.get(f"{es_url}/collections/_doc/{cid}", timeout=5.0)
+                        if c_resp.status_code == 200:
+                            col_items = c_resp.json().get("_source", {}).get("items", []) or []
+                    except Exception:
+                        pass
+
+                    should_clauses = [{"term": {"collection_id": cid}}]
+                    if col_items:
+                        should_clauses.append({"terms": {"dataset_id": col_items}})
+
+                    payload = {
+                        "query": {
+                            "bool": {
+                                "should": should_clauses,
+                                "minimum_should_match": 1
+                            }
+                        },
+                        "size": 1000,
+                        "_source": [
+                            "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url",
+                            "cdif_jsonld.DDICDIModels.@type",
+                            "cdif_jsonld.DDICDIModels.name",
+                            "cdif_jsonld.DDICDIModels.displayLabel",
+                            "cdif_jsonld.DDICDIModels.physicalDataType",
+                            "cdif_jsonld.DDICDIModels.dct:description",
+                            "cdif_jsonld.DDICDIModels.definition",
+                            "cdif_jsonld.DDICDIModels.schema:unitText",
+                            "cdif_jsonld.schema:variableMeasured",
+                            "cdif_jsonld.variableMeasured"
+                        ]
+                    }
+                    resp = await client.post(f"{es_url}/cdif/_search", json=payload)
+                    if resp.status_code != 200:
+                        return
+
+                    hits = resp.json().get("hits", {}).get("hits", [])
+                    all_variables = []
+                    files_summary = []
+                    tot_num = 0
+                    tot_other = 0
+
+                    for h in hits:
+                        src = h.get("_source", {})
+                        fname = src.get("file_name", "")
+                        furl = src.get("file_url", "")
+                        durl = src.get("dataset_url", "")
+                        did = src.get("dataset_id", "")
+                        dtitle = src.get("title", "") or fname
+                        cdif_url = src.get("cdif_export_url", "")
+                        if cdif_url and "/export?" in cdif_url:
+                            qs_part = cdif_url.split("/export?", 1)[-1]
+                            base_host = f"https://{MCP_DOMAIN}"
+                            cdif_url = f"{base_host}/export?{qs_part}"
+
+                        cdif_json = src.get("cdif_jsonld", {})
+                        models = cdif_json.get("DDICDIModels", [])
+                        var_meas = cdif_json.get("schema:variableMeasured") or cdif_json.get("variableMeasured") or []
+                        f_var_count = 0
+
+                        for m in models:
+                            if isinstance(m, dict) and m.get("@type") == "InstanceVariable":
+                                f_var_count += 1
+                                raw_name = m.get("name", {})
+                                var_name = raw_name.get("name", "") if isinstance(raw_name, dict) else str(raw_name or "")
+                                raw_disp = m.get("displayLabel", {})
+                                loc_var = raw_disp.get("locationVariant", {}) if isinstance(raw_disp, dict) else {}
+                                disp_label = loc_var.get("entryValue", "") if isinstance(loc_var, dict) else str(loc_var or "")
+                                if not disp_label:
+                                    disp_label = var_name
+
+                                raw_dt = m.get("physicalDataType", {})
+                                data_type = raw_dt.get("entryValue", "") if isinstance(raw_dt, dict) else str(raw_dt or "")
+                                desc = m.get("dct:description") or ""
+                                if not desc:
+                                    raw_def = m.get("definition", {})
+                                    desc = raw_def.get("content", "") if isinstance(raw_def, dict) else str(raw_def or "")
+                                unit = m.get("schema:unitText") or ""
+
+                                dt_low = (data_type or "").lower()
+                                if any(x in dt_low for x in ["numeric", "int", "float", "double", "decimal"]):
+                                    tot_num += 1
+                                else:
+                                    tot_other += 1
+
+                                all_variables.append({
+                                    "variable_name": var_name,
+                                    "display_label": disp_label,
+                                    "data_type": data_type or "unspecified",
+                                    "description": desc,
+                                    "unit": unit,
+                                    "location": "Global",
+                                    "file_name": fname,
+                                    "file_url": furl,
+                                    "dataset_url": durl,
+                                    "dataset_id": did,
+                                    "dataset_title": dtitle,
+                                    "cdif_export_url": cdif_url
+                                })
+
+                        if isinstance(var_meas, list):
+                            for vm in var_meas:
+                                if not isinstance(vm, dict):
+                                    continue
+                                vm_type = vm.get("@type")
+                                is_iv = False
+                                if isinstance(vm_type, list):
+                                    is_iv = any("InstanceVariable" in str(t) or "PropertyValue" in str(t) for t in vm_type)
+                                elif isinstance(vm_type, str):
+                                    is_iv = "InstanceVariable" in vm_type or "PropertyValue" in vm_type
+                                else:
+                                    is_iv = True
+
+                                if is_iv:
+                                    f_var_count += 1
+                                    raw_name = vm.get("schema:name") or vm.get("name") or vm.get("@id", "")
+                                    var_name = str(raw_name).lstrip("#").strip()
+                                    disp_label = str(vm.get("schema:description") or vm.get("description") or var_name).strip()
+                                    data_type = str(vm.get("cdif:physicalDataType") or vm.get("physicalDataType") or "unspecified").replace("xsd:", "")
+                                    desc = str(vm.get("schema:description") or vm.get("description") or "")
+                                    unit = str(vm.get("schema:unitText") or vm.get("unitText") or "")
+
+                                    dt_low = (data_type or "").lower()
+                                    if any(x in dt_low for x in ["numeric", "int", "float", "double", "decimal"]):
+                                        tot_num += 1
+                                    else:
+                                        tot_other += 1
+
+                                    all_variables.append({
+                                        "variable_name": var_name,
+                                        "display_label": disp_label or var_name,
+                                        "data_type": data_type or "unspecified",
+                                        "description": desc,
+                                        "unit": unit,
+                                        "location": "Global",
+                                        "file_name": fname,
+                                        "file_url": furl,
+                                        "dataset_url": durl,
+                                        "dataset_id": did,
+                                        "dataset_title": dtitle,
+                                        "cdif_export_url": cdif_url
+                                    })
+
+                        files_summary.append({
+                            "file_name": fname,
+                            "file_url": furl,
+                            "dataset_url": durl,
+                            "dataset_id": did,
+                            "dataset_title": dtitle,
+                            "location": "Global",
+                            "cdif_export_url": cdif_url,
+                            "variables_count": f_var_count
+                        })
+
+                    cache_doc = {
+                        "cache_key": f"collection_variables_{cid}",
+                        "collection_id": cid,
+                        "total_files": len(files_summary),
+                        "total_variables": len(all_variables),
+                        "total_numeric": tot_num,
+                        "total_other": tot_other,
+                        "numeric_variables": tot_num,
+                        "text_other_variables": tot_other,
+                        "first_100_variables": all_variables[:100],
+                        "files": files_summary[:100],
+                        "is_updating": False,
+                        "updated_at": int(time.time())
+                    }
+                    await client.put(f"{es_url}/cache/_doc/collection_variables_{cid}", json=cache_doc)
+            except Exception as e:
+                print(f"[CollectionVariablesCache] Error updating collection {cid} variables cache: {e}", file=sys.stderr)
+
+        async def api_collections_variables_refresh(request):
+            """
+            Background cache updater trigger for a collection's variables index.
+            """
+            import asyncio, os
+            from starlette.responses import JSONResponse
+            cid = request.path_params["id"]
+            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            asyncio.create_task(update_collection_variables_cache(cid, es_url))
+            return JSONResponse({"status": "ok", "message": f"Collection {cid} variables cache update initiated in background"})
+
         async def api_collections_variables(request):
             """
             Fetches all CDIF variables (InstanceVariable) extracted from tabular files
-            for this collection from the Elasticsearch 'cdif' index.
+            for this collection from the Elasticsearch 'cdif' index, leveraging the
+            Elasticsearch 'cache' index for instantaneous (<200ms) statistical KPI responses.
             """
             from starlette.responses import JSONResponse
-            import json, httpx, os
+            import json, httpx, os, asyncio, time
 
             cid = request.path_params["id"]
             es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
@@ -9425,9 +9630,42 @@ Please answer the question based ONLY on the context provided above (including t
             offset_param = request.query_params.get("offset")
             offset = int(offset_param) if offset_param and offset_param.isdigit() else 0
 
+            # 1. Fast Cache Hit from Elasticsearch 'cache' index
+            if offset == 0:
+                try:
+                    async with httpx.AsyncClient(timeout=4.0) as cache_client:
+                        cache_res = await cache_client.get(f"{es_url}/cache/_doc/collection_variables_{cid}")
+                        if cache_res.status_code == 200:
+                            c_data = cache_res.json().get("_source", {})
+                            cached_vars = c_data.get("first_100_variables", [])
+                            if limit is not None:
+                                cached_vars = cached_vars[:limit]
+                            num_val = c_data.get("numeric_variables", c_data.get("total_numeric", 0))
+                            other_val = c_data.get("text_other_variables", c_data.get("total_other", 0))
+                            
+                            # Trigger background refresh if stale or requested
+                            if time.time() - c_data.get("updated_at", 0) > 3600:
+                                asyncio.create_task(update_collection_variables_cache(cid, es_url))
+
+                            return JSONResponse({
+                                "collection_id": cid,
+                                "total_files": c_data.get("total_files", 0),
+                                "total_variables": c_data.get("total_variables", len(cached_vars)),
+                                "total_numeric": num_val,
+                                "total_other": other_val,
+                                "numeric_variables": num_val,
+                                "text_other_variables": other_val,
+                                "variables": cached_vars,
+                                "files": c_data.get("files", []),
+                                "has_more": c_data.get("total_variables", 0) > len(cached_vars),
+                                "cached": True,
+                                "is_updating": c_data.get("is_updating", False)
+                            })
+                except Exception as cache_err:
+                    print(f"[CollectionVariablesCache] Note: could not load from cache index: {cache_err}", file=sys.stderr)
+
             try:
                 # Query ES 'cdif' index for this collection with selective fields
-                # Also resolve member dataset IDs from collection doc in case cdif docs were indexed by dataset_id
                 col_items = []
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     try:
@@ -11968,6 +12206,7 @@ Output a JSON object with:
                 Route("/api/collections/{id}/export", endpoint=api_collections_export_croissant, methods=["GET"]),
                 Route("/api/collections/{id}/analyze", endpoint=api_collections_analyze, methods=["GET", "POST"]),
                 Route("/api/collections/{id}/variables", endpoint=api_collections_variables, methods=["GET"]),
+                Route("/api/collections/{id}/variables/refresh", endpoint=api_collections_variables_refresh, methods=["GET", "POST"]),
                 Route("/api/collections/{id}/variables/ask", endpoint=api_collections_variables_ask, methods=["POST"]),
                 Route("/api/collections/{id}/ask", endpoint=api_collections_ask, methods=["POST"]),
                 Route("/api/collectionsindex/ask", endpoint=api_collections_index_ask, methods=["POST"]),

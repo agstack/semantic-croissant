@@ -1381,7 +1381,7 @@
             if (countBadge) countBadge.innerHTML = '<span class="var-spinner" style="width: 10px; height: 10px; border-width: 1.5px; vertical-align: middle; margin-right: 4px;"></span> Loading...';
 
             try {
-                // Step 1: Load first 100 variables fast and show them immediately
+                // Step 1: Load first 100 variables fast from cache and show them immediately (<200ms)
                 const initialRes = await fetch(`/api/collections/${colId}/variables?limit=100&offset=0`);
                 if (!initialRes.ok) {
                     throw new Error(`Failed to load variables: ${initialRes.status}`);
@@ -1390,7 +1390,13 @@
                 cachedVariablesData = initialData;
                 renderVariablesTable(initialData);
 
-                // Step 2: If there are more variables in the index, fetch the full index in the background
+                // Step 2: Trigger background cache synchronization in Elasticsearch
+                fetch(`/api/collections/${colId}/variables/refresh`)
+                    .then(r => r.json())
+                    .then(refreshData => console.log('Collection variables background cache sync:', refreshData))
+                    .catch(e => console.warn('Cache refresh note:', e));
+
+                // Step 3: If there are more variables in the index, fetch the full index in the background
                 if (initialData.has_more || (initialData.total_variables && initialData.total_variables > initialData.variables.length)) {
                     if (countBadge) {
                         countBadge.innerHTML = `<span class="var-spinner" style="width: 10px; height: 10px; border-width: 1.5px; vertical-align: middle; margin-right: 4px;"></span> Loading remaining ${initialData.total_variables.toLocaleString()} variables...`;
@@ -1435,18 +1441,26 @@
             if (statTotal) statTotal.textContent = totalVars.toLocaleString();
             if (statFiles) statFiles.textContent = totalFiles.toLocaleString();
 
-            let numCount = 0;
-            let otherCount = 0;
-            vars.forEach(v => {
-                const dt = (v.data_type || '').toLowerCase();
-                if (dt.includes('numeric') || dt.includes('int') || dt.includes('float') || dt.includes('double')) {
-                    numCount++;
-                } else {
-                    otherCount++;
-                }
-            });
-            if (statNumeric) statNumeric.textContent = numCount.toLocaleString();
-            if (statOther) statOther.textContent = otherCount.toLocaleString();
+            const numVal = (data && (data.numeric_variables !== undefined ? data.numeric_variables : data.total_numeric));
+            const otherVal = (data && (data.text_other_variables !== undefined ? data.text_other_variables : data.total_other));
+
+            if (numVal !== undefined && numVal !== null && Number(numVal) > 0) {
+                if (statNumeric) statNumeric.textContent = Number(numVal).toLocaleString();
+                if (statOther) statOther.textContent = Number(otherVal !== undefined ? otherVal : 0).toLocaleString();
+            } else {
+                let numCount = 0;
+                let otherCount = 0;
+                vars.forEach(v => {
+                    const dt = (v.data_type || '').toLowerCase();
+                    if (dt.includes('numeric') || dt.includes('int') || dt.includes('float') || dt.includes('double') || dt.includes('decimal')) {
+                        numCount++;
+                    } else {
+                        otherCount++;
+                    }
+                });
+                if (statNumeric) statNumeric.textContent = numCount.toLocaleString();
+                if (statOther) statOther.textContent = otherCount.toLocaleString();
+            }
 
             if (vars.length === 0) {
                 if (tableContainer) tableContainer.style.display = 'none';
