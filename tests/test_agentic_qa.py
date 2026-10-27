@@ -265,6 +265,41 @@ def test_collections_index_qa_ask():
         print(f"[Timing] test_collections_index_qa_ask took {elapsed_total:.2f}s (inference: {elapsed_ask:.2f}s)")
     return elapsed_total
 
+def test_collection_variables():
+    """Test retrieving variables from /api/collections/{id}/variables and Q&A on variables."""
+    t0 = time.time()
+    base_url = get_service_base_url()
+    collection_id = os.environ.get("COLLECTION", "2c6ba351-a288-4fe3-93a7-1280863af2ee")
+    vars_url = f"{base_url}/api/collections/{collection_id}/variables"
+    print(f"\n[Test] Running test_collection_variables targeting: {vars_url}")
+
+    with httpx.Client(timeout=60.0) as client:
+        try:
+            resp = client.get(vars_url)
+        except Exception as e:
+            pytest.fail(f"Connection failed while requesting {vars_url}: {type(e).__name__}: {e}")
+
+        if resp.status_code != 200:
+            pytest.fail(f"{vars_url} returned HTTP {resp.status_code}: {resp.text}")
+
+        data = resp.json()
+        total_files = data.get("total_files", 0)
+        total_vars = data.get("total_variables", 0)
+        variables = data.get("variables", [])
+
+        print(f"[Collection Variables] Collection ID: {collection_id}")
+        print(f"[Collection Variables] Total Files: {total_files}, Total Variables: {total_vars}")
+        if variables:
+            print(f"[Collection Variables] Sample Variable: {variables[0].get('variable_name')} ({variables[0].get('data_type')}) - {variables[0].get('description')}")
+
+        assert total_files > 0, f"Expected total_files > 0 for collection {collection_id}, got {total_files}"
+        assert total_vars > 0, f"Expected total_variables > 0 for collection {collection_id}, got {total_vars}"
+        assert len(variables) > 0, f"Variables array is empty for collection {collection_id}"
+
+    elapsed_total = time.time() - t0
+    print(f"[Timing] test_collection_variables took {elapsed_total:.2f}s")
+    return elapsed_total
+
 if __name__ == "__main__":
     total_start = time.time()
     print("=== RUNNING QA AGENTIC TESTS ===")
@@ -273,12 +308,14 @@ if __name__ == "__main__":
     t1 = test_dataset_page_qa_vault_ask()
     t2 = test_collections_qa_ask()
     t3 = test_collections_index_qa_ask()
+    t4 = test_collection_variables()
     total_duration = time.time() - total_start
     print("\n" + "="*50)
     print(f"⏱️  SUMMARY OF EXECUTION TIMES:")
     print(f"   • Dataset Page QA (/vault/ask):            {t1:.2f}s")
     print(f"   • Specific Collection QA (/ask):           {t2:.2f}s")
     print(f"   • Global Collections QA (/index/ask):      {t3:.2f}s")
+    print(f"   • Collection Variables (/variables):       {t4:.2f}s")
     print(f"   • Total Test Suite Duration:               {total_duration:.2f}s")
     print("="*50)
     print("✅ All agentic QA tests passed successfully!")
