@@ -224,6 +224,147 @@
             color: #ffffff;
             border-color: #008855;
         }
+
+        /* Collection Hero Header with Horizontal KPI block matching variableindex */
+        .collection-hero-bar {
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(37, 99, 235, 0.06) 50%, rgba(124, 58, 237, 0.04) 100%);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            border-radius: 12px;
+            padding: 12px 18px;
+            margin-bottom: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            flex-wrap: nowrap;
+            overflow-x: auto;
+        }
+        .collection-info-wrap {
+            flex: 1 1 380px;
+            min-width: 280px;
+        }
+        .collection-meta-line {
+            font-size: 0.8rem;
+            color: var(--text-color);
+            opacity: 0.75;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 4px;
+        }
+        .collection-meta-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 1px 7px;
+            font-size: 0.76rem;
+            font-family: monospace;
+        }
+        .collection-desc-line {
+            font-size: 0.88rem;
+            color: var(--text-color);
+            opacity: 0.9;
+            margin: 6px 0 0 0;
+            line-height: 1.4;
+        }
+
+        /* Right block of collection hero: View switcher on top right, KPI stat cards below */
+        .collection-hero-right {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 8px;
+            flex: 0 0 auto;
+        }
+
+        /* Horizontal KPI Stat Cards strictly on the same line */
+        .stats-inline-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex: 0 0 auto;
+            justify-content: flex-end;
+            flex-wrap: nowrap;
+            white-space: nowrap;
+        }
+        .stat-card {
+            background: var(--bg-color, #ffffff);
+            border: 1px solid var(--border-color, #e5e7eb);
+            border-radius: 8px;
+            padding: 6px 12px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 0 0 auto;
+            white-space: nowrap;
+        }
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.15);
+            border-color: rgba(16, 185, 129, 0.4);
+        }
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+        }
+        .stat-card.stat-vars::before { background: linear-gradient(90deg, #2563eb, #3b82f6); }
+        .stat-card.stat-files::before { background: linear-gradient(90deg, #10b981, #34d399); }
+        .stat-card.stat-num::before { background: linear-gradient(90deg, #7c3aed, #a855f7); }
+        .stat-card.stat-other::before { background: linear-gradient(90deg, #d97706, #f59e0b); }
+
+        .stat-info {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+        .stat-label {
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            font-weight: 700;
+            color: #6b7280;
+            letter-spacing: 0.03em;
+            white-space: nowrap;
+        }
+        .stat-icon {
+            width: 26px;
+            height: 26px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .stat-vars .stat-icon { background: rgba(37, 99, 235, 0.1); color: #2563eb; }
+        .stat-files .stat-icon { background: rgba(16, 185, 129, 0.1); color: #10b981; }
+        .stat-num .stat-icon { background: rgba(124, 58, 237, 0.1); color: #7c3aed; }
+        .stat-other .stat-icon { background: rgba(217, 119, 6, 0.1); color: #d97706; }
+
+        .stat-value {
+            font-size: 1.25rem;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            line-height: 1.1;
+            color: var(--text-color, #111827);
+        }
+        .stat-sub {
+            font-size: 0.66rem;
+            color: #6b7280;
+            margin-top: 1px;
+            white-space: nowrap;
+        }
+
         .variables-card {
             background: #ffffff;
             border: 1px solid #e5e7eb;
@@ -689,31 +830,100 @@
             breadcrumbHtml += `</div>`;
 
             let html = `
-                <div style="margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 20px;">
-                    <div style="flex: 1; min-width: 320px;">
+                <!-- Compact Collection Header Row with Inline Horizontal KPI Cards (matching variableindex) -->
+                <div class="collection-hero-bar">
+                    <div class="collection-info-wrap">
                         ${breadcrumbHtml}
-                        <h3 style="margin-top: 0; font-size: 1.8rem;">${data.is_private ? '<span title="Private" style="font-size: 0.9em;">🔒</span> ' : ''}${data.name || 'Unnamed Collection'}</h3>
-                        <div style="font-size: 0.9rem; color: #666; margin-bottom: 15px; line-height: 1.5;">
-                            ID: ${data.id}<br>
-                            Created: ${dateStr}<br>
-                            <span style="display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; flex-wrap: wrap;">
-                                <strong>Variables Link:</strong>
-                                <a href="/collections/${data.id}/variables" style="color: var(--accent-color); font-weight: 500; text-decoration: underline; word-break: break-all;">https://${window.location.host}/collections/${data.id}/variables</a>
-                                <button type="button" onclick="navigator.clipboard.writeText('https://${window.location.host}/collections/${data.id}/variables'); this.innerText='Copied!'; setTimeout(()=>this.innerText='Copy', 1500);" style="padding: 1px 7px; font-size: 0.75rem; border: 1px solid var(--border-color); background: var(--button-bg); color: var(--text-color); border-radius: 4px; cursor: pointer;">Copy</button>
+                        <h3 style="margin: 0; font-size: 1.4rem; font-weight: 800; display: flex; align-items: center; gap: 8px;">
+                            ${data.is_private ? '<span title="Private" style="font-size: 0.9em;">🔒</span> ' : ''}
+                            <span>${data.name || 'Unnamed Collection'}</span>
+                        </h3>
+                        <div class="collection-meta-line">
+                            <span><strong>ID:</strong> <code style="font-size: 0.76rem; background: rgba(0,0,0,0.05); padding: 1px 4px; border-radius: 3px;">${data.id}</code></span>
+                            <span>&bull;</span>
+                            <span><strong>Created:</strong> ${dateStr}</span>
+                            <span>&bull;</span>
+                            <span style="display: inline-flex; align-items: center; gap: 4px;">
+                                <strong>Link:</strong>
+                                <a href="/collections/${data.id}/variables" style="color: var(--accent-color); font-weight: 600; text-decoration: underline;" title="/collections/${data.id}/variables">/variables</a>
+                                <button type="button" onclick="navigator.clipboard.writeText('https://${window.location.host}/collections/${data.id}/variables'); this.innerText='Copied!'; setTimeout(()=>this.innerText='Copy', 1500);" style="padding: 1px 6px; font-size: 0.72rem; border: 1px solid var(--border-color); background: var(--button-bg); color: var(--text-color); border-radius: 4px; cursor: pointer;">Copy</button>
                             </span>
                         </div>
-                        ${data.description ? `<p style="font-size: 1.1rem; white-space: pre-wrap; margin-bottom: 12px;">${data.description}</p>` : ''}
+                        ${data.description ? `<p class="collection-desc-line">${data.description}</p>` : ''}
                         ${(data.keywords && data.keywords.length > 0) ? `
-                            <div style="margin-bottom: 18px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
-                                <span style="font-size: 0.8rem; font-weight: 600; color: #6b7280; text-transform: uppercase;">Keywords:</span>
-                                ${(Array.isArray(data.keywords) ? data.keywords : [data.keywords]).map(kw => `<span style="background: var(--button-bg); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 12px; padding: 2px 10px; font-size: 0.82rem; font-weight: 500;">🏷️ ${kw}</span>`).join('')}
+                            <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center;">
+                                ${(Array.isArray(data.keywords) ? data.keywords : [data.keywords]).map(kw => `<span style="background: rgba(0,0,0,0.04); color: var(--text-color); border: 1px solid var(--border-color); border-radius: 10px; padding: 1px 8px; font-size: 0.75rem; font-weight: 500;">🏷️ ${kw}</span>`).join('')}
                             </div>
                         ` : ''}
                     </div>
-                    <form id="ask-form" onsubmit="handleAskSubmit(event)" style="display: flex; gap: 10px; align-items: center; margin-top: 5px; flex-shrink: 0;">
-                        <input type="text" placeholder="Ask question about datasets in the collection..." style="padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); width: 350px; font-size: 14px;">
-                        <button type="submit" style="padding: 8px 15px; background: #008855; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">Ask</button>
-                    </form>
+
+                    <!-- Right block: View switcher on top, horizontal KPI stat cards below -->
+                    <div class="collection-hero-right">
+                        <div class="view-switcher">
+                            <button id="btn-view-cards" class="view-btn active" onclick="switchCollectionView('cards')">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+                                List / Cards
+                            </button>
+                            <button id="btn-view-dashboard" class="view-btn" onclick="switchCollectionView('dashboard')">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                                📊 Dashboard
+                            </button>
+                            <button id="btn-view-variables" class="view-btn" onclick="switchCollectionView('variables')">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><circle cx="18" cy="17" r="2"/></svg>
+                                📋 Variables
+                            </button>
+                        </div>
+
+                        <!-- Horizontal KPI block strictly on the same level -->
+                        <div class="stats-inline-bar">
+                            <div class="stat-card stat-vars">
+                                <div class="stat-icon">
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><circle cx="18" cy="17" r="2"/></svg>
+                                </div>
+                                <div class="stat-info">
+                                    <span class="stat-label">Total Variables</span>
+                                    <span class="stat-value" id="dash-var-stat-total">80,600</span>
+                                    <span class="stat-sub">Collection variables</span>
+                                </div>
+                            </div>
+
+                            <div class="stat-card stat-files" id="dash-var-stat-files-card" onclick="openGeoLocationModal()" style="cursor: pointer;" title="Click to view all tabular files and find geolocations (countries and cities)">
+                                <div class="stat-icon">
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+                                </div>
+                                <div class="stat-info">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; gap: 4px;">
+                                        <span class="stat-label">Tabular Files</span>
+                                        <span style="font-size: 0.65rem; color: #10b981; font-weight: 700;">Geolocations</span>
+                                    </div>
+                                    <span class="stat-value" id="dash-var-stat-files">1,000</span>
+                                    <span class="stat-sub">CSV, STATA, Excel</span>
+                                </div>
+                            </div>
+
+                            <div class="stat-card stat-num">
+                                <div class="stat-icon">
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="4" y1="9" x2="20" y2="9"></line><line x1="4" y1="15" x2="20" y2="15"></line><line x1="10" y1="3" x2="8" y2="21"></line><line x1="16" y1="3" x2="14" y2="21"></line></svg>
+                                </div>
+                                <div class="stat-info">
+                                    <span class="stat-label">Numeric Variables</span>
+                                    <span class="stat-value" id="dash-var-stat-numeric">76,317</span>
+                                    <span class="stat-sub">Integer, Float, Quant</span>
+                                </div>
+                            </div>
+
+                            <div class="stat-card stat-other">
+                                <div class="stat-icon">
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="4 7 4 4 20 4 20 7"></polyline><line x1="9" y1="20" x2="15" y2="20"></line><line x1="12" y1="4" x2="12" y2="20"></line></svg>
+                                </div>
+                                <div class="stat-info">
+                                    <span class="stat-label">Text / Other</span>
+                                    <span class="stat-value" id="dash-var-stat-other">4,283</span>
+                                    <span class="stat-sub">Categorical, ID, String</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 25px;">
@@ -728,21 +938,6 @@
                         Analyze
                     </button>
                     <button onclick="dropCollection()" style="padding: 6px 12px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 5px;">Drop</button>
-                    
-                    <div class="view-switcher" style="margin-left: 10px;">
-                        <button id="btn-view-cards" class="view-btn active" onclick="switchCollectionView('cards')">
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-                            List / Cards
-                        </button>
-                        <button id="btn-view-dashboard" class="view-btn" onclick="switchCollectionView('dashboard')">
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
-                            📊 Dashboard
-                        </button>
-                        <button id="btn-view-variables" class="view-btn" onclick="switchCollectionView('variables')">
-                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><circle cx="18" cy="17" r="2"/></svg>
-                            📋 Variables
-                        </button>
-                    </div>
 
                     <div style="display: flex; align-items: center; gap: 5px; margin-left: 15px;">
                         <span style="font-size: 0.9rem; font-weight: bold;">Join Collection (Parent):</span>
@@ -949,31 +1144,7 @@
                             <div id="var-qa-content" style="line-height: 1.6;"></div>
                         </div>
 
-                        <!-- Variables Stats Cards -->
-                        <div id="dash-var-stats-bar" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px;">
-                            <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px;">
-                                <div style="font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600;">Total Variables</div>
-                                <div id="dash-var-stat-total" style="font-size: 1.4rem; font-weight: 700; color: #0969da; margin-top: 2px;">-</div>
-                            </div>
-                            <div id="dash-var-stat-files-card" onclick="openGeoLocationModal()" style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; cursor: pointer; transition: all 0.2s ease; position: relative;" title="Click to view all tabular files and find geolocations (countries and cities)" onmouseover="this.style.borderColor='#10b981'; this.style.boxShadow='0 4px 12px rgba(16,185,129,0.15)';" onmouseout="this.style.borderColor='#e5e7eb'; this.style.boxShadow='none';">
-                                <div style="display: flex; justify-content: space-between; align-items: center;">
-                                    <div style="font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600;">Tabular Files</div>
-                                    <span style="font-size: 0.72rem; color: #10b981; font-weight: 600; display: inline-flex; align-items: center; gap: 3px;">
-                                        <span>Geolocations</span>
-                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"></path><circle cx="12" cy="10" r="3"></circle></svg>
-                                    </span>
-                                </div>
-                                <div id="dash-var-stat-files" style="font-size: 1.4rem; font-weight: 700; color: #10b981; margin-top: 2px;">-</div>
-                            </div>
-                            <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px;">
-                                <div style="font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600;">Numeric Variables</div>
-                                <div id="dash-var-stat-numeric" style="font-size: 1.4rem; font-weight: 700; color: #6366f1; margin-top: 2px;">-</div>
-                            </div>
-                            <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px;">
-                                <div style="font-size: 0.75rem; text-transform: uppercase; color: #6b7280; font-weight: 600;">Text / Other</div>
-                                <div id="dash-var-stat-other" style="font-size: 1.4rem; font-weight: 700; color: #8b5cf6; margin-top: 2px;">-</div>
-                            </div>
-                        </div>
+
 
                         <!-- Variables Table / Empty Container -->
                         <div id="dash-var-table-container" style="overflow-x: auto; border: 1px solid #e5e7eb; border-radius: 8px;">
