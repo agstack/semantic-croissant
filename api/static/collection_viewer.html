@@ -882,7 +882,7 @@
                                 </div>
                                 <div class="stat-info">
                                     <span class="stat-label">Total Variables</span>
-                                    <span class="stat-value" id="dash-var-stat-total">80,600</span>
+                                    <span class="stat-value" id="dash-var-stat-total">...</span>
                                     <span class="stat-sub">Collection variables</span>
                                 </div>
                             </div>
@@ -896,7 +896,7 @@
                                         <span class="stat-label">Tabular Files</span>
                                         <span style="font-size: 0.65rem; color: #10b981; font-weight: 700;">Geolocations</span>
                                     </div>
-                                    <span class="stat-value" id="dash-var-stat-files">1,000</span>
+                                    <span class="stat-value" id="dash-var-stat-files">...</span>
                                     <span class="stat-sub">CSV, STATA, Excel</span>
                                 </div>
                             </div>
@@ -907,7 +907,7 @@
                                 </div>
                                 <div class="stat-info">
                                     <span class="stat-label">Numeric Variables</span>
-                                    <span class="stat-value" id="dash-var-stat-numeric">76,317</span>
+                                    <span class="stat-value" id="dash-var-stat-numeric">...</span>
                                     <span class="stat-sub">Integer, Float, Quant</span>
                                 </div>
                             </div>
@@ -918,7 +918,7 @@
                                 </div>
                                 <div class="stat-info">
                                     <span class="stat-label">Text / Other</span>
-                                    <span class="stat-value" id="dash-var-stat-other">4,283</span>
+                                    <span class="stat-value" id="dash-var-stat-other">...</span>
                                     <span class="stat-sub">Categorical, ID, String</span>
                                 </div>
                             </div>
@@ -1508,6 +1508,39 @@
                     if (tbFill) tbFill.style.width = '0%';
                     if (tbText) tbText.innerText = '0%';
                 }
+            }
+
+            // Update top-level KPI stat cards
+            const statTotal = document.getElementById('dash-var-stat-total');
+            const statFiles = document.getElementById('dash-var-stat-files');
+            const statNumeric = document.getElementById('dash-var-stat-numeric');
+            const statOther = document.getElementById('dash-var-stat-other');
+
+            if (statTotal) statTotal.textContent = totalVars.toLocaleString();
+            if (statFiles) statFiles.textContent = totalFiles.toLocaleString();
+
+            const numVal = (data && (data.numeric_variables !== undefined ? data.numeric_variables : data.total_numeric));
+            const otherVal = (data && (data.text_other_variables !== undefined ? data.text_other_variables : data.total_other));
+
+            if (numVal !== undefined && numVal !== null && Number(numVal) > 0) {
+                if (statNumeric) statNumeric.textContent = Number(numVal).toLocaleString();
+                if (statOther) statOther.textContent = Number(otherVal !== undefined ? otherVal : 0).toLocaleString();
+            } else if (data && data.variables && data.variables.length > 0) {
+                let numCount = 0;
+                let otherCount = 0;
+                data.variables.forEach(v => {
+                    const dt = (v.data_type || '').toLowerCase();
+                    if (dt.includes('numeric') || dt.includes('int') || dt.includes('float') || dt.includes('double') || dt.includes('decimal')) {
+                        numCount++;
+                    } else {
+                        otherCount++;
+                    }
+                });
+                if (statNumeric) statNumeric.textContent = numCount.toLocaleString();
+                if (statOther) statOther.textContent = otherCount.toLocaleString();
+            } else {
+                if (statNumeric) statNumeric.textContent = '0';
+                if (statOther) statOther.textContent = '0';
             }
 
             // If analyze button exists, highlight if CDIF is ready
