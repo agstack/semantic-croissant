@@ -13,7 +13,10 @@ with open(CONFIG_PATH, "r", encoding="utf-8") as f:
     config = json.load(f)
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", config.get("OLLAMA_HOST", "http://10.147.18.82:11435"))
-MODEL = os.environ.get("MODEL", config.get("MODEL", "gemma4:e4b"))
+if "10.147.18.24" in OLLAMA_HOST or "ollama:11434" in OLLAMA_HOST:
+    OLLAMA_HOST = "http://10.147.18.82:11435"
+MODEL = os.environ.get("MODEL", config.get("MODEL", "gemma4:31b-cloud"))
+OLLAMA_TOKEN = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
 MCP_URL = os.environ.get("MCP_URL", config.get("MCP_URL", "http://localhost:7070/sse"))
 AI_MODEL_OVERRIDE = os.environ.get("AI_MODEL_OVERRIDE", config.get("ai_model_override", "Semantic Croissant AI Agent v.0.1"))
 SYSTEM_PROMPT = os.environ.get("SYSTEM_PROMPT", config.get("system_prompt", "You are an autonomous AI data analyst agent connected to an MCP tool ecosystem."))
@@ -62,6 +65,7 @@ async def run_agent(query: str, expert: str = "openml", limit: int = 10, save_va
                 
                 while True:
                     print(f"\n[Agent] Thinking... (Model: {MODEL})")
+                    req_headers = {"Authorization": f"Bearer {OLLAMA_TOKEN}"} if OLLAMA_TOKEN else {}
                     try:
                         response = await client.post(
                             f"{OLLAMA_HOST}/api/chat",
@@ -73,11 +77,29 @@ async def run_agent(query: str, expert: str = "openml", limit: int = 10, save_va
                                 "options": {
                                     "num_ctx": 65536
                                 }
-                            }
+                            },
+                            headers=req_headers
                         )
                     except Exception as e:
-                        print(f"Failed to connect to Ollama: {e}")
-                        break
+                        # Fallback attempt if host fails
+                        fallback_host = "http://10.147.18.82:11435" if OLLAMA_HOST != "http://10.147.18.82:11435" else "http://ollama:11434"
+                        try:
+                            response = await client.post(
+                                f"{fallback_host}/api/chat",
+                                json={
+                                    "model": MODEL,
+                                    "messages": messages,
+                                    "tools": ollama_tools,
+                                    "stream": False,
+                                    "options": {
+                                        "num_ctx": 65536
+                                    }
+                                },
+                                headers=req_headers
+                            )
+                        except Exception as e2:
+                            print(f"Failed to connect to Ollama: {e} (fallback error: {e2})")
+                            break
                         
                     if response.status_code != 200:
                         print("Error from Ollama:", response.text)
