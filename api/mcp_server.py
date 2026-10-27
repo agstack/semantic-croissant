@@ -9427,23 +9427,41 @@ Please answer the question based ONLY on the context provided above (including t
 
             try:
                 # Query ES 'cdif' index for this collection with selective fields
-                payload = {
-                    "query": {"term": {"collection_id": cid}},
-                    "size": 1000,
-                    "_source": [
-                        "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url",
-                        "cdif_jsonld.DDICDIModels.@type",
-                        "cdif_jsonld.DDICDIModels.name",
-                        "cdif_jsonld.DDICDIModels.displayLabel",
-                        "cdif_jsonld.DDICDIModels.physicalDataType",
-                        "cdif_jsonld.DDICDIModels.dct:description",
-                        "cdif_jsonld.DDICDIModels.definition",
-                        "cdif_jsonld.DDICDIModels.schema:unitText",
-                        "cdif_jsonld.schema:variableMeasured",
-                        "cdif_jsonld.variableMeasured"
-                    ]
-                }
+                # Also resolve member dataset IDs from collection doc in case cdif docs were indexed by dataset_id
+                col_items = []
                 async with httpx.AsyncClient(timeout=30.0) as client:
+                    try:
+                        c_resp = await client.get(f"{es_url}/collections/_doc/{cid}", timeout=5.0)
+                        if c_resp.status_code == 200:
+                            col_items = c_resp.json().get("_source", {}).get("items", []) or []
+                    except Exception:
+                        pass
+
+                    should_clauses = [{"term": {"collection_id": cid}}]
+                    if col_items:
+                        should_clauses.append({"terms": {"dataset_id": col_items}})
+
+                    payload = {
+                        "query": {
+                            "bool": {
+                                "should": should_clauses,
+                                "minimum_should_match": 1
+                            }
+                        },
+                        "size": 1000,
+                        "_source": [
+                            "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url",
+                            "cdif_jsonld.DDICDIModels.@type",
+                            "cdif_jsonld.DDICDIModels.name",
+                            "cdif_jsonld.DDICDIModels.displayLabel",
+                            "cdif_jsonld.DDICDIModels.physicalDataType",
+                            "cdif_jsonld.DDICDIModels.dct:description",
+                            "cdif_jsonld.DDICDIModels.definition",
+                            "cdif_jsonld.DDICDIModels.schema:unitText",
+                            "cdif_jsonld.schema:variableMeasured",
+                            "cdif_jsonld.variableMeasured"
+                        ]
+                    }
                     resp = await client.post(f"{es_url}/cdif/_search", json=payload)
                     if resp.status_code != 200:
                         return JSONResponse({"collection_id": cid, "total_files": 0, "total_variables": 0, "variables": [], "files": []})
@@ -9680,26 +9698,42 @@ Please answer the question based ONLY on the context provided above (including t
 
             # Retrieve cached or extracted variables from ES cdif index
             es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
-            payload = {
-                "query": {"term": {"collection_id": cid}},
-                "size": 1000,
-                "_source": [
-                    "file_name", "file_url", "dataset_url", "cdif_export_url",
-                    "cdif_jsonld.DDICDIModels.@type",
-                    "cdif_jsonld.DDICDIModels.name",
-                    "cdif_jsonld.DDICDIModels.displayLabel",
-                    "cdif_jsonld.DDICDIModels.physicalDataType",
-                    "cdif_jsonld.DDICDIModels.dct:description",
-                    "cdif_jsonld.DDICDIModels.definition",
-                    "cdif_jsonld.DDICDIModels.schema:unitText",
-                    "cdif_jsonld.schema:variableMeasured",
-                    "cdif_jsonld.variableMeasured"
-                ]
-            }
-
             all_vars = []
             try:
                 async with httpx.AsyncClient(timeout=30.0) as client:
+                    col_items = []
+                    try:
+                        c_resp = await client.get(f"{es_url}/collections/_doc/{cid}", timeout=5.0)
+                        if c_resp.status_code == 200:
+                            col_items = c_resp.json().get("_source", {}).get("items", []) or []
+                    except Exception:
+                        pass
+
+                    should_clauses = [{"term": {"collection_id": cid}}]
+                    if col_items:
+                        should_clauses.append({"terms": {"dataset_id": col_items}})
+
+                    payload = {
+                        "query": {
+                            "bool": {
+                                "should": should_clauses,
+                                "minimum_should_match": 1
+                            }
+                        },
+                        "size": 1000,
+                        "_source": [
+                            "file_name", "file_url", "dataset_url", "cdif_export_url",
+                            "cdif_jsonld.DDICDIModels.@type",
+                            "cdif_jsonld.DDICDIModels.name",
+                            "cdif_jsonld.DDICDIModels.displayLabel",
+                            "cdif_jsonld.DDICDIModels.physicalDataType",
+                            "cdif_jsonld.DDICDIModels.dct:description",
+                            "cdif_jsonld.DDICDIModels.definition",
+                            "cdif_jsonld.DDICDIModels.schema:unitText",
+                            "cdif_jsonld.schema:variableMeasured",
+                            "cdif_jsonld.variableMeasured"
+                        ]
+                    }
                     resp = await client.post(f"{es_url}/cdif/_search", json=payload)
                     if resp.status_code == 200:
                         hits = resp.json().get("hits", {}).get("hits", [])
