@@ -9204,9 +9204,9 @@ Please answer the question based ONLY on the context provided above (including t
                         file_dt = round(time.time() - t_file_start, 2)
                         if exp_resp.status_code == 200:
                             cdif_data = exp_resp.json()
-                            models_count = len(cdif_data.get("DDICDIModels", []))
-                            title = cdif_data.get("dct:title") or f_name
-                            desc = cdif_data.get("dct:description") or ""
+                            models_count = len(cdif_data.get("DDICDIModels", [])) if cdif_data.get("DDICDIModels") else len(cdif_data.get("schema:variableMeasured", []))
+                            title = cdif_data.get("dct:title") or cdif_data.get("schema:name") or f_name
+                            desc = cdif_data.get("dct:description") or cdif_data.get("schema:description") or ""
 
                             # Index in Elastic cdif index with collection_id as list
                             es_record = {
@@ -9438,7 +9438,9 @@ Please answer the question based ONLY on the context provided above (including t
                         "cdif_jsonld.DDICDIModels.physicalDataType",
                         "cdif_jsonld.DDICDIModels.dct:description",
                         "cdif_jsonld.DDICDIModels.definition",
-                        "cdif_jsonld.DDICDIModels.schema:unitText"
+                        "cdif_jsonld.DDICDIModels.schema:unitText",
+                        "cdif_jsonld.schema:variableMeasured",
+                        "cdif_jsonld.variableMeasured"
                     ]
                 }
                 async with httpx.AsyncClient(timeout=30.0) as client:
@@ -9552,8 +9554,10 @@ Please answer the question based ONLY on the context provided above (including t
                             cdif_url = f"{base_host}/export?{qs_part}"
                         cdif_json = src.get("cdif_jsonld", {})
                         models = cdif_json.get("DDICDIModels", [])
+                        var_meas = cdif_json.get("schema:variableMeasured") or cdif_json.get("variableMeasured") or []
                         
                         file_var_count = 0
+                        # 1. Extract from DDICDIModels
                         for m in models:
                             if isinstance(m, dict) and m.get("@type") == "InstanceVariable":
                                 file_var_count += 1
@@ -9590,6 +9594,44 @@ Please answer the question based ONLY on the context provided above (including t
                                     "dataset_title": dtitle,
                                     "cdif_export_url": cdif_url
                                 })
+
+                        # 2. Extract from schema:variableMeasured (CDIF v2 format)
+                        if isinstance(var_meas, list):
+                            for vm in var_meas:
+                                if not isinstance(vm, dict):
+                                    continue
+                                vm_type = vm.get("@type")
+                                is_iv = False
+                                if isinstance(vm_type, list):
+                                    is_iv = any("InstanceVariable" in str(t) or "PropertyValue" in str(t) for t in vm_type)
+                                elif isinstance(vm_type, str):
+                                    is_iv = "InstanceVariable" in vm_type or "PropertyValue" in vm_type
+                                else:
+                                    is_iv = True
+
+                                if is_iv:
+                                    file_var_count += 1
+                                    raw_name = vm.get("schema:name") or vm.get("name") or vm.get("@id", "")
+                                    var_name = str(raw_name).lstrip("#").strip()
+                                    disp_label = str(vm.get("schema:description") or vm.get("description") or var_name).strip()
+                                    data_type = str(vm.get("cdif:physicalDataType") or vm.get("physicalDataType") or "unspecified").replace("xsd:", "")
+                                    desc = str(vm.get("schema:description") or vm.get("description") or "")
+                                    unit = str(vm.get("schema:unitText") or vm.get("unitText") or "")
+
+                                    all_variables.append({
+                                        "variable_name": var_name,
+                                        "display_label": disp_label or var_name,
+                                        "data_type": data_type or "unspecified",
+                                        "description": desc,
+                                        "unit": unit,
+                                        "location": location,
+                                        "file_name": fname,
+                                        "file_url": furl,
+                                        "dataset_url": durl,
+                                        "dataset_id": did,
+                                        "dataset_title": dtitle,
+                                        "cdif_export_url": cdif_url
+                                    })
 
                         files_summary.append({
                             "file_name": fname,
@@ -9649,7 +9691,9 @@ Please answer the question based ONLY on the context provided above (including t
                     "cdif_jsonld.DDICDIModels.physicalDataType",
                     "cdif_jsonld.DDICDIModels.dct:description",
                     "cdif_jsonld.DDICDIModels.definition",
-                    "cdif_jsonld.DDICDIModels.schema:unitText"
+                    "cdif_jsonld.DDICDIModels.schema:unitText",
+                    "cdif_jsonld.schema:variableMeasured",
+                    "cdif_jsonld.variableMeasured"
                 ]
             }
 
@@ -9664,7 +9708,9 @@ Please answer the question based ONLY on the context provided above (including t
                             fname = src.get("file_name", "")
                             furl = src.get("file_url", "")
                             curl = src.get("cdif_export_url", "")
-                            models = src.get("cdif_jsonld", {}).get("DDICDIModels", [])
+                            cdif_json = src.get("cdif_jsonld", {})
+                            models = cdif_json.get("DDICDIModels", [])
+                            var_meas = cdif_json.get("schema:variableMeasured") or cdif_json.get("variableMeasured") or []
                             for m in models:
                                 if isinstance(m, dict) and m.get("@type") == "InstanceVariable":
                                     raw_name = m.get("name", {})
@@ -9688,6 +9734,34 @@ Please answer the question based ONLY on the context provided above (including t
                                         "file": fname,
                                         "cdif_url": curl
                                     })
+                            if isinstance(var_meas, list):
+                                for vm in var_meas:
+                                    if not isinstance(vm, dict):
+                                        continue
+                                    vm_type = vm.get("@type")
+                                    is_iv = False
+                                    if isinstance(vm_type, list):
+                                        is_iv = any("InstanceVariable" in str(t) or "PropertyValue" in str(t) for t in vm_type)
+                                    elif isinstance(vm_type, str):
+                                        is_iv = "InstanceVariable" in vm_type or "PropertyValue" in vm_type
+                                    else:
+                                        is_iv = True
+                                    if is_iv:
+                                        raw_name = vm.get("schema:name") or vm.get("name") or vm.get("@id", "")
+                                        vname = str(raw_name).lstrip("#").strip()
+                                        dlabel = str(vm.get("schema:description") or vm.get("description") or vname).strip()
+                                        dt = str(vm.get("cdif:physicalDataType") or vm.get("physicalDataType") or "unspecified").replace("xsd:", "")
+                                        desc = str(vm.get("schema:description") or vm.get("description") or "")
+                                        unit = str(vm.get("schema:unitText") or vm.get("unitText") or "")
+                                        all_vars.append({
+                                            "name": vname,
+                                            "label": dlabel or vname,
+                                            "type": dt or "string",
+                                            "description": desc,
+                                            "unit": unit,
+                                            "file": fname,
+                                            "cdif_url": curl
+                                        })
             except Exception as e:
                 print(f"Error querying ES for variables ask: {e}")
 
@@ -10535,7 +10609,11 @@ Instructions:
                                             "cdif_jsonld.DDICDIModels.displayLabel.locationVariant.entryValue^4",
                                             "cdif_jsonld.DDICDIModels.dct:description^2",
                                             "cdif_jsonld.DDICDIModels.definition.content^2",
-                                            "cdif_jsonld.DDICDIModels.physicalDataType.entryValue"
+                                            "cdif_jsonld.DDICDIModels.physicalDataType.entryValue",
+                                            "cdif_jsonld.schema:variableMeasured.schema:name^4",
+                                            "cdif_jsonld.schema:variableMeasured.name^4",
+                                            "cdif_jsonld.schema:variableMeasured.schema:description^2",
+                                            "cdif_jsonld.variableMeasured.name^4"
                                         ]
                                     }
                                 },
@@ -10550,7 +10628,11 @@ Instructions:
                                             "cdif_jsonld.DDICDIModels.displayLabel.locationVariant.entryValue^4",
                                             "cdif_jsonld.DDICDIModels.dct:description^2",
                                             "cdif_jsonld.DDICDIModels.definition.content^2",
-                                            "cdif_jsonld.DDICDIModels.physicalDataType.entryValue"
+                                            "cdif_jsonld.DDICDIModels.physicalDataType.entryValue",
+                                            "cdif_jsonld.schema:variableMeasured.schema:name^4",
+                                            "cdif_jsonld.schema:variableMeasured.name^4",
+                                            "cdif_jsonld.schema:variableMeasured.schema:description^2",
+                                            "cdif_jsonld.variableMeasured.name^4"
                                         ]
                                     }
                                 }
@@ -10572,7 +10654,9 @@ Instructions:
                         "cdif_jsonld.DDICDIModels.physicalDataType",
                         "cdif_jsonld.DDICDIModels.dct:description",
                         "cdif_jsonld.DDICDIModels.definition",
-                        "cdif_jsonld.DDICDIModels.schema:unitText"
+                        "cdif_jsonld.DDICDIModels.schema:unitText",
+                        "cdif_jsonld.schema:variableMeasured",
+                        "cdif_jsonld.variableMeasured"
                     ]
                 }
                 async with httpx.AsyncClient(timeout=60.0) as client:
@@ -10621,8 +10705,10 @@ Instructions:
                             cdif_url = f"{base_host}/export?{qs_part}"
                         cdif_json = src.get("cdif_jsonld", {})
                         models = cdif_json.get("DDICDIModels", [])
+                        var_meas = cdif_json.get("schema:variableMeasured") or cdif_json.get("variableMeasured") or []
 
                         file_var_count = 0
+                        # 1. From DDICDIModels
                         for m in models:
                             if isinstance(m, dict) and m.get("@type") == "InstanceVariable":
                                 file_var_count += 1
@@ -10662,6 +10748,46 @@ Instructions:
                                     "collection_id": cid,
                                     "cdif_export_url": cdif_url
                                 })
+
+                        # 2. From schema:variableMeasured (CDIF v2 format)
+                        if isinstance(var_meas, list):
+                            for vm in var_meas:
+                                if not isinstance(vm, dict):
+                                    continue
+                                vm_type = vm.get("@type")
+                                is_iv = False
+                                if isinstance(vm_type, list):
+                                    is_iv = any("InstanceVariable" in str(t) or "PropertyValue" in str(t) for t in vm_type)
+                                elif isinstance(vm_type, str):
+                                    is_iv = "InstanceVariable" in vm_type or "PropertyValue" in vm_type
+                                else:
+                                    is_iv = True
+                                if is_iv:
+                                    file_var_count += 1
+                                    raw_name = vm.get("schema:name") or vm.get("name") or vm.get("@id", "")
+                                    var_name = str(raw_name).lstrip("#").strip()
+                                    disp_label = str(vm.get("schema:description") or vm.get("description") or var_name).strip()
+                                    data_type = str(vm.get("cdif:physicalDataType") or vm.get("physicalDataType") or "unspecified").replace("xsd:", "")
+                                    desc = str(vm.get("schema:description") or vm.get("description") or "")
+                                    unit = str(vm.get("schema:unitText") or vm.get("unitText") or "")
+
+                                    var_key = (did, fname, var_name)
+                                    seen_var_keys.add(var_key)
+
+                                    all_variables.append({
+                                        "variable_name": var_name,
+                                        "display_label": disp_label or var_name,
+                                        "data_type": data_type or "unspecified",
+                                        "description": desc,
+                                        "unit": unit,
+                                        "file_name": fname,
+                                        "file_url": furl,
+                                        "dataset_url": durl,
+                                        "dataset_id": did,
+                                        "dataset_title": dtitle,
+                                        "collection_id": cid,
+                                        "cdif_export_url": cdif_url
+                                    })
 
                         files_summary.append({
                             "file_name": fname,
