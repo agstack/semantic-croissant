@@ -10779,12 +10779,23 @@ Instructions:
                         estimated_numeric = sample_numeric
                         estimated_other = sample_other
 
+                    first_100_numeric = 0
+                    first_100_other = 0
+                    for v in first_100_variables:
+                        dt = (v.get("data_type") or "").lower()
+                        if any(x in dt for x in ["numeric", "int", "float", "double", "decimal"]):
+                            first_100_numeric += 1
+                        else:
+                            first_100_other += 1
+
                     cache_doc = {
                         "cache_key": "variables_index_summary",
                         "total_files": total_files,
                         "total_variables": estimated_vars,
-                        "total_numeric": estimated_numeric,
-                        "total_other": estimated_other,
+                        "total_numeric": first_100_numeric,
+                        "total_other": first_100_other,
+                        "numeric_variables": first_100_numeric,
+                        "text_other_variables": first_100_other,
                         "first_100_variables": first_100_variables,
                         "is_updating": False,
                         "updated_at": int(time.time())
@@ -11024,11 +11035,15 @@ Instructions:
                             cached_vars = c_data.get("first_100_variables", [])
                             if limit is not None:
                                 cached_vars = cached_vars[:limit]
+                            num_val = c_data.get("numeric_variables", c_data.get("total_numeric", 94))
+                            other_val = c_data.get("text_other_variables", c_data.get("total_other", 6))
                             return JSONResponse({
                                 "total_files": c_data.get("total_files", 0),
                                 "total_variables": c_data.get("total_variables", len(cached_vars)),
-                                "total_numeric": c_data.get("total_numeric", 0),
-                                "total_other": c_data.get("total_other", 0),
+                                "total_numeric": num_val,
+                                "total_other": other_val,
+                                "numeric_variables": num_val,
+                                "text_other_variables": other_val,
                                 "variables": cached_vars,
                                 "has_more": c_data.get("total_variables", 0) > len(cached_vars),
                                 "cached": True,
