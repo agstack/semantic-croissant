@@ -6,8 +6,8 @@ import urllib.parse
 import os
 from rdflib import Graph
 
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-MODEL_NAME = "gemma4-croissant"
+OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:31b-cloud")
+MODEL_NAME = os.environ.get("MODEL_NAME") or os.environ.get("MODEL") or OLLAMA_DEFAULT_MODEL
 
 def fetch_oai_ore(doi):
     # Properly encode the DOI

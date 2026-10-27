@@ -17,6 +17,7 @@ import os
 API_BASE = os.environ.get("API_BASE", "http://localhost:7013")
 MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "mcp.dev.codata.org")
 HOST = os.environ.get("HOST", f"https://{MCP_DOMAIN}")
+OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:31b-cloud"
 
 def get_nodes_config() -> dict:
     """
@@ -5222,9 +5223,9 @@ def main(port: int, transport: str) -> int:
                 context_text = data.get("context", "").strip()
                 file_url = data.get("file_url", "").strip()
                 file_name = data.get("file_name", "").strip()
-                model_name = data.get("model", "gemma4:31b-cloud").strip()
+                model_name = data.get("model", OLLAMA_DEFAULT_MODEL).strip()
                 if not model_name:
-                    model_name = "gemma4:31b-cloud"
+                    model_name = OLLAMA_DEFAULT_MODEL
                 if not question:
                     from starlette.responses import JSONResponse
                     return JSONResponse({"success": False, "error": "No question provided"})
@@ -5405,14 +5406,13 @@ Please answer the question based ONLY on the context provided above (including t
                         except Exception as e:
                             print(f"Failed to fetch models from {ep}: {e}")
                             
-                # Ensure gemma4:31b-cloud alias is available and prioritized
-                has_31b = any(m.get("id") in ("gemma4:31b", "gemma4-31b", "gemma4:31b-cloud") for m in all_models)
-                if has_31b and "gemma4:31b-cloud" not in seen_ids:
-                    all_models.insert(0, {"id": "gemma4:31b-cloud", "object": "model", "created": 1788289193, "owned_by": "ollama.com"})
-                    seen_ids.add("gemma4:31b-cloud")
+                # Ensure OLLAMA_DEFAULT_MODEL alias is available and prioritized
+                if OLLAMA_DEFAULT_MODEL not in seen_ids:
+                    all_models.insert(0, {"id": OLLAMA_DEFAULT_MODEL, "object": "model", "created": 1788289193, "owned_by": "ollama.com"})
+                    seen_ids.add(OLLAMA_DEFAULT_MODEL)
 
-                # Sort models so gemma4:31b-cloud is first
-                all_models.sort(key=lambda m: 0 if m.get("id") == "gemma4:31b-cloud" else (1 if "cloud" in m.get("id", "") else 2))
+                # Sort models so OLLAMA_DEFAULT_MODEL is first
+                all_models.sort(key=lambda m: 0 if m.get("id") == OLLAMA_DEFAULT_MODEL else (1 if "cloud" in m.get("id", "") else 2))
 
                 from starlette.responses import JSONResponse
                 if all_models:
@@ -5689,22 +5689,27 @@ Please answer the question based ONLY on the context provided above (including t
                                             if (key not in jdata or not jdata[key]) and key in es_src:
                                                 jdata[key] = es_src[key]
 
-                                # Ensure full Croissant 1.1 context, conformsTo, and distributions
+                                # Ensure full Croissant 1.1 and CDIF context, conformsTo, and distributions
                                 ctx = {
-                                    "@language": "en",
-                                    "@vocab": "https://schema.org/",
-                                    "sc": "https://schema.org/",
+                                    "@vocab": "http://schema.org/",
+                                    "sc": "http://schema.org/",
+                                    "schema": "http://schema.org/",
                                     "cr": "http://mlcommons.org/croissant/",
                                     "dct": "http://purl.org/dc/terms/",
                                     "conformsTo": "dct:conformsTo",
                                     "distribution": "cr:distribution",
                                     "recordSet": "cr:recordSet",
                                     "field": "cr:field",
-                                    "dataType": "cr:dataType"
+                                    "dataType": "cr:dataType",
+                                    "url": {"@type": "http://www.w3.org/2001/XMLSchema#string"}
                                 }
                                 orig_ctx = jdata.get("@context")
                                 if isinstance(orig_ctx, dict):
-                                    ctx.update(orig_ctx)
+                                    for k, v in orig_ctx.items():
+                                        if k == "@vocab" or k == "sc":
+                                            ctx[k] = "http://schema.org/"
+                                        elif k != "@language":
+                                            ctx[k] = v
                                 jdata["@context"] = ctx
                                 jdata["conformsTo"] = "http://mlcommons.org/croissant/1.1"
 
@@ -5753,6 +5758,73 @@ Please answer the question based ONLY on the context provided above (including t
                                         "encodingFormat": "application/ld+json",
                                         "conformsTo": "https://ddialliance.org/Specification/DDI-CDI/1.0/"
                                     }
+
+                        # CDIF & SHACL normalization
+                        vault_canonical_url = f"{base_host}/vault/{filename}"
+                        if not jdata.get("@id"):
+                            jdata["@id"] = vault_canonical_url
+                        if not jdata.get("identifier"):
+                            jdata["identifier"] = vault_canonical_url
+
+                        c = jdata.get("creator")
+                        if not c or (isinstance(c, dict) and not c.get("name") and not c.get("@id")):
+                            jdata["creator"] = {
+                                "@type": "Organization",
+                                "@id": f"{base_host}/#organization",
+                                "name": "Semantic Croissant AI Studio",
+                                "url": base_host
+                            }
+
+                        # Ensure isBasedOn has resolvable string URLs and valid creators
+                        if "isBasedOn" in jdata and isinstance(jdata["isBasedOn"], list):
+                            for idx, ib in enumerate(jdata["isBasedOn"]):
+                                if isinstance(ib, dict):
+                                    if not ib.get("url"):
+                                        ib["url"] = ib.get("contentUrl") or f"{base_host}/vault/{filename.replace('.jsonld', '.md')}"
+                                    if "creator" in ib:
+                                        creators = ib["creator"] if isinstance(ib["creator"], list) else [ib["creator"]]
+                                        for cr in creators:
+                                            if isinstance(cr, dict) and not cr.get("name") and not cr.get("@id"):
+                                                cr["name"] = "Anonymous Contributor"
+
+                        # Provide hasPart for CDIF Manifest profile
+                        if ("hasPart" not in jdata or not jdata["hasPart"]) and "isBasedOn" in jdata and isinstance(jdata["isBasedOn"], list):
+                            parts = []
+                            for idx, ib in enumerate(jdata["isBasedOn"]):
+                                if isinstance(ib, dict) and ib.get("url"):
+                                    parts.append({"@id": ib["url"], "name": ib.get("name", f"Part {idx+1}")})
+                            if parts:
+                                jdata["hasPart"] = parts
+
+                        # Ensure distribution conformsTo and full contentUrl
+                        if isinstance(dists, list):
+                            for d in dists:
+                                if isinstance(d, dict):
+                                    if not d.get("conformsTo"):
+                                        d["conformsTo"] = "https://w3id.org/cdif/core/1.1"
+                                    if d.get("contentUrl") and not str(d.get("contentUrl", "")).startswith("http"):
+                                        d["contentUrl"] = f"{base_host}{d['contentUrl']}"
+
+                        # Infer temporal coverage if historical context exists but temporalCoverage is absent
+                        if not jdata.get("temporalCoverage") and not jdata.get("variableMeasured") and not jdata.get("spatialCoverage"):
+                            import re as _re
+                            desc = jdata.get("description", "") + " " + jdata.get("name", "")
+                            years = _re.findall(r"\b(1[6-9]\d\d|20\d\d)\b", desc)
+                            if years:
+                                jdata["temporalCoverage"] = years[0]
+
+                        # Add subjectOf CatalogRecord declaring CDIF conformance profiles
+                        jdata["subjectOf"] = {
+                            "@type": "Dataset",
+                            "@id": f"{vault_canonical_url}#catalog-record",
+                            "conformsTo": [
+                                "https://w3id.org/cdif/core/1.1",
+                                "https://w3id.org/cdif/discovery/1.1",
+                                "https://w3id.org/cdif/manifest/1.1"
+                            ],
+                            "about": {"@id": jdata.get("@id") or vault_canonical_url}
+                        }
+
                         data = json.dumps(jdata, indent=2).encode("utf-8")
                     except Exception as e:
                         import sys
@@ -7869,14 +7941,14 @@ Please answer the question based ONLY on the context provided above (including t
                                 "created_at": "2024-01-01T00:00:00Z"
                             })
                         
-                        # Prepend gemma4:31b-cloud as default model
+                        # Prepend OLLAMA_DEFAULT_MODEL as default model
                         anthropic_data.insert(0, {
                             "object": "model",
-                            "id": "gemma4:31b-cloud",
-                            "display_name": "gemma4:31b-cloud (Default / ollama.com)",
+                            "id": OLLAMA_DEFAULT_MODEL,
+                            "display_name": f"{OLLAMA_DEFAULT_MODEL} (Default / ollama.com)",
                             "created_at": "2024-01-01T00:00:00Z"
                         })
-                        first_id = "gemma4:31b-cloud"
+                        first_id = OLLAMA_DEFAULT_MODEL
                         
                         # Fallback if no models found
                         if not anthropic_data:
@@ -9652,7 +9724,7 @@ Instructions:
             ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
             if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
                 ollama_url = "http://10.147.18.82:11435"
-            model = os.environ.get("MODEL", "gemma4:31b-cloud")
+            model = os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or OLLAMA_DEFAULT_MODEL
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
 
@@ -10812,7 +10884,7 @@ Instructions:
             ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
             if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
                 ollama_url = "http://10.147.18.82:11435"
-            model = os.environ.get("MODEL", "gemma4:31b-cloud")
+            model = os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or OLLAMA_DEFAULT_MODEL
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
 
@@ -10859,7 +10931,7 @@ Instructions:
             ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
             if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
                 ollama_url = "http://10.147.18.82:11435"
-            model = os.environ.get("MODEL", "gemma4:31b-cloud")
+            model = os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or OLLAMA_DEFAULT_MODEL
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
             
@@ -11029,7 +11101,7 @@ Output a JSON object with:
             ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
             if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
                 ollama_url = "http://10.147.18.82:11435"
-            model = os.environ.get("MODEL", "gemma4:31b-cloud")
+            model = os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or OLLAMA_DEFAULT_MODEL
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
             
