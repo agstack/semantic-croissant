@@ -546,10 +546,10 @@ def get_elasticsearch_version(url, expert="/croissant"):
 def convert_oai_to_croissant(doc):
     croissant = {
         "@context": {
-            "@language": "en",
-            "@vocab": "https://schema.org/",
+            "@vocab": "http://schema.org/",
             "cr": "http://mlcommons.org/croissant/",
-            "sc": "https://schema.org/",
+            "sc": "http://schema.org/",
+            "schema": "http://schema.org/",
             "dct": "http://purl.org/dc/terms/"
         },
         "@type": "sc:Dataset",
@@ -770,8 +770,9 @@ def check_dspace_direct_export(url):
             
         croissant = {
             "@context": {
-                "@language": "en",
-                "@vocab": "https://schema.org/",
+                "@vocab": "http://schema.org/",
+                "sc": "http://schema.org/",
+                "schema": "http://schema.org/",
                 "citeAs": "cr:citeAs",
                 "column": "cr:column",
                 "conformsTo": "dct:conformsTo",
@@ -797,7 +798,6 @@ def check_dspace_direct_export(url):
                 "regex": "cr:regex",
                 "repeated": "cr:repeated",
                 "replace": "cr:replace",
-                "sc": "https://schema.org/",
                 "separator": "cr:separator",
                 "source": "cr:source",
                 "subField": "cr:subField",
@@ -1438,8 +1438,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
             prompt += f" The source documentation is in language code '{lang}'. Please do a precise ONE-to-ONE translation of the relevant metadata to English and output the Croissant JSON-LD entirely in English."
         prompt += f" Here is the documentation and description extracted from its official page:\n\n{llm_context_data}\n\n"
         prompt += "Extract relevant information such as the description, authors, license, keywords, tags, or any dataset dependencies into the Croissant metadata if available. Map keywords/tags to the standard schema:keywords property, and extract them EXACTLY as they appear in the text (do not change casing or invent new tags). Ensure 'keywords' is formatted as a JSON array of strings, not a single comma-separated string. IMPORTANT: For any fields or data that do not have a standard mapping in Croissant, include them in the JSON-LD under a custom field called 'unmappedFields' as a list of key-value pairs.\n"
-        prompt += "CRITICAL: You MUST use the exact following JSON-LD structure and include ALL of these top-level fields: '@context', '@type', 'name', 'description', 'url', 'license', 'keywords', 'unmappedFields', 'contentUrl', 'isBasedOn', 'isPartOf', 'version', 'creator'.\n"
-        prompt += 'Example structure:\n{\n  "@context": {\n    "@language": "en",\n    "@vocab": "https://schema.org/",\n    "cr": "http://mlcommons.org/croissant/",\n    "dct": "http://purl.org/dc/terms/",\n    "sc": "https://schema.org/",\n    "conformsTo": "dct:conformsTo",\n    "distribution": {"@id": "cr:distribution"},\n    "bs4ExtractionPattern": {"@id": "sc:processingRequirement", "@type": "@json"},\n    "unf": "https://guides.dataverse.org/en/6.9/developers/unf/unf-v6.html",\n    "odrl": "http://www.w3.org/ns/odrl/2/",\n    "cdif": "https://cdif.org/1.1/",\n    "did": "https://www.w3.org/ns/did/v1"\n  },\n  "@type": "sc:SoftwareApplication",\n  "name": "...",\n  "description": "...",\n  "url": "...",\n  "license": "...",\n  "keywords": [],\n  "unmappedFields": [],\n  "contentUrl": "...",\n  "isBasedOn": [],\n  "isPartOf": [{"@type": "Collection", "name": "/expert/croissant"}],\n  "version": "1.0",\n  "creator": {"@type": "Person", "name": "...", "email": "..."}\n}\n\n'
+        prompt += 'Example structure:\n{\n  "@context": {\n    "@vocab": "http://schema.org/",\n    "sc": "http://schema.org/",\n    "schema": "http://schema.org/",\n    "cr": "http://mlcommons.org/croissant/",\n    "dct": "http://purl.org/dc/terms/",\n    "conformsTo": "dct:conformsTo",\n    "distribution": {"@id": "cr:distribution"},\n    "bs4ExtractionPattern": {"@id": "sc:processingRequirement", "@type": "@json"},\n    "unf": "https://guides.dataverse.org/en/6.9/developers/unf/unf-v6.html",\n    "odrl": "http://www.w3.org/ns/odrl/2/",\n    "cdif": "https://cdif.org/1.1/",\n    "did": "https://www.w3.org/ns/did/v1",\n    "url": {"@type": "http://www.w3.org/2001/XMLSchema#string"}\n  },\n  "@type": "sc:SoftwareApplication",\n  "name": "...",\n  "description": "...",\n  "url": "...",\n  "license": "...",\n  "keywords": [],\n  "unmappedFields": [],\n  "contentUrl": "...",\n  "isBasedOn": [],\n  "isPartOf": [{"@type": "Collection", "name": "/expert/croissant"}],\n  "version": "1.0",\n  "creator": {"@type": "Person", "name": "...", "email": "..."}\n}\n\n'
         prompt += "CRITICAL: Do NOT invent, hallucinate, or generate generic information. You MUST extract the name, description, and details directly from the provided text above.\n\nOutput ONLY a valid JSON object."
         
     start_time = time.time()
@@ -1656,18 +1655,19 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                 # Force a standard robust Croissant context instead of trusting the LLM
                 json_data.pop("@context", None)
                 ordered_data["@context"] = {
-                    "@language": "en",
-                    "@vocab": "https://schema.org/",
+                    "@vocab": "http://schema.org/",
+                    "sc": "http://schema.org/",
+                    "schema": "http://schema.org/",
                     "cr": "http://mlcommons.org/croissant/",
                     "odrl": "http://www.w3.org/ns/odrl/2/",
                     "dc": "http://purl.org/dc/terms/",
                     "dct": "http://purl.org/dc/terms/",
-                    "sc": "https://schema.org/",
                     "conformsTo": "dct:conformsTo",
                     "distribution": {"@id": "cr:distribution"},
                     "unf": "https://guides.dataverse.org/en/6.9/developers/unf/unf-v6.html",
                     "cdif": "https://cdif.org/1.1/",
-                    "did": "https://www.w3.org/ns/did/v1"
+                    "did": "https://www.w3.org/ns/did/v1",
+                    "url": {"@type": "http://www.w3.org/2001/XMLSchema#string"}
                 }
                 ordered_data["@type"] = json_data.pop("@type", "Dataset")
                 json_data.pop("@context", None)

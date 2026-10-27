@@ -277,6 +277,7 @@ async def view_dataverse():
     return HTMLResponse(content=render_html_template(file_path, request=None))
 
 @app.get("/add")
+@app.get("/url")
 async def view_add():
     import os
     file_path = os.path.join(os.path.dirname(__file__), "static/generic_loading.html")

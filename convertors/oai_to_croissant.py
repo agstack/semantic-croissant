@@ -72,11 +72,11 @@ def convert_to_croissant(doi):
 
             # Inject the correct Croissant/ODRL/CDIF context
             json_data["@context"] = {
-                "@language": "en",
-                "@vocab": "https://schema.org/",
+                "@vocab": "http://schema.org/",
+                "sc": "http://schema.org/",
+                "schema": "http://schema.org/",
                 "cr": "http://mlcommons.org/croissant/",
                 "dct": "http://purl.org/dc/terms/",
-                "sc": "https://schema.org/",
                 "conformsTo": "dct:conformsTo",
                 "distribution": {
                     "@id": "cr:distribution"
@@ -88,7 +88,8 @@ def convert_to_croissant(doi):
                 "unf": "https://guides.dataverse.org/en/6.9/developers/unf/unf-v6.html",
                 "odrl": "http://www.w3.org/ns/odrl/2/",
                 "cdif": "https://cdif.org/1.1/",
-                "did": "https://www.w3.org/ns/did/v1"
+                "did": "https://www.w3.org/ns/did/v1",
+                "url": {"@type": "http://www.w3.org/2001/XMLSchema#string"}
             }
             output = json.dumps(json_data, indent=2)
             

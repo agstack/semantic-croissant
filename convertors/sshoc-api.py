@@ -199,16 +199,17 @@ def transform_tool_to_doc(tool):
 
     doc = {
         "@context": {
-            "@language": "en",
-            "@vocab": "https://schema.org/",
-            "sc": "https://schema.org/",
+            "@vocab": "http://schema.org/",
+            "sc": "http://schema.org/",
+            "schema": "http://schema.org/",
             "cr": "http://mlcommons.org/croissant/",
             "dct": "http://purl.org/dc/terms/",
             "conformsTo": "dct:conformsTo",
             "distribution": "cr:distribution",
             "recordSet": "cr:recordSet",
             "field": "cr:field",
-            "dataType": "cr:dataType"
+            "dataType": "cr:dataType",
+            "url": {"@type": "http://www.w3.org/2001/XMLSchema#string"}
         },
         "@type": ["schema:SoftwareApplication", "schema:Dataset", "cr:Dataset"],
         "conformsTo": "http://mlcommons.org/croissant/1.1",

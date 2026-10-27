@@ -16,6 +16,9 @@
             if (id === 'annotations') {
                 id = parts[parts.length - 2];
             }
+            if (id && id.endsWith('.md')) {
+                id = id.substring(0, id.length - 3);
+            }
             return id;
         }
     </script>
@@ -1208,6 +1211,31 @@
                 function renderJsonLd(data) {
                     let html = `<div style="font-family: var(--font-family, sans-serif); color: var(--text-color);">`;
                     
+                    // Source banner linking extracted Markdown
+                    let sourceMdUrl = `/vault/doc/raw/${docId}`;
+                    if (data.isBasedOn) {
+                        const basedList = Array.isArray(data.isBasedOn) ? data.isBasedOn : [data.isBasedOn];
+                        for (const b of basedList) {
+                            const bUrl = typeof b === 'string' ? b : (b.contentUrl || b.url || b['@id'] || '');
+                            if (bUrl && (bUrl.endsWith('.md') || bUrl.includes('/vault/'))) {
+                                sourceMdUrl = bUrl;
+                                break;
+                            }
+                        }
+                    }
+
+                    html += `<div style="background: #f1f5f9; border: 1px solid var(--border-color); border-radius: 6px; padding: 10px 16px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+                        <div style="display: flex; align-items: center; gap: 8px; font-size: 0.95rem;">
+                            <span style="font-size: 1.2rem;">📝</span>
+                            <span><strong>Source Document:</strong> Extracted markdown text is available for this Croissant dataset.</span>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <a href="${sourceMdUrl}" target="_blank" style="background: #fff; border: 1px solid var(--border-color); color: var(--accent-color); padding: 5px 12px; border-radius: 4px; text-decoration: none; font-size: 0.85rem; font-weight: 600; display: inline-flex; align-items: center; gap: 5px;">
+                                📝 View Extracted Markdown
+                            </a>
+                        </div>
+                    </div>`;
+
                     // Header
                     html += `<h1 style="color: var(--accent-color); margin-top:0; margin-bottom: 10px;">🥐 ${data.name || 'Dataset'}</h1>`;
                     if (data.url) {
@@ -1467,15 +1495,32 @@
                     });
                 }
 
-                // Try to pretty-print if it's raw JSON
+                // Check for companion Croissant JSON-LD or raw JSON
+                let isCroissantRendered = false;
                 try {
                     const parsedJson = JSON.parse(markdown);
                     markdown = renderJsonLd(parsedJson);
+                    isCroissantRendered = true;
                 } catch (e) {
-                    // Not JSON, strip internal metadata rows if present in markdown table
-                    markdown = markdown.replace(/\|\s*\*\*_(?:source_url|markdown_text|full_text)\*\*\s*\|[^\n]*\n?/g, '');
-                    // Transform legacy Files & Distributions bullet list into a clean table
-                    markdown = transformDistributionsToTable(markdown);
+                    // If raw content is Markdown, check if a generated Croissant JSON-LD exists for this document
+                    try {
+                        const jsonldRes = await fetch(`/vault/${docId}.jsonld`);
+                        if (jsonldRes.ok) {
+                            const croissantJson = await jsonldRes.json();
+                            if (croissantJson && (croissantJson['@context'] || croissantJson['@type'] || croissantJson.name)) {
+                                markdown = renderJsonLd(croissantJson);
+                                isCroissantRendered = true;
+                            }
+                        }
+                    } catch(errJsonld) {
+                        // ignore and proceed with markdown
+                    }
+                    if (!isCroissantRendered) {
+                        // Not JSON, strip internal metadata rows if present in markdown table
+                        markdown = markdown.replace(/\|\s*\*\*_(?:source_url|markdown_text|full_text)\*\*\s*\|[^\n]*\n?/g, '');
+                        // Transform legacy Files & Distributions bullet list into a clean table
+                        markdown = transformDistributionsToTable(markdown);
+                    }
                 }
                 
                 const htmlContent = marked.parse(markdown);

@@ -11534,6 +11534,7 @@ Output a JSON object with:
                 Route("/api/geoid/connect", endpoint=api_geoid_connect, methods=["POST"]),
                 Route("/api/auth/debug", endpoint=api_auth_debug, methods=["POST"]),
                 Route("/add", endpoint=view_add),
+                Route("/url", endpoint=view_add),
                 Route("/api/generic/process", endpoint=process_generic, methods=["POST"]),
                 Route("/collectionsindex", endpoint=view_collections_index),
                 Route("/variableindex", endpoint=view_variables_index),

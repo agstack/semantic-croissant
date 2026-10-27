@@ -51,7 +51,7 @@
         async function processDataset() {
             const params = new URLSearchParams(window.location.search);
             const callback = params.get('callback');
-            const direct_url = params.get('url');
+            const direct_url = params.get('url') || params.get('add');
             let siteUrl = params.get('siteUrl');
             const datasetPid = params.get('datasetPid');
             
@@ -63,7 +63,7 @@
                 document.getElementById('spinner').style.display = 'none';
                 document.getElementById('status').style.display = 'none';
                 document.getElementById('error').style.display = 'block';
-                document.getElementById('error').innerText = "Missing callback, url, or datasetPid parameters.";
+                document.getElementById('error').innerText = "Missing callback, url, add, or datasetPid parameters.";
                 return;
             }
             

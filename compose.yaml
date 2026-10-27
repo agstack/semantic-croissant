@@ -101,6 +101,8 @@ services:
       - ./api/static/variables_index.html:/app/static/variables_index.html
       - ./api/static/validate.html:/app/static/validate.html
       - ./api/static/profile.html:/app/static/profile.html
+      - ./api/static/doc_viewer.html:/app/static/doc_viewer.html
+      - ./api/static/generic_loading.html:/app/static/generic_loading.html
       - ./credentials.json:/app/credentials.json:ro
       - ./nodes.conf:/app/nodes.conf:ro
       - ./profiles:/app/profiles:ro
@@ -141,6 +143,8 @@ services:
       - ./api/static/variables_index.html:/app/static/variables_index.html
       - ./api/static/validate.html:/app/static/validate.html
       - ./api/static/profile.html:/app/static/profile.html
+      - ./api/static/doc_viewer.html:/app/static/doc_viewer.html
+      - ./api/static/generic_loading.html:/app/static/generic_loading.html
       - ./credentials.json:/app/credentials.json:ro
       - ./nodes.conf:/app/nodes.conf:ro
       - ./profiles:/app/profiles:ro
