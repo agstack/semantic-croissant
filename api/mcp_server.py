@@ -5328,11 +5328,18 @@ Please answer the question based ONLY on the context provided above (including t
                 import subprocess
                 import os
                 
+                if not model_name or model_name in ["default", "gemma4:e4b", "llama3.1"]:
+                    model_name = "gemma4:31b-cloud"
+
                 def run_agent():
                     env = os.environ.copy()
                     env["MCP_URL"] = "http://localhost:7070/sse"
-                    env["OLLAMA_HOST"] = "http://10.147.18.82:11435"
+                    ollama_h = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
+                    if "10.147.18.24" in ollama_h or "ollama:11434" in ollama_h:
+                        ollama_h = "http://10.147.18.82:11435"
+                    env["OLLAMA_HOST"] = ollama_h
                     env["MODEL"] = model_name
+                    env["OLLAMA_TOKEN"] = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
                     
                     proc = subprocess.run(
                         ["python3", "/app/agents/agent_reference_script.py", "-q", "-"],
