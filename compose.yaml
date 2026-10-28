@@ -156,7 +156,7 @@ services:
     container_name: ${PROFILE_NAME:-croissant-live}-minio
     profiles:
       - ${PROFILE_NAME:-croissant-live}
-    image: minio/minio:latest
+    image: ${MINIO_IMAGE:-cgr.dev/chainguard/minio:latest}
     ports:
       - "${MINIO_API_PORT:-9005}:9000"
       - "${MINIO_CONSOLE_PORT:-9007}:9001"
