@@ -1,0 +1,234 @@
+# Publishing Guide
+
+Releases are mostly automated. Tag a commit with `vX.Y.Z` and push the tag — `.github/workflows/release.yml` builds prebuilt binaries for Linux, macOS Intel, macOS arm64, and Windows; publishes to crates.io, the Snap Store, and the AUR; and creates a GitHub Release with checksums.
+
+This document covers the **one-time setup** for each channel and the **per-release checklist** at the bottom.
+
+## GitHub Repository
+
+1. **Add topics** (Settings → About → Topics):
+   - `markdown`, `markdown-viewer`, `egui`, `rust`, `linux`, `desktop-app`
+   - `syntax-highlighting`, `file-explorer`, `tabs`, `wayland`, `x11`
+
+2. **Add description**:
+   > Fast, lightweight markdown viewer for Linux with tabs, file explorer, and live reload
+
+3. **Enable features**:
+   - Releases
+   - Discussions (optional)
+
+## Crates.io
+
+Every `v*` tag auto-publishes via the `publish-crates` job in `release.yml`. The job is **gated on `CARGO_REGISTRY_TOKEN`** — if the secret isn't set, the job no-ops with a notice and the rest of the release still ships.
+
+The vendored fork at `crates/egui_commonmark/` is published to crates.io under renamed identifiers (`egui_commonmark_extended`, `egui_commonmark_backend_extended`, `egui_commonmark_macros_extended`) so the consumer can resolve features like `math` that don't exist upstream in `lampsitter/egui_commonmark`. `scripts/publish-crates.sh` publishes in dep order (backend → macros → extended → md-viewer) with a 45 s settle delay between each, and treats "already uploaded" as success so re-tagging the same version doesn't fail.
+
+### One-time setup to enable automation
+
+1. **Generate a crates.io token** at https://crates.io/settings/tokens with scope `publish-update` (covers `publish-new` + version updates). Optionally restrict to the four crates listed above.
+2. **Add it as a GitHub repo secret** named `CARGO_REGISTRY_TOKEN`
+   (Settings → Secrets and variables → Actions → New repository secret).
+
+### Bumping the fork
+
+When the vendored fork at `crates/egui_commonmark/` changes:
+
+1. Bump the workspace version in `crates/egui_commonmark/Cargo.toml`:
+   ```toml
+   [workspace.package]
+   version = "0.NEW.0"
+
+   [workspace.dependencies]
+   egui_commonmark_backend_extended = { version = "0.NEW.0", path = "...", ... }
+   egui_commonmark_macros_extended = { version = "0.NEW.0", path = "...", ... }
+   ```
+2. Update the root `Cargo.toml` consumer line: `egui_commonmark_extended = { version = "0.NEW.0", ... }`.
+3. Push the next `v*` tag. CI publishes the fork crates at the new version, then md-viewer.
+
+The root `[patch.crates-io]` block stays — it's neutral for `cargo publish` (which ignores patches) and useful locally between fork bumps.
+
+### Manual fallback
+
+If you need to publish manually (e.g., the CI job is unavailable):
+
+```bash
+export CARGO_REGISTRY_TOKEN=<your token>
+bash scripts/publish-crates.sh
+```
+
+## AUR (Arch User Repository)
+
+The AUR `md-viewer-git` package is now published **automatically by CI** on every `v*` tag (see the `publish-aur` job in `.github/workflows/release.yml`).
+
+### One-time setup to enable automation
+
+1. **Create an SSH keypair** dedicated to AUR pushes (no passphrase):
+   ```bash
+   ssh-keygen -t ed25519 -f aur-key -C "aur-md-viewer" -N ""
+   ```
+2. **Register the public key** on your AUR account → SSH Public Key:
+   https://aur.archlinux.org/account/aydiler/edit
+   (paste the contents of `aur-key.pub`).
+3. **Add the private key** as a GitHub repo secret named `AUR_SSH_PRIVATE_KEY`
+   (Settings → Secrets and variables → Actions → New repository secret).
+   Value: entire contents of the `aur-key` file (including BEGIN/END lines).
+4. **Delete the local keypair**: `rm aur-key aur-key.pub`.
+
+After this, every `git push origin v0.X.Y` triggers `publish-aur`, which:
+- Bumps the literal `pkgver=` in `aur/PKGBUILD` to the tag version.
+- Regenerates `.SRCINFO` via an `archlinux/archlinux:base-devel` container.
+- Commits and pushes to `ssh://aur@aur.archlinux.org/md-viewer-git.git`.
+
+The job is **gated on the secret existing** (`if: secrets.AUR_SSH_PRIVATE_KEY != ''`), so the rest of the release pipeline still runs if you skip this setup.
+
+### Manual fallback
+
+```bash
+git clone ssh://aur@aur.archlinux.org/md-viewer-git.git
+cd md-viewer-git
+cp /path/to/repo/aur/PKGBUILD .
+sed -i "s/^pkgver=.*/pkgver=$NEW_VERSION/" PKGBUILD
+makepkg --printsrcinfo > .SRCINFO
+git add PKGBUILD .SRCINFO && git commit -m "Update to $NEW_VERSION" && git push
+```
+
+Test locally: `makepkg -si`.
+
+### AUR (`-bin` variant)
+
+A second AUR package, `md-viewer-bin`, ships the GitHub Releases prebuilt binary instead of compiling from source. Arch users pick one:
+
+- `md-viewer-bin` — fast install (~5 s), no Rust toolchain needed, x86_64 only.
+- `md-viewer-git` — compiles from git HEAD, picks up unreleased changes.
+
+The two packages `conflict` with each other; pacman won't allow both.
+
+Maintained by the `publish-aur-bin` job in `release.yml`, mirroring `publish-aur` with three differences:
+
+1. Pushes to `ssh://aur@aur.archlinux.org/md-viewer-bin.git`.
+2. Rewrites both `pkgver=` *and* the four-element `sha256sums=( ... )` array (Python inline, since multi-line `sed` is fragile). The tarball checksum comes from the release's `<asset>.sha256`; the three aux-file checksums (`.desktop`, icon, LICENSE) are fetched fresh from raw GitHub.
+3. First push to the brand-new AUR repo uses `git push -u origin HEAD:refs/heads/master`.
+
+Same `AUR_SSH_PRIVATE_KEY` secret powers both jobs; no separate setup. The job is independently gated, so a `-git`-only or `-bin`-only failure doesn't block the other.
+
+The PKGBUILD pulls the `.desktop`, icon, and `LICENSE` from raw GitHub URLs pinned to `v${pkgver}` because the release tarball is binary-only. If a future release ever bundles those files into the tarball, drop the three raw-GitHub `source=()` entries and read them out of `${srcdir}/` instead.
+
+#### Manual fallback (`-bin`)
+
+```bash
+git clone ssh://aur@aur.archlinux.org/md-viewer-bin.git
+cd md-viewer-bin
+cp /path/to/repo/aur-bin/PKGBUILD .
+# Edit PKGBUILD: bump pkgver=, then refresh all four sha256sums via
+# `updpkgsums` (from pacman-contrib) — it downloads each source and rewrites
+# the array in place.
+makepkg --printsrcinfo > .SRCINFO
+git add PKGBUILD .SRCINFO && git commit -m "Update to $NEW_VERSION" && git push
+```
+
+## Snap Store
+
+1. **Create Snapcraft account**: https://snapcraft.io/account
+
+2. **Login**:
+```bash
+snapcraft login
+```
+
+3. **Build the snap**:
+```bash
+cd /path/to/repo
+snapcraft
+```
+
+4. **Register the name** (one-time):
+```bash
+snapcraft register md-viewer
+```
+
+5. **Upload and release**:
+```bash
+snapcraft upload --release=stable md-viewer_0.1.0_amd64.snap
+```
+
+## Flatpak / Flathub
+
+A Flatpak manifest lives at `flatpak/io.github.aydiler.md-viewer.yaml`. Submitting to Flathub is **manual** (one-time PR to the Flathub org).
+
+### Pre-submission requirements
+
+- **Replace the placeholder icon** at `data/io.github.aydiler.md-viewer.png` with a designed 256×256 PNG (or scalable SVG). Flathub reviewers will reject submissions whose icon is a generic placeholder.
+- **Bump `tag:` and `commit:` in the manifest** to the latest release before opening the PR. The `x-checker-data` block will auto-bump them on subsequent releases *after* the first submission is accepted.
+- **Regenerate Cargo sources** when `Cargo.lock` changes its transitive deps (Flathub builds offline):
+  ```bash
+  # one-time tool setup
+  git clone https://github.com/flatpak/flatpak-builder-tools.git /tmp/fbt
+  uv run --with aiohttp --with PyYAML --with tomlkit \
+      /tmp/fbt/cargo/flatpak-cargo-generator.py Cargo.lock \
+      -o flatpak/cargo-sources.json
+  ```
+  Commit the updated `flatpak/cargo-sources.json`. Pure version bumps (without dep changes) don't require regeneration.
+- **Run the Flathub linter and fix all error-level findings**:
+  ```bash
+  # one-time tool install (Arch Linux):
+  sudo pacman -S flatpak-builder
+  flatpak install --user flathub org.flatpak.Builder
+
+  # then:
+  flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest \
+      flatpak/io.github.aydiler.md-viewer.yaml
+  ```
+  Warnings are non-fatal but worth addressing. **One known lint error is intentional**: `finish-args-home-ro-filesystem-access` flags the `--filesystem=home:ro` permission. The viewer needs this to read markdown files at arbitrary paths under `$HOME` for CLI invocation (`md-viewer ~/anywhere/foo.md`) and live reload via the notify watcher. Flathub permits read-only home access with reviewer justification — include a note in the PR description explaining the use case. If reviewers reject it, fall back to `--filesystem=xdg-documents` only and document the CLI/live-reload limitation in the README.
+
+### Local smoke test before submitting
+
+```bash
+flatpak install --user flathub \
+    org.freedesktop.Platform//24.08 \
+    org.freedesktop.Sdk//24.08 \
+    org.freedesktop.Sdk.Extension.rust-stable//24.08
+
+flatpak-builder --user --install --force-clean build-dir \
+    flatpak/io.github.aydiler.md-viewer.yaml
+
+flatpak run io.github.aydiler.md-viewer README.md
+```
+
+### Submission steps
+
+1. Fork https://github.com/flathub/flathub on GitHub.
+2. Create a branch `io.github.aydiler.md-viewer` in your fork.
+3. Add `io.github.aydiler.md-viewer.yaml` (copied from this repo's `flatpak/`) plus the `cargo-sources.json` to the branch root.
+4. Open a PR against `flathub/flathub:new-pr`. Flathub's bot will validate the build.
+5. Iterate with reviewers (typical asks: icon variants, screenshot improvements, sandbox tightening).
+6. After merge, Flathub builds and serves updates on every `v*` tag if you wire `x-checker-data` into the manifest.
+
+## Icon
+
+The repo currently ships a **placeholder** icon at `data/io.github.aydiler.md-viewer.png` (256×256 "md" on dark blue, generated by ImageMagick). Replace this with a designed icon before opening the Flathub PR. The icon is also referenced by the Flatpak manifest and AppStream metainfo.
+
+## Release Checklist
+
+- [ ] Update version in `Cargo.toml` (`version = "X.Y.Z"`)
+- [ ] Update version in `snap/snapcraft.yaml` (`version: 'X.Y.Z'`) — `version-sync` CI check enforces parity
+- [ ] If the vendored renderer changed, bump `[workspace.package] version` in
+      `crates/egui_commonmark/Cargo.toml` and every reference to it — the
+      `Vendored fork is publishable to crates.io` release step fails otherwise
+- [ ] Bump `Cargo.lock` **surgically**, anchored on `name = "md-viewer"`. Never `sed`
+      the version line: the fork lockfile carries `glam` in sixteen versions and a
+      substitution rewrites unrelated crates
+- [ ] Append a `<release>` entry to `data/io.github.aydiler.md-viewer.metainfo.xml`
+- [ ] Write the `## [X.Y.Z] - YYYY-MM-DD` section in `CHANGELOG.md` **by hand**.
+      Do **not** run `git-cliff -o CHANGELOG.md` — this history is not
+      conventional-commit shaped, and `-o` replaces the hand-written prose
+      with a sparse file that drops whole versions (see `docs/LESSONS.md`)
+- [ ] Commit: `git commit -am "Release X.Y.Z"`
+- [ ] Tag: `git tag vX.Y.Z && git push origin main vX.Y.Z`
+- [ ] Watch `release.yml`. Expected outputs:
+  - 3 prebuilt binaries (Linux x86_64, macOS arm64, Windows x86_64) + matching `.sha256`.
+    Intel Mac was dropped from the matrix — its runner pool queued for 24+ minutes
+    on v0.1.3; those users build via `cargo install`
+  - GitHub Release with `RELEASE_NOTES.md` body
+  - crates.io publish (gated on `CARGO_REGISTRY_TOKEN`; idempotent on re-tag)
+  - Snap Store stable channel publish
+  - AUR push (gated on `AUR_SSH_PRIVATE_KEY`)

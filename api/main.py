@@ -9,6 +9,24 @@ import json
 from rdflib import Graph
 app = FastAPI(title="Semantic Croissant API")
 
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+from fastapi.staticfiles import StaticFiles
+import os
+
+if os.path.exists("/app/static"):
+    app.mount("/static", StaticFiles(directory="/app/static"), name="static")
+elif os.path.exists("api/static"):
+    app.mount("/static", StaticFiles(directory="api/static"), name="static")
+
+
 DATA_DIR = "/data"
 INDEX_DIR = "/volumes/server"
 DATA_FILE = os.path.join(DATA_DIR, "data.nt")
@@ -26,7 +44,7 @@ ACCESS_TOKEN = croissant_7643543846_Zs6nw7yi3Z9m
 HOST_NAME = server-croissant-live
 
 [runtime]
-SERVER_CONTAINER = semantic-croissant-server-croissant-live-1
+SERVER_CONTAINER = codata-server
 SYSTEM = native
 """
     with open(QLEVER_FILE, "w") as f:
@@ -48,7 +66,7 @@ def rebuild_index():
         
         # 2. Restart QLever Server
         subprocess.run(
-            ["docker", "restart", "semantic-croissant-server-croissant-live-1"],
+            ["docker", "restart", "codata-server"],
             check=True
         )
         print("Index rebuild completed and server restarted.", flush=True)
@@ -109,7 +127,7 @@ async def add_record(request: Request, background_tasks: BackgroundTasks, rebuil
         if nt_data.strip():
             insert_query = f"INSERT DATA {{ {nt_data} }}".encode("utf-8")
             req = urllib.request.Request(
-                "http://server-croissant-live:7011/", 
+                "http://server:7041/", 
                 data=insert_query,
                 headers={
                     "Content-type": "application/sparql-update",
@@ -168,7 +186,7 @@ def search_datasets(q: str):
         }} LIMIT 5000
         """
         
-        url = "http://server-croissant-live:7011/"
+        url = "http://server:7041/"
         data = urllib.parse.urlencode({"query": query}).encode('ascii')
         req = urllib.request.Request(url, data=data, headers={"User-Agent": "curl/7.68.0"})
         try:
@@ -228,7 +246,7 @@ def get_datasets_properties(dataset_ids):
     """
     
     encoded = urllib.parse.urlencode({"query": sparql}).encode("utf-8")
-    url = "http://server-croissant-live:7011/"
+    url = "http://server:7041/"
     req = urllib.request.Request(
         url, 
         data=encoded,
@@ -246,6 +264,656 @@ def get_datasets_properties(dataset_ids):
 import httpx
 from fastapi.responses import StreamingResponse
 
+
+from fastapi.responses import FileResponse
+
+@app.get("/dataverse")
+async def view_dataverse():
+    import os
+    file_path = os.path.join(os.path.dirname(__file__), "static/dataverse_loading.html")
+    if not os.path.exists(file_path):
+        file_path = "api/static/dataverse_loading.html"
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=render_html_template(file_path, request=None))
+
+@app.get("/add")
+@app.get("/url")
+async def view_add():
+    import os
+    file_path = os.path.join(os.path.dirname(__file__), "static/generic_loading.html")
+    if not os.path.exists(file_path):
+        file_path = "api/static/generic_loading.html"
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=render_html_template(file_path, request=None))
+
+@app.get("/dspace")
+async def process_dspace(url: str):
+    import urllib.parse
+    import xml.etree.ElementTree as ET
+    import httpx
+    
+    parts = urllib.parse.urlparse(url)
+    host = parts.netloc
+    path = parts.path
+    if '/handle/' not in path:
+        return {"error": "Not a valid DSpace handle URL"}
+        
+    handle = path.split('/handle/')[-1]
+    oai_url = f"https://{host}/dspace-oai/request?verb=GetRecord&metadataPrefix=datacite&identifier=oai:{host}:{handle}"
+    
+    async with httpx.AsyncClient() as client:
+        res = await client.get(oai_url)
+        if res.status_code != 200:
+            return {"error": f"Failed to fetch OAI-PMH record: HTTP {res.status_code}"}
+            
+    try:
+        root = ET.fromstring(res.content)
+    except Exception as e:
+        return {"error": f"Failed to parse XML: {str(e)}"}
+        
+    namespaces = {
+        'oai': 'http://www.openarchives.org/OAI/2.0/',
+        'datacite': 'http://datacite.org/schema/kernel-4'
+    }
+    
+    record = root.find('.//oai:record/oai:metadata/datacite:resource', namespaces)
+    if record is None:
+        return {"error": "Datacite resource not found in OAI-PMH response"}
+        
+    title_node = record.find('.//datacite:title', namespaces)
+    title = title_node.text if title_node is not None else ""
+    
+    pub_node = record.find('.//datacite:publisher', namespaces)
+    publisher = pub_node.text if pub_node is not None else ""
+    
+    year_node = record.find('.//datacite:publicationYear', namespaces)
+    pub_year = year_node.text if year_node is not None else ""
+    
+    creators = []
+    for creator in record.findall('.//datacite:creator/datacite:creatorName', namespaces):
+        if creator.text: creators.append({"@type": "Person", "name": creator.text})
+        
+    keywords = []
+    for subj in record.findall('.//datacite:subject', namespaces):
+        if subj.text: keywords.append(subj.text)
+        
+    desc = []
+    for d in record.findall('.//datacite:description', namespaces):
+        if d.text: desc.append(d.text)
+        
+    croissant = {
+        "@context": {
+            "@language": "en",
+            "@vocab": "https://schema.org/",
+            "citeAs": "cr:citeAs",
+            "column": "cr:column",
+            "conformsTo": "dct:conformsTo",
+            "cr": "http://mlcommons.org/croissant/",
+            "data": {"@id": "cr:data", "@type": "@json"},
+            "dataType": {"@id": "cr:dataType", "@type": "@vocab"},
+            "dct": "http://purl.org/dc/terms/",
+            "extract": "cr:extract",
+            "field": "cr:field",
+            "fileProperty": "cr:fileProperty",
+            "fileObject": "cr:fileObject",
+            "fileSet": "cr:fileSet",
+            "format": "cr:format",
+            "includes": "cr:includes",
+            "isLiveDataset": "cr:isLiveDataset",
+            "jsonPath": "cr:jsonPath",
+            "key": "cr:key",
+            "md5": "cr:md5",
+            "parentField": "cr:parentField",
+            "path": "cr:path",
+            "recordSet": "cr:recordSet",
+            "references": "cr:references",
+            "regex": "cr:regex",
+            "repeated": "cr:repeated",
+            "replace": "cr:replace",
+            "sc": "https://schema.org/",
+            "separator": "cr:separator",
+            "source": "cr:source",
+            "subField": "cr:subField",
+            "transform": "cr:transform"
+        },
+        "@type": "sc:Dataset",
+        "conformsTo": "http://mlcommons.org/croissant/1.0",
+        "name": title,
+        "description": "\n".join(desc),
+        "url": url,
+        "datePublished": pub_year,
+        "publisher": {"@type": "Organization", "name": publisher} if publisher else None,
+        "creator": creators,
+        "keywords": keywords,
+        "distribution": []
+    }
+    
+    # Clean up empty values
+    croissant = {k: v for k, v in croissant.items() if v}
+    
+    return croissant
+
+@app.post("/api/generic/process")
+async def process_generic(url: str = None):
+    import asyncio
+    import re
+    from fastapi import HTTPException
+    
+    if not url:
+        raise HTTPException(status_code=400, detail="Missing required parameter url")
+        
+    import os
+    script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../convertors/url_to_croissant.py"))
+    if not os.path.exists(script_path):
+        script_path = "convertors/url_to_croissant.py"
+        
+    cmd = ["python3", script_path, url, "--elastic"]
+    
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await process.communicate()
+    
+    if process.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"Conversion failed: {stderr.decode('utf-8')}")
+        
+    output = stdout.decode('utf-8')
+    
+    match = re.search(r"Extracted markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+    translated_match = re.search(r"Translated markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+    
+    if translated_match:
+        redirect_url = translated_match.group(1)
+    elif match:
+        redirect_url = match.group(1)
+    else:
+        file_match = re.search(r"Extracted markdown saved to [^/]+/([^/]+)/([a-zA-Z0-9_-]+\.md)", output)
+        if file_match:
+            redirect_url = f"/vault/doc/{file_match.group(2)}"
+        else:
+            raise HTTPException(status_code=500, detail="Could not determine generated filename from output")
+            
+    if redirect_url.startswith("http"):
+        redirect_url = "/vault/doc/" + redirect_url.split("/vault/")[-1]
+        
+    return {"status": "success", "redirect_url": redirect_url}
+
+@app.post("/api/dataverse/process")
+async def process_dataverse(callback: str = None, url: str = None, siteUrl: str = None, datasetPid: str = None):
+    import base64
+    import requests
+    import asyncio
+    import re
+    from fastapi import HTTPException
+    
+    try:
+        if datasetPid:
+            if not siteUrl:
+                siteUrl = "https://dataverse.harvard.edu"
+            dataset_url = f"{siteUrl}/dataset.xhtml?persistentId={datasetPid}"
+        elif url:
+            dataset_url = url
+        elif callback:
+            decoded_callback = base64.b64decode(callback).decode('utf-8')
+            response = requests.get(decoded_callback, timeout=15)
+            response.raise_for_status()
+            data = response.json().get("data", {})
+            
+            query_params = data.get("queryParameters", {})
+            site_url = query_params.get("siteUrl")
+            
+            signed_urls = data.get("signedUrls", [])
+            metadata_url = next((url_info.get("signedUrl") for url_info in signed_urls if url_info.get("name") == "getDatasetVersionMetadata"), None)
+            
+            if not site_url or not metadata_url:
+                raise HTTPException(status_code=400, detail="Invalid callback data structure")
+                
+            meta_response = requests.get(metadata_url, timeout=15)
+            meta_response.raise_for_status()
+            persistent_id = meta_response.json().get("data", {}).get("datasetPersistentId")
+            
+            if not persistent_id:
+                raise HTTPException(status_code=400, detail="Could not retrieve persistent ID")
+                
+            dataset_url = f"{site_url}/dataset.xhtml?persistentId={persistent_id}"
+        else:
+            raise HTTPException(status_code=400, detail="Missing required parameters")
+        
+        # Check if we are running in docker (where convertors is at /app/convertors or one level up)
+        import os
+        script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../convertors/url_to_croissant.py"))
+        if not os.path.exists(script_path):
+            script_path = "convertors/url_to_croissant.py"
+            
+        cmd = ["python3", script_path, dataset_url, "--elastic"]
+        
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"Conversion failed: {stderr.decode('utf-8')}")
+            
+        output = stdout.decode('utf-8')
+        
+        match = re.search(r"Extracted markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+        translated_match = re.search(r"Translated markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+        
+        if translated_match:
+            redirect_url = translated_match.group(1)
+        elif match:
+            redirect_url = match.group(1)
+        else:
+            file_match = re.search(r"Extracted markdown saved to [^/]+/([^/]+)/([a-zA-Z0-9_-]+\.md)", output)
+            if file_match:
+                redirect_url = f"/vault/doc/{file_match.group(2)}"
+            else:
+                raise HTTPException(status_code=500, detail="Could not determine generated filename from output")
+                
+        if redirect_url.startswith("http"):
+            redirect_url = "/vault/doc/" + redirect_url.split("/vault/")[-1]
+            
+        return {"status": "success", "redirect_url": redirect_url}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error processing dataverse callback: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+from pydantic import BaseModel
+class TextProcessRequest(BaseModel):
+    text: str
+
+@app.post("/api/text/process")
+async def process_text(request: TextProcessRequest):
+    import os
+    import tempfile
+    import asyncio
+    import re
+    from fastapi import HTTPException
+    
+    try:
+        if not request.text or not request.text.strip():
+            raise HTTPException(status_code=400, detail="Text cannot be empty")
+            
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+            f.write(request.text)
+            temp_path = f.name
+            
+        script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../convertors/url_to_croissant.py"))
+        if not os.path.exists(script_path):
+            script_path = "convertors/url_to_croissant.py"
+            
+        cmd = ["python3", script_path, temp_path, "--is-file", "--elastic"]
+        
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        
+        # Cleanup temp file
+        try:
+            os.unlink(temp_path)
+        except Exception:
+            pass
+            
+        if process.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"Conversion failed: {stderr.decode('utf-8')}")
+            
+        output = stdout.decode('utf-8')
+        
+        match = re.search(r"Extracted markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+        if match:
+            redirect_url = match.group(1)
+        else:
+            file_match = re.search(r"Extracted markdown saved to [^/]+/([^/]+)/([a-zA-Z0-9_-]+\.md)", output)
+            if file_match:
+                redirect_url = f"/vault/doc/{file_match.group(2)}"
+            else:
+                raise HTTPException(status_code=500, detail="Could not determine generated filename from output")
+                
+        if redirect_url.startswith("http"):
+            redirect_url = "/vault/doc/" + redirect_url.split("/vault/")[-1]
+            
+        return {"status": "success", "redirect_url": redirect_url}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+@app.get("/logo.png")
+async def serve_logo_main():
+    import os
+    from fastapi.responses import FileResponse
+    path = "/app/static/logo.png"
+    if not os.path.exists(path): path = "api/static/logo.png"
+    return FileResponse(path)
+
+def _odrl_base_dir():
+    base = "/app/.odrl"
+    if not os.path.exists(base):
+        base = os.path.expanduser("~/.odrl")
+    return base
+
+
+def _resolve_did_name(did: str) -> dict:
+    """Resolve a DID to a name/email dict via universal resolver."""
+    import urllib.request, json
+    try:
+        url = f"https://dev.uniresolver.io/1.0/identifiers/{did}"
+        req = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            doc = json.loads(resp.read())
+        # Resolver returns doc directly OR wrapped in didDocument
+        services = doc.get("service") or doc.get("didDocument", {}).get("service", [])
+        for svc in (services or []):
+            payload = svc.get("payload", {})
+            name = payload.get("name")
+            email = payload.get("email") or payload.get("orcid") or did
+            if name:
+                return {"name": name, "preferred_username": name, "email": email, "orcid": payload.get("orcid")}
+    except Exception as e:
+        print(f"DID resolve error: {e}")
+    # fallback: short DID
+    short = did.split(":")[-1][:12]
+    return {"name": f"did_{short}", "preferred_username": f"did_{short}", "email": did}
+
+
+def get_user_info_from_odrl(request=None):
+    """Return user dict for the currently authenticated user (via auth_did cookie)."""
+    import json
+    if not request:
+        return {"name": "Guest", "did": "did:oyd:guest", "certificate": "guest_cert"}
+    did = request.cookies.get("auth_did")
+    if not did:
+        return {"name": "Guest", "did": "did:oyd:guest", "certificate": "guest_cert"}
+    safe_did = "".join(c for c in did if c.isalnum() or c in ":-")
+    user_file = os.path.join(_odrl_base_dir(), "users", f"{safe_did}.json")
+    if os.path.exists(user_file):
+        try:
+            with open(user_file) as f:
+                data = json.load(f)
+                data["did"] = did
+                return data
+        except Exception:
+            pass
+    return {"name": "Guest", "did": "did:oyd:guest", "certificate": "guest_cert"}
+
+
+
+def render_html_template(file_path: str, request=None, auth_status=None):
+    import os
+    with open(file_path, 'r', encoding='utf-8') as f:
+        html = f.read()
+    
+    logo_url = os.environ.get("VAULT_LOGO_URL", "/logo.png")
+    logo_html = f'<a href="/" style="display:flex; align-items:center; justify-content:center; text-decoration:none; padding: 10px;"><img src="{logo_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Logo" /></a>' if logo_url else ""
+    
+    footer_html = os.environ.get("VAULT_FOOTER_HTML", """            <span>Ghostwriter 2.0 UI | Semantic Croissant with CDIF 1.1 (v2.3)</span>
+            <span style="color: #ccc;">|</span>
+            <span>Created by <a href="https://codata.org" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CODATA</a> in <a href="https://cdif4eosc.eu" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CDIF4EOSC</a> under Grant Agreement 101292473</span>
+            <img src="https://www.cdif4eosc.eu/assets/images/eu_flag.svg" alt="EU Flag" style="height: 20px;">""")
+    
+    html = html.replace('{{VAULT_LOGO_HTML}}', logo_html)
+    html = html.replace('{{VAULT_FOOTER_HTML}}', footer_html)
+    
+    if '{{LOGIN_BUTTON_HTML}}' in html and request:
+        try:
+            html = html.replace('{{LOGIN_BUTTON_HTML}}', get_login_button_html(request))
+        except:
+            pass
+            
+    if auth_status and '{{AUTH_STATUS}}' in html:
+        html = html.replace('{{AUTH_STATUS}}', auth_status)
+        
+    return html
+
+def get_login_button_html(request=None):
+    user = get_user_info_from_odrl(request)
+    if user and user.get("name"):
+        name = user["name"]
+        if name.startswith("did:"):
+            name = "User"
+        orcid = user.get("orcid", "")
+        orcid_badge = f'<br><small style="font-size:11px;color:#888;font-weight:normal;">ORCID {orcid}</small>' if orcid else ""
+        
+        if name == "Guest":
+            return '<div style="position:relative; display:inline-block;"><button class="theme-toggle" onclick="window.location.href=\'/login\'" style="background-color: #4285f4; color: white; border: none; font-weight: 500;">Login</button></div>'
+
+        return f'''<div style="position:relative; display:inline-block;" id="user-menu-container">
+            <button class="theme-toggle" onclick="document.getElementById('user-dropdown').style.display = document.getElementById('user-dropdown').style.display === 'block' ? 'none' : 'block'" style="background-color: transparent; color: inherit; border: 1px solid var(--border-color, #ccc); font-size: 1.2rem; padding: 4px 10px; border-radius: 50%; cursor: pointer;">👤</button>
+            <div id="user-dropdown" style="display:none; position:absolute; top:100%; right:0; background:var(--bg-color, white); border:1px solid var(--border-color, #ccc); border-radius:4px; box-shadow:0 2px 10px rgba(0,0,0,0.1); z-index:1000; margin-top:5px; min-width:200px;">
+                <div style="padding: 12px 15px; border-bottom: 1px solid var(--border-color, #eee); color: var(--text-color, #333); font-size: 14px; white-space: nowrap; font-weight: bold;">
+                    {name}{orcid_badge}
+                </div>
+                <button onclick="if(confirm('Log out?')) {{ document.cookie='auth_did=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;'; fetch('/api/auth/logout', {{method:'POST'}}).then(()=>window.location.href='/'); }}" style="width:100%; padding:10px 15px; text-align:left; background:none; border:none; cursor:pointer; font-size:14px; color:#d93025; border-radius: 0 0 4px 4px;">Logout</button>
+            </div>
+            <script>
+                document.addEventListener('click', function(e) {{
+                    if (document.getElementById('user-menu-container') && !document.getElementById('user-menu-container').contains(e.target)) {{
+                        document.getElementById('user-dropdown').style.display = 'none';
+                    }}
+                }});
+            </script>
+        </div>'''
+    else:
+        return '<div style="position:relative; display:inline-block;"><button class="theme-toggle" onclick="window.location.href=\'/login\'" style="background-color: #4285f4; color: white; border: none; font-weight: 500;">Login</button></div>'
+
+def get_auth_headers(base_headers=None):
+    headers = base_headers.copy() if base_headers else {}
+    token = get_odrl_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+@app.post("/api/auth/logout")
+async def api_auth_logout(request: Request):
+    from fastapi.responses import JSONResponse
+    resp = JSONResponse({"success": True})
+    resp.delete_cookie("auth_did", path="/")
+    return resp
+
+
+@app.get("/api/auth/status")
+async def api_auth_status(request: Request):
+    from fastapi.responses import JSONResponse
+    import json
+    # 1. Check session_id (post-login handshake: sets cookie)
+    session_id = request.query_params.get("session_id")
+    if session_id:
+        safe_session = "".join(c for c in session_id if c.isalnum())
+        session_file = os.path.join(_odrl_base_dir(), "sessions", f"{safe_session}.txt")
+        if os.path.exists(session_file):
+            with open(session_file) as f:
+                did = f.read().strip()
+            user_file = os.path.join(_odrl_base_dir(), "users", "".join(c for c in did if c.isalnum() or c in ":-") + ".json")
+            if os.path.exists(user_file):
+                with open(user_file) as f:
+                    user = json.load(f)
+                resp = JSONResponse({"authenticated": True, "user": user})
+                resp.set_cookie("auth_did", did, max_age=86400 * 30, path="/", samesite="lax")
+                return resp
+    # 2. Check cookie
+    user = get_user_info_from_odrl(request)
+    if user:
+        return JSONResponse({"authenticated": True, "user": user})
+    return JSONResponse({"authenticated": False})
+
+
+@app.post("/api/auth/save")
+async def api_auth_save(request: Request):
+    """Accept a Verifiable Credential OR a raw DID document, resolve the user name, and create a session."""
+    from fastapi.responses import JSONResponse
+    import json
+    try:
+        data = await request.json()
+        session_id = request.query_params.get("session_id", "")
+        safe_session = "".join(c for c in session_id if c.isalnum())
+
+        did = None
+        user_profile = None
+
+        # Case 1: Verifiable Credential (wallet callback format)
+        if "credentialSubject" in data and "proof" in data:
+            subject = data["credentialSubject"]
+            # credentialSubject may be a DID string or an object with .id
+            did = subject if isinstance(subject, str) else subject.get("id", "")
+            if did:
+                user_profile = _resolve_did_name(did)
+
+        # Case 2: Raw DID document
+        elif "did" in data and "did_document" in data:
+            did = data["did"]
+            services = data.get("did_document", {}).get("service", [])
+            for svc in services:
+                payload = svc.get("payload", {})
+                name = payload.get("name")
+                if name:
+                    user_profile = {
+                        "name": name,
+                        "preferred_username": name,
+                        "email": payload.get("email") or payload.get("orcid") or did,
+                        "orcid": payload.get("orcid"),
+                    }
+                    break
+            if not user_profile and did:
+                user_profile = _resolve_did_name(did)
+
+        if not did or not user_profile:
+            return JSONResponse({"success": False, "error": "Could not extract DID or user profile from payload"})
+
+        safe_did = "".join(c for c in did if c.isalnum() or c in ":-")
+        base = _odrl_base_dir()
+        os.makedirs(os.path.join(base, "users"), exist_ok=True)
+        os.makedirs(os.path.join(base, "sessions"), exist_ok=True)
+
+        # Save user profile
+        with open(os.path.join(base, "users", f"{safe_did}.json"), "w") as f:
+            json.dump(user_profile, f)
+
+        # Save session → DID mapping
+        if safe_session:
+            with open(os.path.join(base, "sessions", f"{safe_session}.txt"), "w") as f:
+                f.write(did)
+
+        # Also set cookie immediately in the response (for same-origin callbacks)
+        resp = JSONResponse({"success": True, "user": user_profile})
+        resp.set_cookie("auth_did", did, max_age=86400 * 30, path="/", samesite="lax")
+        return resp
+
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)})
+
+
+@app.post("/api/auth/debug")
+async def api_auth_debug(request: Request):
+    from fastapi.responses import JSONResponse
+    import json
+    try:
+        data = await request.json()
+        with open("/tmp/auth_debug.log", "a") as f:
+            f.write(json.dumps(data) + "\n")
+        return JSONResponse({"success": True})
+    except Exception as e:
+        return JSONResponse({"success": False})
+
+@app.get("/")
+async def view_index(request: Request):
+    import os
+    from fastapi.responses import HTMLResponse
+    file_path = os.path.join(os.path.dirname(__file__), "static/index.html")
+    if not os.path.exists(file_path):
+        file_path = "api/static/index.html" # fallback
+    
+        return HTMLResponse(content=render_html_template(file_path, request))
+
+@app.get("/vault/doc/raw/{es_id}")
+async def proxy_vault_doc_raw(es_id: str, request: Request):
+    import httpx
+    from fastapi import Response
+    headers = {}
+    cookie = request.headers.get("cookie")
+    if cookie:
+        headers["cookie"] = cookie
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(f"http://mcp:7070/vault/doc/raw/{es_id}", headers=headers)
+        return Response(content=resp.content, status_code=resp.status_code,
+                        media_type=resp.headers.get("content-type", "text/markdown"))
+
+@app.post("/vault/doc/update/{es_id}")
+async def proxy_vault_doc_update(es_id: str, request: Request):
+    import httpx
+    from fastapi import Response
+    headers = {"Content-Type": "application/json"}
+    cookie = request.headers.get("cookie")
+    if cookie:
+        headers["cookie"] = cookie
+    body = await request.body()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(f"http://mcp:7070/vault/doc/update/{es_id}", content=body, headers=headers)
+        return Response(content=resp.content, status_code=resp.status_code,
+                        media_type=resp.headers.get("content-type", "application/json"))
+
+@app.get("/vault/doc/{filename:path}")
+async def view_vault_doc(filename: str, request: Request):
+    user_agent = request.headers.get("user-agent", "").lower()
+    accept = request.headers.get("accept", "").lower()
+    is_bot = any(bot in user_agent for bot in ["bot", "spider", "crawl", "claude", "gpt", "anthropic", "curl", "wget", "python"])
+    
+    doc_id = filename
+    if doc_id.endswith("/annotations"):
+        doc_id = doc_id.rsplit("/", 1)[0]
+    
+    if is_bot or "application/json" in accept or "application/ld+json" in accept or "text/markdown" in accept or "go-http-client" in user_agent or "node-fetch" in user_agent or "axios" in user_agent:
+        import httpx
+        from fastapi import Response
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            if "json" in accept:
+                resp = await client.get(f"http://mcp:7070/vault/{doc_id}.jsonld")
+                return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+            else:
+                resp = await client.get(f"http://mcp:7070/vault/doc/raw/{doc_id}")
+                return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "text/markdown"))
+            
+    import os
+    file_path = os.path.join(os.path.dirname(__file__), "static/doc_viewer.html")
+    if not os.path.exists(file_path):
+        file_path = "api/static/doc_viewer.html" # fallback
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=render_html_template(file_path, request=None))
+
+@app.post("/vault/approve/{es_id}")
+async def proxy_vault_approve(request: Request, es_id: str):
+    import httpx
+    from fastapi import Response
+    from fastapi.responses import JSONResponse
+    mcp_base = "http://mcp:7070"
+    async with httpx.AsyncClient() as client:
+        body = await request.body()
+        headers = {}
+        if "content-type" in request.headers:
+            headers["Content-Type"] = request.headers["content-type"]
+        
+        try:
+            response = await client.post(
+                f"{mcp_base}/vault/approve/{es_id}", 
+                content=body, 
+                headers=headers,
+                timeout=60.0
+            )
+            return Response(content=response.content, status_code=response.status_code, headers=dict(response.headers))
+        except httpx.RequestError as e:
+            return JSONResponse({"success": False, "error": f"Failed to reach MCP server: {str(e)}"}, status_code=502)
+
 @app.get("/vault/{filename:path}")
 async def get_vault_file(filename: str):
     minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
@@ -253,33 +921,57 @@ async def get_vault_file(filename: str):
     if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".gz") and not filename.endswith(".csv"):
         filename += ".md"
         
-    async def stream_file():
-        from minio import Minio
-        from datetime import timedelta
-        endpoint = minio_base.replace("http://", "").replace("https://", "")
+    from minio import Minio
+    from fastapi.responses import Response
+    endpoint = minio_base.replace("http://", "").replace("https://", "")
+    m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
+
+    # Determine media type
+    media_type = "application/octet-stream"
+    if filename.endswith(".md"): media_type = "text/markdown; charset=utf-8"
+    elif filename.endswith(".jsonld") or filename.endswith(".json"): media_type = "application/ld+json; charset=utf-8"
+    elif filename.endswith(".csv"): media_type = "text/csv; charset=utf-8"
+    elif filename.endswith(".html"): media_type = "text/html; charset=utf-8"
+    elif filename.endswith(".gz"): media_type = "application/gzip"
+
+    # 1. Try reading directly from MinIO
+    try:
+        res = m_client.get_object("vault", filename)
+        data = res.read()
+        res.close()
+        res.release_conn()
+        return Response(content=data, media_type=media_type)
+    except Exception:
+        # Check with .gz
+        if not filename.endswith(".gz"):
+            try:
+                res_gz = m_client.get_object("vault", filename + ".gz")
+                data_gz = res_gz.read()
+                res_gz.close()
+                res_gz.release_conn()
+                return Response(content=data_gz, media_type="application/gzip")
+            except Exception:
+                pass
+
+    # 2. If JSON-LD not in MinIO, fallback to Elasticsearch
+    if filename.endswith(".jsonld"):
         try:
-            m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
-            base_minio_url = m_client.presigned_get_object("vault", filename, expires=timedelta(hours=1))
+            es_id = filename[:-7]
+            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            async with httpx.AsyncClient(timeout=5.0) as check_client:
+                es_resp = await check_client.get(f"{es_url}/croissant/_doc/{es_id}")
+                if es_resp.status_code == 200:
+                    es_data = es_resp.json().get("_source", {})
+                    es_data.pop("_full_text", None)
+                    es_data.pop("_markdown_text", None)
+                    es_data.pop("_source_url", None)
+                    import json
+                    data = json.dumps(es_data, indent=2).encode("utf-8")
+                    return Response(content=data, media_type="application/ld+json; charset=utf-8")
         except Exception:
-            base_minio_url = f"{minio_base}/vault/{filename}"
-            
-        async with httpx.AsyncClient() as client:
-            async with client.stream("GET", base_minio_url) as response:
-                if response.status_code == 404 and not filename.endswith(".gz"):
-                    try:
-                        m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
-                        gz_minio_url = m_client.presigned_get_object("vault", filename + ".gz", expires=timedelta(hours=1))
-                    except Exception:
-                        gz_minio_url = f"{minio_base}/vault/{filename}.gz"
-                    async with client.stream("GET", gz_minio_url) as response2:
-                        if response2.status_code == 200:
-                            async for chunk in response2.aiter_bytes():
-                                yield chunk
-                elif response.status_code == 200:
-                    async for chunk in response.aiter_bytes():
-                        yield chunk
-    
-    return StreamingResponse(stream_file())
+            pass
+
+    return Response(content="File not found in vault", status_code=404)
 
 @app.get("/search")
 def search_keyword(q: str, limit: int = 100, page: int = 1):
@@ -342,6 +1034,9 @@ from fastapi.responses import PlainTextResponse
 @app.get("/croissant")
 def get_croissant_catalog(id: str = None, q: str = None, limit: int = 500, page: int = 1, format: str = "json-ld"):
     if id:
+        if id.startswith("doi:"):
+            id = "https://doi.org/" + id[4:]
+            
         # User requested a specific dataset ID
         filter_str = f"_:{id}" if id.startswith("bn") else id
         filter_str_alt = filter_str.replace("https://", "http://") if "https://" in filter_str else filter_str.replace("http://", "https://")
@@ -422,7 +1117,7 @@ def get_croissant_catalog(id: str = None, q: str = None, limit: int = 500, page:
         
         def run_q(query):
             encoded = urllib.parse.urlencode({"query": query})
-            url = f"http://server-croissant-live:7011/?{encoded}"
+            url = f"http://server:7041/?{encoded}"
             req = urllib.request.Request(url, headers={"Accept": "application/json"})
             with urllib.request.urlopen(req) as response:
                 return json.loads(response.read().decode()).get("results", {}).get("bindings", [])
@@ -599,7 +1294,7 @@ def get_croissant_catalog(id: str = None, q: str = None, limit: int = 500, page:
                 OFFSET {offset}
                 """
                 encoded_query = urllib.parse.urlencode({"query": sparql}).encode("utf-8")
-                url = "http://server-croissant-live:7011/"
+                url = "http://server:7041/"
                 req = urllib.request.Request(
                     url, 
                     data=encoded_query,
@@ -740,7 +1435,7 @@ def get_variables_sparql(id: str):
         }} LIMIT 1
         """
         enc_res = urllib.parse.urlencode({"query": resolve_query}).encode("utf-8")
-        req_res = urllib.request.Request("http://server-croissant-live:7011/", data=enc_res, headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"})
+        req_res = urllib.request.Request("http://server:7041/", data=enc_res, headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"})
         try:
             with urllib.request.urlopen(req_res) as response_res:
                 res_bindings = json.loads(response_res.read().decode()).get("results", {}).get("bindings", [])
@@ -802,7 +1497,7 @@ def get_variables_sparql(id: str):
     """
     
     encoded = urllib.parse.urlencode({"query": query}).encode("utf-8")
-    url = "http://server-croissant-live:7011/"
+    url = "http://server:7041/"
     req = urllib.request.Request(
         url, 
         data=encoded,
@@ -1041,3 +1736,171 @@ def get_variables_oai(url: str):
         }
     except Exception as e:
         return {"error": str(e), "questions": [], "variables": []}
+
+# --- Ollama Gateway Endpoint ---
+
+import random
+from fastapi import Header, HTTPException, Request
+from fastapi.responses import StreamingResponse
+import httpx
+
+def load_gateway_config():
+    config_path = os.path.join(os.path.dirname(__file__), "gateway_config.json")
+    if not os.path.exists(config_path):
+        return {"api_keys": [], "ollama_endpoints": []}
+    with open(config_path, "r") as f:
+        return json.load(f)
+
+@app.post("/gateway")
+@app.get("/gateway")
+@app.put("/gateway")
+@app.delete("/gateway")
+@app.post("/gateway/{path:path}")
+@app.get("/gateway/{path:path}")
+@app.put("/gateway/{path:path}")
+@app.delete("/gateway/{path:path}")
+async def ollama_gateway(request: Request, path: str = "", x_api_key: str = Header(None, alias="X-API-Key")):
+    config = load_gateway_config()
+    allowed_keys = config.get("api_keys", [])
+    
+    # Check if header matches or Authorization Bearer token matches
+    auth_header = request.headers.get("Authorization")
+    is_authorized = False
+    
+    if x_api_key in allowed_keys:
+        is_authorized = True
+    elif auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        if token in allowed_keys:
+            is_authorized = True
+            
+    if not is_authorized:
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid API Key")
+        
+    endpoints = config.get("ollama_endpoints", [])
+    if not endpoints:
+        raise HTTPException(status_code=500, detail="Gateway Error: No backend Ollama endpoints configured")
+        
+    # Simple load balancing: select a random endpoint
+    backend_url = random.choice(endpoints)
+    # Ensure URL formatting is correct
+    if backend_url.endswith("/"):
+        backend_url = backend_url[:-1]
+        
+    target_url = f"{backend_url}/{path}" if path else backend_url
+    
+    # Forward the request
+    client = httpx.AsyncClient()
+    
+    req_body = await request.body()
+    
+    # Exclude headers that should not be forwarded
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    headers.pop("content-length", None)
+    
+    try:
+        req = client.build_request(
+            method=request.method,
+            url=target_url,
+            headers=headers,
+            content=req_body,
+            params=request.query_params
+        )
+        
+        # Transparently proxy the response back to the client (supports streaming)
+        response = await client.send(req, stream=True)
+        return StreamingResponse(
+            response.aiter_raw(),
+            status_code=response.status_code,
+            headers=dict(response.headers),
+            background=client.aclose
+        )
+    except Exception as e:
+        await client.aclose()
+        raise HTTPException(status_code=502, detail=f"Bad Gateway: Error communicating with backend ({str(e)})")
+
+@app.get("/collections/{es_id}")
+async def view_collections(es_id: str, request: Request):
+    import httpx
+    from fastapi import Response, HTTPException
+    
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(f"http://mcp:7070/collections/{es_id}", headers=headers)
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "text/html"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/collectionsindex")
+async def view_collections_index(request: Request):
+    import httpx
+    from fastapi import Response, HTTPException
+    
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(f"http://mcp:7070/collectionsindex", headers=headers)
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "text/html"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/variableindex")
+async def view_variables_index(request: Request):
+    import httpx
+    from fastapi import Response, HTTPException
+    
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(f"http://mcp:7070/variableindex", headers=headers)
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "text/html"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/validate")
+async def view_validate(request: Request):
+    import httpx
+    from fastapi import Response, HTTPException
+    
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(f"http://mcp:7070/validate", headers=headers, params=dict(request.query_params))
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "text/html"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+@app.api_route("/api/validate", methods=["GET", "POST"])
+async def api_validate_proxy(request: Request):
+    import httpx
+    from fastapi import Response, HTTPException
+    
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    
+    body = await request.body()
+    
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        try:
+            resp = await client.request(
+                request.method,
+                f"http://mcp:7070/api/validate",
+                headers=headers,
+                params=dict(request.query_params),
+                content=body
+            )
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+

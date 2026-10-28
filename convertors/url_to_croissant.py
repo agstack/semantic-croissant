@@ -23,9 +23,13 @@ from rdflib import Graph
 from youtube_transcript_api import YouTubeTranscriptApi
 from playwright.sync_api import sync_playwright
 
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
+OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "")
+OLLAMA_HEADERS = {"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {}
 ELASTICSEARCH_URL = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200")
-MODEL_NAME = "gemma4-croissant"
+MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "localhost")
+OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:31b-cloud")
+MODEL_NAME = os.environ.get("MODEL_NAME") or os.environ.get("MODEL") or OLLAMA_DEFAULT_MODEL
 
 def fetch_with_playwright(url):
     print(f"  -> Fetching with Playwright fallback: {url}")
@@ -198,7 +202,6 @@ def extract_page_meta(soup, url):
     return meta
 
 def fetch_github_repo(url, traverse=False):
-    import urllib.parse
     parsed = urllib.parse.urlparse(url)
     path_parts = parsed.path.strip('/').split('/')
     if len(path_parts) >= 2:
@@ -239,7 +242,21 @@ def fetch_github_repo(url, traverse=False):
             
     return None
 
+def resolve_direct_url(url):
+    """If url is a Google redirect (e.g. google.com/goto?url=...), resolve to canonical direct destination URL."""
+    if url and "google.com/goto" in url:
+        try:
+            r = scraper.get(url, allow_redirects=False, timeout=10)
+            if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("Location"):
+                resolved = r.headers["Location"].strip()
+                print(f"  -> Resolved Google redirect to direct URL: {resolved}")
+                return resolved
+        except Exception as e:
+            print(f"  -> Could not resolve Google redirect for {url}: {e}")
+    return url
+
 def fetch_url_markdown(url, traverse=False):
+    url = resolve_direct_url(url)
     if "github.com" in url and "api.github.com" not in url:
         parsed = urllib.parse.urlparse(url)
         path_parts = parsed.path.strip('/').split('/')
@@ -248,6 +265,27 @@ def fetch_url_markdown(url, traverse=False):
             if res:
                 return res
                 
+    if "delpher.nl" in url and "identifier=" in url:
+        parsed_url = urllib.parse.urlparse(url)
+        query_params = urllib.parse.parse_qs(parsed_url.query)
+        identifier = query_params.get("identifier", [None])[0]
+        if identifier:
+            ocr_url = f"https://www.delpher.nl/nl/pres/view/pageocr?identifier={identifier}&coll=ddd&operation=download"
+            print(f"Detected Delpher article. Fetching OCR text...")
+            try:
+                response = requests.get(ocr_url, timeout=30)
+                if response.status_code == 200:
+                    text = response.text.strip()
+                    meta = {
+                        "name": f"Delpher Article {identifier}",
+                        "contentUrl": url,
+                    }
+                    if traverse:
+                        return text, meta, []
+                    return text, meta
+            except Exception as e:
+                print(f"Failed to fetch Delpher text: {e}")
+
     if "youtube.com" in url or "youtu.be" in url:
         yt_text, yt_meta = fetch_youtube_transcript(url)
         if traverse:
@@ -272,8 +310,7 @@ def fetch_url_markdown(url, traverse=False):
             
         if is_pdf:
             try:
-                from pypdf import PdfReader
-
+                import fitz
                 
                 import hashlib
                 from datetime import datetime, timezone
@@ -282,12 +319,11 @@ def fetch_url_markdown(url, traverse=False):
                 checksum = hashlib.sha256(pdf_bytes).hexdigest()
                 size = len(pdf_bytes)
                 
-                print("Detected PDF document. Extracting text...")
-                pdf_file = io.BytesIO(pdf_bytes)
-                reader = PdfReader(pdf_file)
+                print("Detected PDF document. Extracting text with PyMuPDF...")
+                doc = fitz.open(stream=pdf_bytes, filetype="pdf")
                 text = ""
-                for page in reader.pages:
-                    extracted = page.extract_text()
+                for page in doc:
+                    extracted = page.get_text()
                     if extracted:
                         text += extracted + "\n\n"
                     
@@ -319,8 +355,9 @@ def fetch_url_markdown(url, traverse=False):
                 html_text = content_bytes.decode('latin-1')
         else:
             html_text = response.text
-            if ("JavaScript is disabled" in html_text and "verify that you're not a robot" in html_text) or response.status_code in (202, 403):
-                print("Detected bot protection challenge in response. Triggering Playwright fallback...")
+            is_delpher_search = "delpher.nl" in url and "results" in url
+            if is_delpher_search or ("JavaScript is disabled" in html_text and "verify that you're not a robot" in html_text) or response.status_code in (202, 403):
+                print(f"Triggering Playwright fallback (is_delpher_search={is_delpher_search})...")
                 pw_content = fetch_with_playwright(url)
                 if pw_content:
                     html_text = pw_content
@@ -457,7 +494,7 @@ def translate_to_english(text):
     print("Translating content to English using Ollama...")
     prompt = f"Translate the ENTIRE following text to English. Do not summarize. Translate every single word until the end of the text:\n\n{text}"
     ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-    model_name = os.environ.get("MODEL", "gemma4:e4b")
+    model_name = os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:31b-cloud")
     payload = {
         "model": model_name,
         "prompt": prompt,
@@ -468,7 +505,7 @@ def translate_to_english(text):
     }
     print(f"DEBUG: Payload sent to Ollama: {repr(payload)}")
     try:
-        res = requests.post(f"{ollama_host}/api/generate", json=payload, timeout=600)
+        res = requests.post(f"{ollama_host}/api/generate", json=payload, headers=OLLAMA_HEADERS, timeout=600)
         if res.status_code == 200:
             translated = res.json().get('response', '').strip()
             print(f"DEBUG: Translated response from Ollama: {repr(translated[:100])}")
@@ -509,10 +546,10 @@ def get_elasticsearch_version(url, expert="/croissant"):
 def convert_oai_to_croissant(doc):
     croissant = {
         "@context": {
-            "@language": "en",
-            "@vocab": "https://schema.org/",
+            "@vocab": "http://schema.org/",
             "cr": "http://mlcommons.org/croissant/",
-            "sc": "https://schema.org/",
+            "sc": "http://schema.org/",
+            "schema": "http://schema.org/",
             "dct": "http://purl.org/dc/terms/"
         },
         "@type": "sc:Dataset",
@@ -684,25 +721,129 @@ def index_into_elasticsearch(url, json_data, markdown_data, expert="/croissant")
             print(f"✗ Elasticsearch returned {resp.status_code}: {resp.text[:200]}")
     except Exception as e:
         print(f"✗ Failed to index into Elasticsearch: {e}")
+def check_dspace_direct_export(url):
+    import xml.etree.ElementTree as ET
+    try:
+        parts = urllib.parse.urlparse(url)
+        if '/handle/' not in parts.path:
+            return None
+            
+        host = parts.netloc
+        handle = parts.path.split('/handle/')[-1]
+        oai_url = f"https://{host}/dspace-oai/request?verb=GetRecord&metadataPrefix=datacite&identifier=oai:{host}:{handle}"
+        print(f"DSpace URL detected. Fetching OAI-PMH record from {oai_url}")
+        
+        res = requests.get(oai_url, timeout=15)
+        if res.status_code != 200:
+            return None
+            
+        root = ET.fromstring(res.content)
+        namespaces = {
+            'oai': 'http://www.openarchives.org/OAI/2.0/',
+            'datacite': 'http://datacite.org/schema/kernel-4'
+        }
+        
+        record = root.find('.//oai:record/oai:metadata/datacite:resource', namespaces)
+        if record is None:
+            return None
+            
+        title_node = record.find('.//datacite:title', namespaces)
+        title = title_node.text if title_node is not None else ""
+        
+        pub_node = record.find('.//datacite:publisher', namespaces)
+        publisher = pub_node.text if pub_node is not None else ""
+        
+        year_node = record.find('.//datacite:publicationYear', namespaces)
+        pub_year = year_node.text if year_node is not None else ""
+        
+        creators = []
+        for creator in record.findall('.//datacite:creator/datacite:creatorName', namespaces):
+            if creator.text: creators.append({"@type": "Person", "name": creator.text})
+            
+        keywords = []
+        for subj in record.findall('.//datacite:subject', namespaces):
+            if subj.text: keywords.append(subj.text)
+            
+        desc = []
+        for d in record.findall('.//datacite:description', namespaces):
+            if d.text: desc.append(d.text)
+            
+        croissant = {
+            "@context": {
+                "@vocab": "http://schema.org/",
+                "sc": "http://schema.org/",
+                "schema": "http://schema.org/",
+                "citeAs": "cr:citeAs",
+                "column": "cr:column",
+                "conformsTo": "dct:conformsTo",
+                "cr": "http://mlcommons.org/croissant/",
+                "data": {"@id": "cr:data", "@type": "@json"},
+                "dataType": {"@id": "cr:dataType", "@type": "@vocab"},
+                "dct": "http://purl.org/dc/terms/",
+                "extract": "cr:extract",
+                "field": "cr:field",
+                "fileProperty": "cr:fileProperty",
+                "fileObject": "cr:fileObject",
+                "fileSet": "cr:fileSet",
+                "format": "cr:format",
+                "includes": "cr:includes",
+                "isLiveDataset": "cr:isLiveDataset",
+                "jsonPath": "cr:jsonPath",
+                "key": "cr:key",
+                "md5": "cr:md5",
+                "parentField": "cr:parentField",
+                "path": "cr:path",
+                "recordSet": "cr:recordSet",
+                "references": "cr:references",
+                "regex": "cr:regex",
+                "repeated": "cr:repeated",
+                "replace": "cr:replace",
+                "separator": "cr:separator",
+                "source": "cr:source",
+                "subField": "cr:subField",
+                "transform": "cr:transform"
+            },
+            "@type": "sc:Dataset",
+            "conformsTo": "http://mlcommons.org/croissant/1.0",
+            "name": title,
+            "description": "\n".join(desc),
+            "url": url,
+            "datePublished": pub_year,
+            "publisher": {"@type": "Organization", "name": publisher} if publisher else None,
+            "creator": creators,
+            "keywords": keywords,
+            "distribution": []
+        }
+        
+        croissant = {k: v for k, v in croissant.items() if v}
+        return croissant
+    except Exception as e:
+        print(f"DSpace export failed: {e}")
+        return None
+
 
 def check_dataverse_direct_export(url):
     try:
-        headers = {'User-Agent': 'curl/7.68.0'}
+        headers = {'User-Agent': 'SemanticCroissant/1.0'}
         if "doi.org" in url:
             res = requests.head(url, allow_redirects=True, timeout=10, headers=headers)
             target_url = res.url
         else:
             target_url = url
             
-        if "persistentId=doi:" in target_url:
+        if "persistentId=" in target_url:
             parsed = urllib.parse.urlparse(target_url)
             query = urllib.parse.parse_qs(parsed.query)
             persistent_id = query.get("persistentId", [""])[0]
             if persistent_id:
                 base_url = f"{parsed.scheme}://{parsed.netloc}"
+                if persistent_id.startswith("doi:"):
+                    encoded_pid = urllib.parse.quote(persistent_id, safe='/')
+                else:
+                    encoded_pid = urllib.parse.quote(persistent_id, safe='')
                 
                 for exporter in ["croissant", "schema.org"]:
-                    export_url = f"{base_url}/api/datasets/export?exporter={exporter}&persistentId={persistent_id}"
+                    export_url = f"{base_url}/api/datasets/export?exporter={exporter}&persistentId={encoded_pid}"
                     print(f"Dataverse URL detected. Trying direct export from {export_url}")
                     res = requests.get(export_url, timeout=15, headers=headers)
                     
@@ -740,206 +881,335 @@ def check_dataverse_direct_export(url):
         print(f"Direct export check failed: {e}")
     return None
 
-def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, user_name=None, user_email=None, index=False, elastic=False, expert="/expert/croissant", upload_gdrive=False, upload_gdrive_folder=None):
-    direct_jsonld = check_dataverse_direct_export(url)
-    if direct_jsonld:
-        print("✓ Successfully retrieved Croissant JSON-LD directly from Dataverse API!")
-        json_data = direct_jsonld
-        
-        # Check Elasticsearch for existing version and increment if necessary
-        if "version" not in json_data:
-            json_data["version"] = "1.0"
-        es_version = get_elasticsearch_version(url, expert)
-        if es_version:
-            json_data["version"] = str(es_version)
-            print(f"  ✓ Resource already in Elasticsearch. Updating version to {es_version}")
-            
-        if expert:
-            if "isPartOf" not in json_data:
-                json_data["isPartOf"] = []
-            elif not isinstance(json_data["isPartOf"], list):
-                json_data["isPartOf"] = [json_data["isPartOf"]]
-            json_data["isPartOf"].append({"@type": "Collection", "name": expert})
-            
-        output = json.dumps(json_data, indent=2)
-        
-        parsed_url = urllib.parse.urlparse(url)
-        safe_name = parsed_url.netloc + parsed_url.path
-        safe_name = safe_name.replace("/", "_").replace(".", "_")
-        if parsed_url.query:
-            qs = urllib.parse.parse_qsl(parsed_url.query)
-            for k, v in qs:
-                safe_name += "_" + v
-        import re
-        safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', safe_name)
-        if not safe_name:
-            safe_name = "url_output"
-            
-        os.makedirs(os.path.join("data", "ca4eosc"), exist_ok=True)
-        safe_name = os.path.join("data", "ca4eosc", safe_name)
-        output_filename = f"{safe_name}_croissant.jsonld"
-        croissant_filename = os.path.basename(output_filename)
-        md_filename = f"{safe_name}_content.md"
-        
-        with open(output_filename, "w", encoding='utf-8') as f:
-            f.write(output)
-        print(f"\nOutput saved to {output_filename}")
-        
-        # Upload to Vault if MinIO is configured
-        try:
-            minio_url = os.environ.get("MINIO_URL", "http://minio:9000")
-            minio_user = os.environ.get("MINIO_ROOT_USER", "minioadmin")
-            minio_pass = os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin")
-            if minio_url:
-                from minio import Minio
-                endpoint = minio_url.replace("http://", "").replace("https://", "")
-                client = Minio(
-                    endpoint,
-                    access_key=minio_user,
-                    secret_key=minio_pass,
-                    secure=minio_url.startswith("https")
-                )
-                
-                # Upload JSON-LD
-                vault_jsonld_filename = croissant_filename
-                jsonld_bytes = output.encode('utf-8')
-                client.put_object(
-                    "vault",
-                    vault_jsonld_filename,
-                    data=io.BytesIO(jsonld_bytes),
-                    length=len(jsonld_bytes),
-                    content_type="application/ld+json"
-                )
-                print(f"Croissant JSON-LD successfully uploaded to vault: https://mcp.dev.codata.org/vault/{vault_jsonld_filename}")
-                
-                # Generate and upload Datacard
-                datacard_filename = vault_jsonld_filename.replace(".jsonld", "_datacard.md")
-                datacard_content = f"**Original Source:** [View URL]({url})\n\n"
-                datacard_content += f"**Markdown Document:** [View Extracted Markdown](https://ai.mediaquantum.eu/vault/{os.path.basename(md_filename)})\n\n"
-                datacard_content += f"**Metadata:** [View Croissant JSON-LD Data](https://ai.mediaquantum.eu/vault/{vault_jsonld_filename})\n\n"
-                import hashlib
-                datacard_content += f"---\n**Digital Signature:** `{hashlib.sha256(jsonld_bytes).hexdigest()}`\n"
-                
-                dc_bytes = datacard_content.encode('utf-8')
-                client.put_object(
-                    "vault",
-                    datacard_filename,
-                    data=io.BytesIO(dc_bytes),
-                    length=len(dc_bytes),
-                    content_type="text/markdown"
-                )
-                print(f"Datacard successfully uploaded to vault: https://mcp.dev.codata.org/vault/{datacard_filename}")
-        except Exception as e:
-            print(f"Warning: Failed to upload JSON-LD/Datacard to MinIO vault: {e}")
-        
-        md_filename = f"{safe_name}_content.md"
-        title = json_data.get("name", "Dataverse Dataset")
-        desc = json_data.get("description", "No description provided.")
-        if isinstance(desc, list): desc = " ".join(desc)
-        md_content = f"# {title}\n\n**Description:** {desc}\n\n"
-        if "keywords" in json_data:
-            kw = json_data["keywords"]
-            md_content += f"**Keywords:** {', '.join(kw) if isinstance(kw, list) else kw}\n\n"
-            
-        with open(md_filename, "w", encoding="utf-8") as f:
-            f.write(md_content)
-        print(f"Extracted markdown saved to {md_filename}")
+def fix_croissant_dataverse_distributions(data):
+    if not isinstance(data, dict):
+        return data
+    dataset_url = data.get('url', '')
+    dists = data.get('distribution') or data.get('fileObject') or data.get('fileSet') or []
+    if not dists or not isinstance(dists, list):
+        return data
+    has_dataverse_dists = any(isinstance(d, dict) and 'dataverse' in d.get('contentUrl', '') for d in dists)
+    if not ('dataverse' in dataset_url or 'doi.org' in dataset_url or has_dataverse_dists):
+        return data
 
-        try:
-            from langdetect import detect
-            lang = detect(md_content)
-            print(f"Detected language: {lang}")
-        except Exception as e:
-            lang = "unknown"
+    dv_base = None
+    pid = None
+    for d in dists:
+        if isinstance(d, dict) and 'contentUrl' in d and 'dataverse' in d['contentUrl']:
+            p = urllib.parse.urlparse(d['contentUrl'])
+            dv_base = f"{p.scheme}://{p.netloc}"
+            break
+    if not dv_base:
+        return data
 
-        if lang != "en":
-            print(f"DEBUG: Translating desc of length {len(desc)}: {repr(desc[:100])}")
-            translated_desc = translate_to_english(desc)
-            if translated_desc and translated_desc != desc:
-                json_data["description"] = translated_desc
-                
-                # Reconstruct english markdown
-                translated_md = f"# {title}\n\n**Description:** {translated_desc}\n\n"
-                if "keywords" in json_data:
-                    kw = json_data["keywords"]
-                    translated_md += f"**Keywords:** {', '.join(kw) if isinstance(kw, list) else kw}\n\n"
-                
-                md_content = translated_md
-                md_filename = f"{safe_name}_en_content.md"
-                with open(md_filename, "w", encoding='utf-8') as f:
-                    f.write(md_content)
-                print(f"Extracted markdown saved to {md_filename}") # Keep exact format for agent script extraction
-                
-                # Add translationOfWork provenance
-                if "creator" not in json_data:
-                    json_data["creator"] = []
-                elif not isinstance(json_data["creator"], list):
-                    json_data["creator"] = [json_data["creator"]]
-                
-                json_data["creator"].append({
-                    "@type": "SoftwareApplication",
-                    "name": "qwen3.5:27b",
-                    "description": "Translation generated by AI model"
-                })
-                json_data["translationOfWork"] = {
-                    "@id": url
+    if 'persistentId=' in dataset_url:
+        pid = urllib.parse.parse_qs(urllib.parse.urlparse(dataset_url).query).get('persistentId', [None])[0]
+    elif 'doi.org/' in dataset_url:
+        doi = dataset_url.split('doi.org/')[-1]
+        pid = f"doi:{doi}"
+    elif isinstance(data.get('identifier'), str) and 'doi:' in data.get('identifier'):
+        pid = data.get('identifier')
+
+    if not pid:
+        return data
+
+    api_url = f"{dv_base}/api/datasets/:persistentId/?persistentId={urllib.parse.quote(pid, safe='/')}"
+    headers = {'User-Agent': 'SemanticCroissant/1.0'}
+    try:
+        r_api = requests.get(api_url, headers=headers, timeout=10)
+        if r_api.status_code != 200:
+            return data
+        raw_files = r_api.json().get('data', {}).get('latestVersion', {}).get('files', [])
+        api_by_name = {}
+        api_by_id = {}
+        for f in raw_files:
+            df = f.get('dataFile', {})
+            fid = df.get('id')
+            fn = df.get('filename')
+            orig_fn = df.get('originalFileName') or fn
+            lbl = f.get('label') or fn
+            api_by_id[fid] = df
+            if fn: api_by_name[fn] = df
+            if orig_fn: api_by_name[orig_fn] = df
+            if lbl: api_by_name[lbl] = df
+
+        MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "localhost")
+        base_host = os.environ.get("HOST", f"https://{MCP_DOMAIN}")
+        ds_for_export = data.get('url') or data.get('identifier')
+        for d in dists:
+            if not isinstance(d, dict): continue
+            name = d.get('name')
+            md5 = d.get('md5')
+            matched_df = api_by_name.get(name)
+            if not matched_df and md5:
+                for df in api_by_id.values():
+                    if df.get('md5') == md5 or df.get('checksum', {}).get('value') == md5:
+                        matched_df = df
+                        break
+            if matched_df:
+                d['contentUrl'] = f"{dv_base}/api/access/datafile/{matched_df.get('id')}"
+                if matched_df.get('contentType'):
+                    d['encodingFormat'] = matched_df.get('contentType')
+                if matched_df.get('filesize'):
+                    d['contentSize'] = str(matched_df.get('filesize'))
+
+            curl = d.get('contentUrl')
+            if curl:
+                fn = d.get('name') or (d.get('@id') if isinstance(d.get('@id'), str) and not d.get('@id').startswith('http') else 'file')
+                if ds_for_export:
+                    export_url = f"{base_host}/export?ds={urllib.parse.quote(ds_for_export, safe='')}&file={urllib.parse.quote(curl, safe='')}"
+                else:
+                    export_url = f"{base_host}/export?file={urllib.parse.quote(curl, safe='')}"
+                d['subjectOf'] = {
+                    "@type": "Dataset",
+                    "@id": export_url,
+                    "encodingFormat": "application/ld+json",
+                    "conformsTo": "https://ddialliance.org/Specification/DDI-CDI/1.0/"
                 }
-                
-                # Re-save the JSON-LD with the updated provenance and description
-                output = json.dumps(json_data, indent=2)
-                with open(output_filename, "w", encoding='utf-8') as f:
-                    f.write(output)
+    except Exception as e:
+        print(f"Failed to align Dataverse distributions: {e}")
+    return data
 
-        if reingest:
-            print("\n--- Ingesting into QLever ---")
-            try:
-                api_base = os.environ.get("API_BASE", "http://localhost:7013")
-                res_ql = requests.post(f"{api_base}/add_record", json=json_data, timeout=10)
-                res_ql.raise_for_status()
-                print(f"✓ Successfully ingested into QLever! Response: {res_ql.text}")
-            except Exception as e:
-                print(f"✗ Failed to ingest into QLever: {e}")
-                
-        if elastic:
-            index_into_elasticsearch(url, json_data, "", expert)
+
+def generate_markdown_from_jsonld(data):
+    data = fix_croissant_dataverse_distributions(data)
+    md = []
+    name = data.get('name', 'Dataset')
+    md.append(f"# 🥐 {name}\n")
+    url = data.get('url')
+    if url:
+        md.append(f"**[Original URL \u2192]({url})**\n")
+    desc = data.get('description')
+    if desc:
+        md.append(f"> {desc}\n")
+    md.append("---\n")
+    
+    md.append("### Core Metadata\n")
+    md.append("| Field | Value |")
+    md.append("|---|---|")
+    skip_keys = ['@context', '@type', 'name', 'url', 'description', 'distribution', 'recordSet', 'fileObject', 'fileSet', '_source_url', '_markdown_text', '_full_text']
+    for key, value in data.items():
+        if key in skip_keys:
+            continue
+        val_md = ""
+        if isinstance(value, dict):
+            val_md = value.get('name') or value.get('url') or str(value)
+        elif isinstance(value, list):
+            val_md = ", ".join([v.get('name') or v.get('url') or str(v) if isinstance(v, dict) else str(v) for v in value])
+        else:
+            s_val = str(value)
+            val_md = f"[{s_val}]({s_val})" if s_val.startswith('http') else s_val
+        val_md = val_md.replace('|', '\\|').replace('\n', ' ')
+        md.append(f"| **{key}** | {val_md} |")
+    md.append("\n")
+    
+    dists = data.get('distribution') or data.get('fileObject') or data.get('fileSet')
+    if dists and isinstance(dists, list) and len(dists) > 0:
+        md.append("### Files & Distributions\n")
+        md.append("| File | Title | Format | Size | Download | CDIF | Tools |")
+        md.append("|---|---|---|---|:---:|:---:|:---:|")
+        for d in dists:
+            d_name = d.get('name') or d.get('@id') or 'File'
+            d_title = d.get('title') or d.get('description') or d.get('headline') or d.get('alternateName') or '-'
+            fmt = d.get('encodingFormat') or '-'
+            size = d.get('contentSize') or '-'
+            curl = d.get('contentUrl')
+            dl_str = f"[📥]({curl})" if curl else "-"
+            cdif_str = "-"
+            tools_str = "[⚙️](#tools)" if curl else "-"
+            if curl:
+                ds_for_export = data.get('url') or data.get('identifier')
+                if ds_for_export:
+                    import urllib.parse
+                    export_url = f"/export?ds={urllib.parse.quote(ds_for_export, safe='')}&file={urllib.parse.quote(curl, safe='')}"
+                    cdif_str = f"[⚡]({export_url})"
+            clean_name = str(d_name).replace('|', '\\|')
+            clean_title = str(d_title).replace('|', '\\|').replace('\n', ' ')
+            clean_fmt = str(fmt).replace('|', '\\|')
+            clean_size = str(size).replace('|', '\\|')
+            md.append(f"| **{clean_name}** | {clean_title} | {clean_fmt} | {clean_size} | {dl_str} | {cdif_str} | {tools_str} |")
+        md.append("\n")
+        
+    record_sets = data.get('recordSet')
+    if record_sets and isinstance(record_sets, list):
+        md.append("### Record Sets (Schema)\n")
+        ds_for_export = data.get('url') or data.get('identifier')
+        for rs in record_sets:
+            rs_name = rs.get('name', 'Record Set')
+            md.append(f"#### {rs_name}")
             
-        if upload_gdrive and user_email:
-            print(f"Skipping Google Drive upload for direct Dataverse export because no Markdown content was generated (only Croissant metadata is available).")
-        return
+            # Determine source file and CDIF link
+            file_id = None
+            rs_src = rs.get('data') or rs.get('source') or {}
+            if isinstance(rs_src, dict):
+                file_id = rs_src.get('@id') or (rs_src.get('fileObject', {}).get('@id') if isinstance(rs_src.get('fileObject'), dict) else rs_src.get('fileObject'))
+            elif isinstance(rs_src, str):
+                file_id = rs_src
+                
+            if not file_id and rs.get('field') and isinstance(rs.get('field'), list):
+                for f in rs.get('field'):
+                    f_src = f.get('source')
+                    if isinstance(f_src, dict):
+                        fo = f_src.get('fileObject')
+                        if isinstance(fo, dict) and fo.get('@id'):
+                            file_id = fo.get('@id')
+                            break
+                        elif isinstance(fo, str):
+                            file_id = fo
+                            break
+                        elif f_src.get('@id'):
+                            file_id = f_src.get('@id')
+                            break
+                            
+            matched_dist = None
+            if dists and isinstance(dists, list):
+                for d in dists:
+                    if not isinstance(d, dict): continue
+                    if file_id and (d.get('@id') == file_id or d.get('name') == file_id):
+                        matched_dist = d
+                        break
+                if not matched_dist and file_id:
+                    for d in dists:
+                        if not isinstance(d, dict): continue
+                        d_name = str(d.get('name', ''))
+                        if d_name and (d_name.endswith(str(file_id)) or str(file_id).endswith(d_name)):
+                            matched_dist = d
+                            break
+                if not matched_dist and len(dists) == 1 and isinstance(dists[0], dict):
+                    matched_dist = dists[0]
+                    
+            source_file_name = (matched_dist.get('name') or matched_dist.get('@id')) if matched_dist else file_id
+            cdif_export_url = None
+            if matched_dist and matched_dist.get('contentUrl'):
+                curl = matched_dist.get('contentUrl')
+                import urllib.parse
+                if ds_for_export:
+                    cdif_export_url = f"/export?ds={urllib.parse.quote(ds_for_export, safe='')}&file={urllib.parse.quote(curl, safe='')}"
+                else:
+                    cdif_export_url = f"/export?file={urllib.parse.quote(curl, safe='')}"
+            elif matched_dist and isinstance(matched_dist.get('subjectOf'), dict):
+                cdif_export_url = matched_dist.get('subjectOf', {}).get('@id')
+                
+            info_line = []
+            if source_file_name:
+                info_line.append(f"**Source File:** `{source_file_name}`")
+            if cdif_export_url:
+                info_line.append(f"**CDIF:** [⚡ Download CDIF]({cdif_export_url})")
+            if info_line:
+                md.append(f"{' &nbsp;|&nbsp; '.join(info_line)}\n")
+
+            rs_desc = rs.get('description')
+            if rs_desc: md.append(f"{rs_desc}\n")
+            fields = rs.get('field')
+            if fields and isinstance(fields, list):
+                md.append("| Field | Type | Description |")
+                md.append("|---|---|---|")
+                for f in fields:
+                    f_name = f.get('name', '')
+                    f_type = f.get('dataType') or f.get('cr:dataType') or ''
+                    f_type = str(f_type).replace('sc:', '')
+                    raw_desc = f.get('description', '')
+                    if not raw_desc or raw_desc.strip().lower() == f_name.strip().lower():
+                        f_desc = '-'
+                    else:
+                        f_desc = raw_desc.replace('|', '\\|').replace('\n', ' ')
+                    md.append(f"| **{f_name}** | `{f_type}` | {f_desc} |")
+            md.append("\n")
+    return "\n".join(md)
+
+
+def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, user_name=None, user_email=None, index=False, elastic=False, expert="/expert/croissant", upload_gdrive=False, upload_gdrive_folder=None, translate=False):
+    url = resolve_direct_url(url)
+    direct_jsonld = check_dataverse_direct_export(url)
+    if not direct_jsonld:
+        direct_jsonld = check_dspace_direct_export(url)
+        
+    markdown_data = None
+    dataverse_original_jsonld = None
+    extracted_meta = {}
+
+    if direct_jsonld:
+        print("✓ Successfully retrieved Croissant JSON-LD directly from API!")
+        direct_jsonld = fix_croissant_dataverse_distributions(direct_jsonld)
+        markdown_data = generate_markdown_from_jsonld(direct_jsonld)
+        dataverse_original_jsonld = direct_jsonld
+        print("Generated Markdown representation of the JSON-LD.")
 
     page_meta = None
     sibling_pages = []
     
-    result = fetch_url_markdown(url, traverse)
-    if len(result) == 4:
-        markdown_data, extracted_meta, sibling_pages, page_meta = result
-    elif len(result) == 3:
-        markdown_data, extracted_meta, sibling_pages = result
-    else:
-        markdown_data, extracted_meta = result
-
+    if not markdown_data:
+        result = fetch_url_markdown(url, traverse)
+        if len(result) == 4:
+            markdown_data, extracted_meta, sibling_pages, page_meta = result
+        elif len(result) == 3:
+            markdown_data, extracted_meta, sibling_pages = result
+        else:
+            markdown_data, extracted_meta = result
 
     if not markdown_data:
         print("Error: Could not extract markdown.")
         return
 
     # Generate a safe filename based on the URL
-    parsed_url = urllib.parse.urlparse(url)
-    safe_name = parsed_url.netloc + parsed_url.path
-    import re
-    safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', safe_name)
-    if not safe_name:
-        safe_name = "url_output"
+    import hashlib, base64
+    def compute_unf6(content):
+        words = sorted(content.split())
+        c = b""
+        for w in words:
+            c += w.encode("utf-8") + b"\n\x00"
+        d = hashlib.sha256(c).digest()[:16]
+        raw_hash = base64.b64encode(d).decode("ascii")
+        return raw_hash.replace("=", "").replace("+", "").replace("/", "")
+        
+    safe_name = compute_unf6(markdown_data)
         
     os.makedirs(os.path.join("data", "ca4eosc"), exist_ok=True)
     safe_name = os.path.join("data", "ca4eosc", safe_name)
 
-    md_filename = f"{safe_name}_content.md"
-    croissant_filename = os.path.basename(f"{safe_name}_croissant.jsonld")
-    header = f"# Document: {url}\n\n* **Croissant Metadata**: [{croissant_filename}](./{croissant_filename})\n\n"
+    md_filename = f"{safe_name}.md"
+    croissant_filename = os.path.basename(f"{safe_name}.jsonld")
+    import requests
+    citation_text = url
+    if dataverse_original_jsonld:
+        try:
+            creators = dataverse_original_jsonld.get('creator', [])
+            if isinstance(creators, dict): creators = [creators]
+            author_str = ", ".join([c.get('name', '') for c in creators if isinstance(c, dict)])
+            
+            year = str(dataverse_original_jsonld.get('datePublished', ''))[:4]
+            title = dataverse_original_jsonld.get('name', '')
+            dataset_url = dataverse_original_jsonld.get('url', url)
+            
+            publisher = dataverse_original_jsonld.get('publisher', {})
+            if isinstance(publisher, dict):
+                pub_name = publisher.get('name', '')
+            else:
+                pub_name = str(publisher)
+                
+            version = dataverse_original_jsonld.get('version', '')
+            version_str = f"V{version}" if str(version).replace('.','').isdigit() else str(version)
+            
+            citation_text = f'{author_str}, {year}, "{title}", {dataset_url}, {pub_name}, {version_str}'
+            
+            # Try to fetch UNF if persistentId is in URL
+            if "persistentId=" in url:
+                pid = url.split("persistentId=")[1].split("&")[0]
+                base_url = url.split("/dataset.xhtml")[0]
+                api_url = f"{base_url}/api/datasets/:persistentId?persistentId={pid}"
+                res = requests.get(api_url, headers={'User-Agent': 'SemanticCroissant/1.0'})
+                if res.status_code == 200:
+                    data = res.json().get('data', {})
+                    unf = data.get('latestVersion', {}).get('UNF', '')
+                    if unf:
+                        citation_text += f", {unf} [fileUNF]"
+        except Exception:
+            pass
+
+    header = f"# Citation: {citation_text}\n\n* **Croissant Metadata**: [{croissant_filename}](./{croissant_filename})\n\n"
     
     # Don't duplicate if already present
-    if not markdown_data.startswith(f"# Document: {url}"):
+    if not markdown_data.startswith(f"# Citation: {citation_text}"):
         markdown_data = header + markdown_data
         
     with open(md_filename, "w", encoding='utf-8') as f:
@@ -974,7 +1244,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                 length=len(md_bytes),
                 content_type="text/markdown"
             )
-            print(f"Extracted markdown successfully uploaded to vault: https://mcp.dev.codata.org/vault/{vault_filename}")
+            print(f"Extracted markdown successfully uploaded to vault: https://{MCP_DOMAIN}/vault/{vault_filename}")
     except Exception as e:
         print(f"Warning: Failed to upload markdown to MinIO vault: {e}")
 
@@ -986,7 +1256,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
         print(f"Language detection failed: {e}")
 
     original_md_filename = md_filename
-    if lang != "en":
+    if translate and lang != "en":
         translated_md = translate_to_english(markdown_data)
         if translated_md and translated_md != markdown_data:
             markdown_data = translated_md
@@ -1005,7 +1275,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                     length=len(en_bytes),
                     content_type="text/markdown"
                 )
-                print(f"Translated markdown successfully uploaded to vault: https://mcp.dev.codata.org/vault/{vault_en_filename}")
+                print(f"Translated markdown successfully uploaded to vault: https://{MCP_DOMAIN}/vault/{vault_en_filename}")
             except Exception as e:
                 print(f"Warning: Failed to upload translated markdown to MinIO vault: {e}")
 
@@ -1060,7 +1330,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                 "options": { "temperature": 0.5, "num_predict": 256 }
             }
             try:
-                res_chunk = requests.post(f"{OLLAMA_HOST}/api/generate", json=payload_chunk, timeout=600)
+                res_chunk = requests.post(f"{OLLAMA_HOST}/api/generate", json=payload_chunk, headers=OLLAMA_HEADERS, timeout=600)
                 res_chunk.raise_for_status()
                 response_text = res_chunk.json().get('response', '').strip()
                 
@@ -1146,76 +1416,81 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
             }
             try:
                 print(f"Sending chunk {i} to Ollama for dry-run ingestion...")
-                res_ingest = requests.post(f"{OLLAMA_HOST}/api/generate", json=ingest_payload, timeout=120)
+                res_ingest = requests.post(f"{OLLAMA_HOST}/api/generate", json=ingest_payload, headers=OLLAMA_HEADERS, timeout=120)
                 res_ingest.raise_for_status()
                 print(f"Ollama ingestion response: {res_ingest.json().get('response', '').strip()}")
             except Exception as e:
                 print(f"Failed to send chunk {i} to Ollama: {e}")
 
-    print(f"\n--- Processing {url} using {MODEL_NAME} ---")
-    
-    # Truncate to first 5,000 characters to prevent context window overflow which causes hallucinated JSON
-    llm_context_data = markdown_data
-    if len(llm_context_data) > 5000:
-        print(f"Warning: Markdown is too large ({len(llm_context_data)} chars). Truncating to 5,000 chars.")
-        llm_context_data = llm_context_data[:5000]
+    if dataverse_original_jsonld:
+        print(f"\n--- Skipping LLM extraction; using direct Dataverse JSON-LD for {url} ---")
+    else:
+        print(f"\n--- Processing {url} using {MODEL_NAME} ---")
+        
+        # Truncate to first 5,000 characters to prevent context window overflow which causes hallucinated JSON
+        llm_context_data = markdown_data
+        if len(llm_context_data) > 5000:
+            print(f"Warning: Markdown is too large ({len(llm_context_data)} chars). Truncating to 5,000 chars.")
+            llm_context_data = llm_context_data[:5000]
 
-    prompt = f"Create Croissant JSON-LD metadata for a machine learning model or dataset. The source URL is {url}."
-    if lang != 'en':
-        prompt += f" The source documentation is in language code '{lang}'. Please do a precise ONE-to-ONE translation of the relevant metadata to English and output the Croissant JSON-LD entirely in English."
-    prompt += f" Here is the documentation and description extracted from its official page:\n\n{llm_context_data}\n\n"
-    prompt += "Extract relevant information such as the description, authors, license, keywords, tags, or any dataset dependencies into the Croissant metadata if available. Map keywords/tags to the standard schema:keywords property, and extract them EXACTLY as they appear in the text (do not change casing or invent new tags). Ensure 'keywords' is formatted as a JSON array of strings, not a single comma-separated string. IMPORTANT: For any fields or data that do not have a standard mapping in Croissant, include them in the JSON-LD under a custom field called 'unmappedFields' as a list of key-value pairs.\n"
-    prompt += "CRITICAL: You MUST use the exact following JSON-LD structure and include ALL of these top-level fields: '@context', '@type', 'name', 'description', 'url', 'license', 'keywords', 'unmappedFields', 'contentUrl', 'isBasedOn', 'isPartOf', 'version', 'creator'.\n"
-    prompt += 'Example structure:\n{\n  "@context": {\n    "@language": "en",\n    "@vocab": "https://schema.org/",\n    "cr": "http://mlcommons.org/croissant/",\n    "dct": "http://purl.org/dc/terms/",\n    "sc": "https://schema.org/",\n    "conformsTo": "dct:conformsTo",\n    "distribution": {"@id": "cr:distribution"},\n    "bs4ExtractionPattern": {"@id": "sc:processingRequirement", "@type": "@json"},\n    "unf": "https://guides.dataverse.org/en/6.9/developers/unf/unf-v6.html",\n    "odrl": "http://www.w3.org/ns/odrl/2/",\n    "cdif": "https://cdif.org/1.1/",\n    "did": "https://www.w3.org/ns/did/v1"\n  },\n  "@type": "sc:SoftwareApplication",\n  "name": "...",\n  "description": "...",\n  "url": "...",\n  "license": "...",\n  "keywords": [],\n  "unmappedFields": [],\n  "contentUrl": "...",\n  "isBasedOn": [],\n  "isPartOf": [{"@type": "Collection", "name": "/expert/croissant"}],\n  "version": "1.0",\n  "creator": {"@type": "Person", "name": "...", "email": "..."}\n}\n\n'
-    prompt += "CRITICAL: Do NOT invent, hallucinate, or generate generic information. You MUST extract the name, description, and details directly from the provided text above.\n\nOutput ONLY a valid JSON object."
-    
+        prompt = f"Create Croissant JSON-LD metadata for a machine learning model or dataset. The source URL is {url}."
+        if lang != 'en':
+            prompt += f" The source documentation is in language code '{lang}'. Please do a precise ONE-to-ONE translation of the relevant metadata to English and output the Croissant JSON-LD entirely in English."
+        prompt += f" Here is the documentation and description extracted from its official page:\n\n{llm_context_data}\n\n"
+        prompt += "Extract relevant information such as the description, authors, license, keywords, tags, or any dataset dependencies into the Croissant metadata if available. Map keywords/tags to the standard schema:keywords property, and extract them EXACTLY as they appear in the text (do not change casing or invent new tags). Ensure 'keywords' is formatted as a JSON array of strings, not a single comma-separated string. IMPORTANT: For any fields or data that do not have a standard mapping in Croissant, include them in the JSON-LD under a custom field called 'unmappedFields' as a list of key-value pairs.\n"
+        prompt += 'Example structure:\n{\n  "@context": {\n    "@vocab": "http://schema.org/",\n    "sc": "http://schema.org/",\n    "schema": "http://schema.org/",\n    "cr": "http://mlcommons.org/croissant/",\n    "dct": "http://purl.org/dc/terms/",\n    "conformsTo": "dct:conformsTo",\n    "distribution": {"@id": "cr:distribution"},\n    "bs4ExtractionPattern": {"@id": "sc:processingRequirement", "@type": "@json"},\n    "unf": "https://guides.dataverse.org/en/6.9/developers/unf/unf-v6.html",\n    "odrl": "http://www.w3.org/ns/odrl/2/",\n    "cdif": "https://cdif.org/1.1/",\n    "did": "https://www.w3.org/ns/did/v1",\n    "url": {"@type": "http://www.w3.org/2001/XMLSchema#string"}\n  },\n  "@type": "sc:SoftwareApplication",\n  "name": "...",\n  "description": "...",\n  "url": "...",\n  "license": "...",\n  "keywords": [],\n  "unmappedFields": [],\n  "contentUrl": "...",\n  "isBasedOn": [],\n  "isPartOf": [{"@type": "Collection", "name": "/expert/croissant"}],\n  "version": "1.0",\n  "creator": {"@type": "Person", "name": "...", "email": "..."}\n}\n\n'
+        prompt += "CRITICAL: Do NOT invent, hallucinate, or generate generic information. You MUST extract the name, description, and details directly from the provided text above.\n\nOutput ONLY a valid JSON object."
+        
     start_time = time.time()
     try:
-        MAX_RETRIES = 3
+        MAX_RETRIES = 1 if dataverse_original_jsonld else 3
         for attempt in range(1, MAX_RETRIES + 1):
-            # Increase temperature on retries to avoid repeating the exact same JSON syntax errors
-            current_temperature = 0.1 + ((attempt - 1) * 0.2)
-            # Inject attempt number into prompt to bypass Ollama cache
-            current_prompt = prompt
-            if attempt > 1:
-                current_prompt += f"\n\n[Attempt {attempt} - Previous attempt failed due to invalid JSON. Please ensure valid JSON formatting, avoid truncation, and do not repeat previous errors.]"
-                
-            payload = {
-                "model": MODEL_NAME,
-                "prompt": current_prompt,
-                "stream": False,
-                "options": {
-                    "temperature": current_temperature,
-                    "repeat_penalty": 1.1,
-                    "num_predict": 8192,
-                    "num_ctx": 40960
+            if dataverse_original_jsonld:
+                output = json.dumps(dataverse_original_jsonld)
+            else:
+                # Increase temperature on retries to avoid repeating the exact same JSON syntax errors
+                current_temperature = 0.1 + ((attempt - 1) * 0.2)
+                # Inject attempt number into prompt to bypass Ollama cache
+                current_prompt = prompt
+                if attempt > 1:
+                    current_prompt += f"\n\n[Attempt {attempt} - Previous attempt failed due to invalid JSON. Please ensure valid JSON formatting, avoid truncation, and do not repeat previous errors.]"
+                    
+                payload = {
+                    "model": MODEL_NAME,
+                    "prompt": current_prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": current_temperature,
+                        "repeat_penalty": 1.1,
+                        "num_predict": 8192,
+                        "num_ctx": 8192
+                    }
                 }
-            }
-            
-            response = requests.post(f"{OLLAMA_HOST}/api/generate", json=payload, timeout=600)
-            response.raise_for_status()
-            end_time = time.time()
-            
-            data = response.json()
-            print(f"Status: Success (Attempt {attempt})")
-            print(f"Total Request Time: {end_time - start_time:.2f} s")
-            print(f"Prompt Eval Tokens: {data.get('prompt_eval_count')} in {data.get('prompt_eval_duration', 0) / 1e9:.2f} s")
-            print(f"Tokens Generated: {data.get('eval_count')} in {data.get('eval_duration', 0) / 1e9:.2f} s")
-            if data.get('eval_duration', 0) > 0:
-                speed = data.get('eval_count', 0) / (data.get('eval_duration', 0) / 1e9)
-                print(f"Generation Speed: {speed:.2f} tokens/sec")
-            print("-" * 40)
-            
-            output = data.get('response', '')
-            
-            # Strip markdown formatting
-            if output.startswith("```json"):
-                output = output[7:]
-            if output.startswith("```"):
-                output = output[3:]
-            if output.endswith("```"):
-                output = output[:-3]
-            output = output.strip()
+                
+                response = requests.post(f"{OLLAMA_HOST}/api/generate", json=payload, headers=OLLAMA_HEADERS, timeout=600)
+                response.raise_for_status()
+                end_time = time.time()
+                
+                data = response.json()
+                print(f"Status: Success (Attempt {attempt})")
+                print(f"Total Request Time: {end_time - start_time:.2f} s")
+                print(f"Prompt Eval Tokens: {data.get('prompt_eval_count')} in {data.get('prompt_eval_duration', 0) / 1e9:.2f} s")
+                print(f"Tokens Generated: {data.get('eval_count')} in {data.get('eval_duration', 0) / 1e9:.2f} s")
+                if data.get('eval_duration', 0) > 0:
+                    speed = data.get('eval_count', 0) / (data.get('eval_duration', 0) / 1e9)
+                    print(f"Generation Speed: {speed:.2f} tokens/sec")
+                print("-" * 40)
+                
+                output = data.get('response', '')
+                
+                # Strip markdown formatting
+                if output.startswith("```json"):
+                    output = output[7:]
+                if output.startswith("```"):
+                    output = output[3:]
+                if output.endswith("```"):
+                    output = output[:-3]
+                output = output.strip()
             
             # Validation
             if attempt > 1:
@@ -1230,10 +1505,12 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                 output = re.sub(r',\s*\]', ']', output)
                 
                 json_data = json.loads(output)
+                if isinstance(json_data, list):
+                    json_data = json_data[0] if json_data else {}
                 print("✓ JSON is well-formed")
                 
                 # Inject link to the generated markdown file(s)
-                original_vault_url = f"https://mcp.dev.codata.org/vault/{os.path.basename(original_md_filename)}"
+                original_vault_url = f"https://{MCP_DOMAIN}/vault/{os.path.basename(original_md_filename)}"
                 doc_links = [{
                     "@type": "CreativeWork",
                     "name": "Scraped Markdown Content",
@@ -1242,7 +1519,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                 }]
                 
                 if original_md_filename != md_filename:
-                    translated_vault_url = f"https://mcp.dev.codata.org/vault/{os.path.basename(md_filename)}"
+                    translated_vault_url = f"https://{MCP_DOMAIN}/vault/{os.path.basename(md_filename)}"
                     doc_links.append({
                         "@type": "CreativeWork",
                         "name": "Translated Markdown Content (English)",
@@ -1250,7 +1527,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                         "encodingFormat": "text/markdown",
                         "creator": {
                             "@type": "SoftwareApplication",
-                            "name": os.environ.get("MODEL", "gemma4:e4b"),
+                            "name": os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:31b-cloud"),
                             "description": "Translation generated by AI model"
                         },
                         "translationOfWork": {
@@ -1281,7 +1558,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                         doc_links.append({
                             "@type": "CreativeWork",
                             "name": sib['title'],
-                            "contentUrl": f"https://mcp.dev.codata.org/vault/{os.path.basename(sib_md_filename)}",
+                            "contentUrl": f"https://{MCP_DOMAIN}/vault/{os.path.basename(sib_md_filename)}",
                             "encodingFormat": "text/markdown"
                         })
                 
@@ -1303,6 +1580,19 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                         json_data["isBasedOn"] = [json_data["isBasedOn"]] + doc_links
                 else:
                     json_data["isBasedOn"] = doc_links
+                    
+                # Always ensure canonical direct URL
+                canonical_direct = (page_meta or {}).get("canonicalUrl") or url
+                json_data["url"] = canonical_direct
+                json_data["contentUrl"] = canonical_direct
+                    
+                if dataverse_original_jsonld:
+                    json_data["isBasedOn"].append({
+                        "@type": "sc:Dataset",
+                        "name": dataverse_original_jsonld.get("name", "Original Dataverse Dataset"),
+                        "url": url,
+                        "description": "The original source JSON-LD metadata fetched from Dataverse."
+                    })
                     
                 if expert:
                     if "isPartOf" not in json_data:
@@ -1362,25 +1652,27 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                     }]
                 }
                 
-                # Use full Croissant context
-                existing_ctx = json_data.pop("@context", None)
-                if not existing_ctx or existing_ctx == "https://schema.org":
-                    ordered_data["@context"] = {
-                        "@vocab": "https://schema.org/",
-                        "cr": "http://mlcommons.org/croissant/",
-                        "odrl": "http://www.w3.org/ns/odrl/2/",
-                        "dc": "http://purl.org/dc/terms/"
-                    }
-                else:
-                    if isinstance(existing_ctx, dict):
-                        existing_ctx["odrl"] = "http://www.w3.org/ns/odrl/2/"
-                        existing_ctx["dc"] = "http://purl.org/dc/terms/"
-                    ordered_data["@context"] = existing_ctx
-                    
+                # Force a standard robust Croissant context instead of trusting the LLM
+                json_data.pop("@context", None)
+                ordered_data["@context"] = {
+                    "@vocab": "http://schema.org/",
+                    "sc": "http://schema.org/",
+                    "schema": "http://schema.org/",
+                    "cr": "http://mlcommons.org/croissant/",
+                    "odrl": "http://www.w3.org/ns/odrl/2/",
+                    "dc": "http://purl.org/dc/terms/",
+                    "dct": "http://purl.org/dc/terms/",
+                    "conformsTo": "dct:conformsTo",
+                    "distribution": {"@id": "cr:distribution"},
+                    "unf": "https://guides.dataverse.org/en/6.9/developers/unf/unf-v6.html",
+                    "cdif": "https://cdif.org/1.1/",
+                    "did": "https://www.w3.org/ns/did/v1",
+                    "url": {"@type": "http://www.w3.org/2001/XMLSchema#string"}
+                }
                 ordered_data["@type"] = json_data.pop("@type", "Dataset")
+                json_data.pop("@context", None)
                 ordered_data.update(json_data)
                 json_data = ordered_data
-                
                 # Write to temporary file for rdflib
                 if user_name or user_email:
                     if "creator" in json_data:
@@ -1482,13 +1774,13 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                     length=len(jsonld_bytes),
                     content_type="application/ld+json"
                 )
-                print(f"Croissant JSON-LD successfully uploaded to vault: https://mcp.dev.codata.org/vault/{vault_jsonld_filename}")
+                print(f"Croissant JSON-LD successfully uploaded to vault: https://{MCP_DOMAIN}/vault/{vault_jsonld_filename}")
                 
                 # Generate and upload Datacard
                 datacard_filename = vault_jsonld_filename.replace(".jsonld", "_datacard.md")
                 datacard_content = f"**Original Source:** [View URL]({url})\n\n"
-                datacard_content += f"**Markdown Document:** [View Extracted Markdown](https://ai.mediaquantum.eu/vault/{os.path.basename(md_filename)})\n\n"
-                datacard_content += f"**Metadata:** [View Croissant JSON-LD Data](https://ai.mediaquantum.eu/vault/{vault_jsonld_filename})\n\n"
+                datacard_content += f"**Markdown Document:** [View Extracted Markdown](https://{MCP_DOMAIN}/vault/{os.path.basename(md_filename)})\n\n"
+                datacard_content += f"**Metadata:** [View Croissant JSON-LD Data](https://{MCP_DOMAIN}/vault/{vault_jsonld_filename})\n\n"
                 import hashlib
                 datacard_content += f"---\n**Digital Signature:** `{hashlib.sha256(jsonld_bytes).hexdigest()}`\n"
                 
@@ -1500,7 +1792,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                     length=len(dc_bytes),
                     content_type="text/markdown"
                 )
-                print(f"Datacard successfully uploaded to vault: https://mcp.dev.codata.org/vault/{datacard_filename}")
+                print(f"Datacard successfully uploaded to vault: https://{MCP_DOMAIN}/vault/{datacard_filename}")
         except Exception as e:
             print(f"Warning: Failed to upload JSON-LD/Datacard to MinIO vault: {e}")
         
@@ -1515,7 +1807,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
             }
             try:
                 print("Sending indexing request with Croissant provenance...")
-                res_index = requests.post(f"{OLLAMA_HOST}/api/generate", json=index_payload, timeout=600)
+                res_index = requests.post(f"{OLLAMA_HOST}/api/generate", json=index_payload, headers=OLLAMA_HEADERS, timeout=600)
                 res_index.raise_for_status()
                 print("✓ Successfully indexed document with provenance data!")
             except Exception as e:
@@ -1578,7 +1870,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
     except Exception as e:
         print(f"Failed to process {url}: {e}")
 
-def process_spreadsheet(url, is_slice=False, traverse=False, reingest=False, user_name=None, user_email=None, index=False, elastic=False, expert="/expert/croissant", upload_gdrive=False, upload_gdrive_folder=None):
+def process_spreadsheet(url, is_slice=False, traverse=False, reingest=False, user_name=None, user_email=None, index=False, elastic=False, expert="/expert/croissant", upload_gdrive=False, upload_gdrive_folder=None, translate=False):
     print(f"Detected Google Spreadsheet URL: {url}")
     # Convert edit url to export url
     if "/edit" in url:
@@ -1632,7 +1924,7 @@ def process_spreadsheet(url, is_slice=False, traverse=False, reingest=False, use
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(convert_to_croissant, target_url, is_slice, traverse, reingest, user_name, user_email, index, elastic, expert, upload_gdrive, upload_gdrive_folder): target_url
+            executor.submit(convert_to_croissant, target_url, is_slice, traverse, reingest, user_name, user_email, index, elastic, expert, upload_gdrive, upload_gdrive_folder, translate): target_url
             for target_url in urls_to_process
         }
         
@@ -1732,6 +2024,7 @@ if __name__ == "__main__":
     parser.add_argument("url", help="The URL to scrape (e.g. https://ollama.com/library/ornith/tags)")
     parser.add_argument("--slice", action="store_true", help="Enable slice mode to split markdown into pieces with LLM summaries")
     parser.add_argument("--traverse", action="store_true", help="Extract and link all URLs on the same level")
+    parser.add_argument("--translate", action="store_true", help="Automatically translate content to English if in another language")
     parser.add_argument("--reingest", action="store_true", help="Automatically ingest the result into QLever database")
     parser.add_argument("--index-ollama", action="store_true", help="Index the result into Ollama (provenance indexing). Implied by --reingest")
     parser.add_argument("--index", type=str, help="Index name for Elasticsearch (e.g., expert/dataverse). Overrides --expert.")
@@ -1821,12 +2114,12 @@ if __name__ == "__main__":
         for i, target_url in enumerate(urls_to_process, 1):
             print(f"\n[{i}/{len(urls_to_process)}] Processing file URL: {target_url}")
             try:
-                convert_to_croissant(target_url, args.slice, args.traverse, args.reingest, args.user_name, args.user_email, args.index_ollama, args.elastic, args.expert, args.upload_gdrive, args.upload_gdrive_folder)
+                convert_to_croissant(target_url, args.slice, args.traverse, args.reingest, args.user_name, args.user_email, args.index_ollama, args.elastic, args.expert, getattr(args, "upload_gdrive", False), getattr(args, "upload_gdrive_folder", None), getattr(args, "translate", False))
             except Exception as e:
                 print(f"Failed processing {target_url}: {e}")
 
                 
     elif "docs.google.com/spreadsheets" in args.url:
-        process_spreadsheet(args.url, args.slice, args.traverse, args.reingest, args.user_name, args.user_email, args.index_ollama, args.elastic, args.expert)
+        process_spreadsheet(args.url, args.slice, args.traverse, args.reingest, args.user_name, args.user_email, args.index_ollama, args.elastic, args.expert, getattr(args, "upload_gdrive", False), getattr(args, "upload_gdrive_folder", None), getattr(args, "translate", False))
     else:
-        convert_to_croissant(args.url, args.slice, args.traverse, args.reingest, args.user_name, args.user_email, args.index_ollama, args.elastic, args.expert, getattr(args, "upload_gdrive", False), getattr(args, "upload_gdrive_folder", None))
+        convert_to_croissant(args.url, args.slice, args.traverse, args.reingest, args.user_name, args.user_email, args.index_ollama, args.elastic, args.expert, getattr(args, "upload_gdrive", False), getattr(args, "upload_gdrive_folder", None), getattr(args, "translate", False))

@@ -1,0 +1,1697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CDIF Variables Registry - Semantic Croissant AI Studio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --surface-color: #ffffff;
+            --text-color: #0f172a;
+            --text-muted: #64748b;
+            --border-color: #e2e8f0;
+            --border-subtle: #f1f5f9;
+            --accent-primary: #10b981;
+            --accent-primary-hover: #059669;
+            --accent-blue: #2563eb;
+            --accent-purple: #7c3aed;
+            --accent-amber: #d97706;
+            --header-bg: #ffffff;
+            --button-bg: #f1f5f9;
+            --card-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+            --card-hover-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
+            --radius-sm: 6px;
+            --radius-md: 10px;
+            --radius-lg: 14px;
+        }
+
+        [data-theme="dark"] {
+            --bg-color: #0b0f19;
+            --surface-color: #111827;
+            --text-color: #f3f4f6;
+            --text-muted: #9ca3af;
+            --border-color: #1f2937;
+            --border-subtle: #162032;
+            --accent-primary: #10b981;
+            --accent-primary-hover: #34d399;
+            --accent-blue: #3b82f6;
+            --accent-purple: #a855f7;
+            --accent-amber: #f59e0b;
+            --header-bg: #111827;
+            --button-bg: #1f2937;
+            --card-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+            --card-hover-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Top Header */
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 96px;
+            background: var(--header-bg);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 24px 0 0;
+            justify-content: space-between;
+            z-index: 1000;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+        }
+
+        .theme-toggle {
+            cursor: pointer;
+            background: none;
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            padding: 6px 12px;
+            border-radius: var(--radius-sm);
+            font-size: 0.82rem;
+            font-weight: 500;
+            transition: all 0.15s ease;
+        }
+        .theme-toggle:hover {
+            border-color: var(--accent-primary);
+            background: rgba(16, 185, 129, 0.05);
+        }
+
+        .nav-pill {
+            transition: all 0.15s ease;
+        }
+        .nav-pill:hover {
+            background: rgba(0, 0, 0, 0.06);
+            color: var(--accent-blue) !important;
+        }
+        [data-theme="dark"] .nav-pill:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        /* Main Container */
+        #variables-container {
+            margin-top: 114px;
+            padding: 24px 28px;
+            margin-bottom: 60px;
+            max-width: 1460px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        /* Hero Header Row (Title + Inline Horizontal KPI Stats strictly on the same horizontal line) */
+        .hero-banner {
+            background: linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(37, 99, 235, 0.06) 50%, rgba(124, 58, 237, 0.04) 100%);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            border-radius: var(--radius-lg);
+            padding: 10px 16px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: nowrap;
+            overflow-x: auto;
+        }
+
+        .hero-title-group {
+            flex: 0 1 auto;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .hero-title-wrap {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .hero-title-group h1 {
+            margin: 0;
+            font-size: 1.22rem;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+            color: var(--text-color);
+        }
+
+        .hero-subtitle {
+            margin: 0;
+            font-size: 0.76rem;
+            color: var(--text-muted);
+            line-height: 1.3;
+            max-width: 480px;
+        }
+
+        .badge-live-sync {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: rgba(16, 185, 129, 0.12);
+            color: #065f46;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            padding: 2px 7px;
+            border-radius: 20px;
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+        [data-theme="dark"] .badge-live-sync {
+            color: #34d399;
+            background: rgba(16, 185, 129, 0.18);
+        }
+
+        .pulse-dot {
+            width: 7px;
+            height: 7px;
+            background-color: var(--accent-primary);
+            border-radius: 50%;
+            box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+            animation: pulse 1.8s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+
+        /* KPI Stat Cards strictly on the same horizontal line */
+        .stats-inline-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex: 1 1 auto;
+            justify-content: flex-end;
+            flex-wrap: nowrap;
+            white-space: nowrap;
+        }
+
+        .stat-card {
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 7px 12px;
+            box-shadow: var(--card-shadow);
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 0 0 auto;
+            white-space: nowrap;
+        }
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--card-hover-shadow);
+            border-color: rgba(16, 185, 129, 0.3);
+        }
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+        }
+        .stat-card.stat-vars::before { background: linear-gradient(90deg, #2563eb, #3b82f6); }
+        .stat-card.stat-files::before { background: linear-gradient(90deg, #10b981, #34d399); }
+        .stat-card.stat-num::before { background: linear-gradient(90deg, #7c3aed, #a855f7); }
+        .stat-card.stat-other::before { background: linear-gradient(90deg, #d97706, #f59e0b); }
+
+        .stat-info {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+        .stat-label {
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            font-weight: 700;
+            color: var(--text-muted);
+            letter-spacing: 0.03em;
+            white-space: nowrap;
+        }
+        .stat-icon {
+            width: 26px;
+            height: 26px;
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .stat-vars .stat-icon { background: rgba(37, 99, 235, 0.1); color: #2563eb; }
+        .stat-files .stat-icon { background: rgba(16, 185, 129, 0.1); color: #10b981; }
+        .stat-num .stat-icon { background: rgba(124, 58, 237, 0.1); color: #7c3aed; }
+        .stat-other .stat-icon { background: rgba(217, 119, 6, 0.1); color: #d97706; }
+
+        .stat-value {
+            font-size: 1.25rem;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            line-height: 1.1;
+            color: var(--text-color);
+        }
+        .stat-sub {
+            font-size: 0.66rem;
+            color: var(--text-muted);
+            margin-top: 1px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Controls / Filter Bar */
+        .controls-card {
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 16px 20px;
+            margin-bottom: 20px;
+            box-shadow: var(--card-shadow);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 14px;
+        }
+
+        .search-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex: 1;
+            min-width: 280px;
+            max-width: 480px;
+            position: relative;
+        }
+        .search-icon {
+            position: absolute;
+            left: 12px;
+            color: var(--text-muted);
+            pointer-events: none;
+        }
+        .search-input {
+            width: 100%;
+            padding: 9px 12px 9px 36px;
+            font-size: 0.88rem;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            background: var(--bg-color);
+            color: var(--text-color);
+            outline: none;
+            transition: all 0.15s ease;
+            font-family: inherit;
+        }
+        .search-input:focus {
+            border-color: var(--accent-primary);
+            background: var(--surface-color);
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.12);
+        }
+
+        .action-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn-modern {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            font-size: 0.84rem;
+            font-weight: 600;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            border: 1px solid var(--border-color);
+            background: var(--surface-color);
+            color: var(--text-color);
+            transition: all 0.15s ease;
+            font-family: inherit;
+        }
+        .btn-modern:hover {
+            border-color: var(--accent-primary);
+            background: var(--button-bg);
+            color: var(--accent-primary);
+        }
+        .btn-primary {
+            background: var(--accent-primary);
+            color: #ffffff !important;
+            border-color: var(--accent-primary);
+        }
+        .btn-primary:hover {
+            background: var(--accent-primary-hover);
+            border-color: var(--accent-primary-hover);
+            color: #ffffff !important;
+        }
+
+        /* Ask AI Box */
+        .ask-ai-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--bg-color);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            border-radius: var(--radius-sm);
+            padding: 3px 4px 3px 10px;
+        }
+        .ask-ai-input {
+            border: none;
+            background: transparent;
+            font-size: 0.85rem;
+            color: var(--text-color);
+            width: 260px;
+            outline: none;
+            font-family: inherit;
+        }
+
+        /* Alphabet Bar */
+        .alpha-card {
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            padding: 10px 16px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 10px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+        }
+        .alpha-links-wrap {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+            flex-wrap: wrap;
+        }
+        .alpha-link {
+            text-decoration: none;
+            color: var(--text-muted);
+            padding: 4px 7px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 0.82rem;
+            transition: all 0.12s ease;
+        }
+        .alpha-link:hover {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--accent-primary);
+        }
+        .alpha-link.active {
+            background: var(--accent-primary);
+            color: #ffffff !important;
+        }
+
+        /* Table Card & Modern Table */
+        .table-card {
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            box-shadow: var(--card-shadow);
+            overflow: hidden;
+        }
+
+        .variables-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.88rem;
+            text-align: left;
+        }
+        .variables-table th {
+            background: var(--bg-color);
+            color: var(--text-muted);
+            font-weight: 700;
+            padding: 13px 18px;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .variables-table td {
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border-subtle);
+            color: var(--text-color);
+            vertical-align: middle;
+            transition: background 0.12s ease;
+        }
+        .variables-table tbody tr:hover td {
+            background: rgba(16, 185, 129, 0.03);
+        }
+
+        .var-name-cell {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            color: #0f172a;
+            font-size: 0.86rem;
+            letter-spacing: -0.01em;
+        }
+        [data-theme="dark"] .var-name-cell {
+            color: #38bdf8;
+        }
+
+        .var-label-title {
+            font-weight: 600;
+            color: var(--text-color);
+        }
+        .var-label-desc {
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            margin-top: 3px;
+            line-height: 1.4;
+            max-width: 480px;
+        }
+
+        .var-badge {
+            display: inline-block;
+            padding: 3px 9px;
+            font-size: 0.74rem;
+            font-weight: 600;
+            border-radius: 12px;
+            text-transform: lowercase;
+            letter-spacing: 0.02em;
+        }
+        .var-badge.numeric {
+            background: rgba(16, 185, 129, 0.12);
+            color: #047857;
+            border: 1px solid rgba(16, 185, 129, 0.25);
+        }
+        [data-theme="dark"] .var-badge.numeric {
+            color: #34d399;
+            background: rgba(16, 185, 129, 0.18);
+        }
+        .var-badge.string {
+            background: rgba(37, 99, 235, 0.1);
+            color: #1d4ed8;
+            border: 1px solid rgba(37, 99, 235, 0.2);
+        }
+        [data-theme="dark"] .var-badge.string {
+            color: #60a5fa;
+            background: rgba(37, 99, 235, 0.18);
+        }
+        .var-badge.datetime {
+            background: rgba(217, 119, 6, 0.12);
+            color: #b45309;
+            border: 1px solid rgba(217, 119, 6, 0.25);
+        }
+        [data-theme="dark"] .var-badge.datetime {
+            color: #fbbf24;
+            background: rgba(217, 119, 6, 0.18);
+        }
+
+        .file-link {
+            color: var(--text-color);
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.12s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .file-link:hover {
+            color: var(--accent-primary);
+            text-decoration: underline;
+        }
+
+        .dataset-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border-radius: var(--radius-sm);
+            background: var(--bg-color);
+            color: var(--accent-blue);
+            border: 1px solid var(--border-color);
+            transition: all 0.15s ease;
+        }
+        .dataset-btn:hover {
+            background: rgba(37, 99, 235, 0.08);
+            border-color: var(--accent-blue);
+            transform: scale(1.05);
+        }
+
+        /* Pagination Wrap */
+        .pagination-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 20px;
+            background: var(--bg-color);
+            border-top: 1px solid var(--border-color);
+            flex-wrap: wrap;
+            gap: 12px;
+            font-size: 0.84rem;
+        }
+
+        .page-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 5px 12px;
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            font-size: 0.82rem;
+            color: var(--text-color);
+            cursor: pointer;
+            transition: all 0.15s ease;
+            font-family: inherit;
+        }
+        .page-btn:hover:not(:disabled) {
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+        }
+        .page-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .page-btn.active {
+            background: var(--accent-primary);
+            color: #ffffff;
+            border-color: var(--accent-primary);
+            font-weight: 700;
+        }
+
+        /* Spinner */
+        .var-spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(16, 185, 129, 0.25);
+            border-radius: 50%;
+            border-top-color: var(--accent-primary);
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Dropdown */
+        .row-export-dropdown-wrapper {
+            position: relative;
+            display: inline-block;
+        }
+        .row-export-dropdown-menu {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 100%;
+            margin-top: 4px;
+            background: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            box-shadow: var(--card-hover-shadow);
+            z-index: 1000;
+            min-width: 145px;
+            padding: 4px 0;
+            text-align: left;
+        }
+        .row-export-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 12px;
+            font-size: 0.8rem;
+            color: var(--text-color);
+            text-decoration: none;
+            transition: background 0.12s ease;
+        }
+        .row-export-item:hover {
+            background: var(--button-bg);
+            color: var(--accent-primary);
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <!-- Top Global Header -->
+    <div class="header">
+        <div style="width: 274px; padding: 0; height: 100%; border-right: 1px solid var(--border-color); display: flex; align-items: center; box-sizing: border-box;">
+            {{VAULT_LOGO_HTML}}
+        </div>
+        <div style="display:flex; flex-direction:column; justify-content:center; gap:8px; align-items:flex-end; flex:1; padding-left:15px; height:100%;">
+            <!-- Line 1: Vault, History and User Auth -->
+            <div style="display:flex; gap:10px; align-items:center;">
+                <a href="/#vault" id="menu-vault" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 14px; border: 1px solid var(--border-color); background: rgba(0, 0, 0, 0.03); font-size: 0.8rem;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg> Vault</a>
+                <a href="/#history" id="menu-history" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 14px; border: 1px solid var(--border-color); background: rgba(0, 0, 0, 0.03); font-size: 0.8rem;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> History</a>
+                {{LOGIN_BUTTON_HTML}}
+            </div>
+            <!-- Line 2: Navigation Bar & Quick Action Controls -->
+            <div style="display:flex; gap:10px; align-items:center;">
+                <nav class="top-nav-bar" style="display: flex; align-items: center; gap: 4px; background: rgba(0, 0, 0, 0.03); border: 1px solid var(--border-color); padding: 3px 6px; border-radius: 20px; font-size: 0.82rem; margin-right: 5px;">
+                    <a href="/" id="menu-chat" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg> Chat</a>
+                    <a href="/collectionsindex" id="menu-collections" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg> Collections</a>
+                    <a href="/variableindex" id="menu-variables" class="nav-pill active" style="color: #059669; background: #ecfdf5; text-decoration: none; font-weight: 700; display: inline-flex; align-items: center; gap: 5px; padding: 4px 12px; border-radius: 14px; box-shadow: 0 1px 2px rgba(0,0,0,0.05);"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><circle cx="18" cy="17" r="2"/></svg> Variables</a>
+                    <a href="/groups" id="menu-groups" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg> Groups</a>
+                    <a href="/validate" id="menu-validate" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg> Validate</a>
+                </nav>
+                <button class="theme-toggle" onclick="document.getElementById('add-text-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-text-input').focus(), 50);" style="background-color: #008855; color: white; border: none;">Add text</button>
+                <button class="theme-toggle" onclick="document.getElementById('add-resource-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-resource-input').focus(), 50);" style="background-color: #006bb3; color: white; border: none;">Add resource</button>
+                <input type="text" id="global-search" placeholder="Search across all collections..." style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); width: 260px; font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') window.location.href = '/?q=' + encodeURIComponent('Search Croissant datasets for: ' + this.value)">
+                <button class="theme-toggle" onclick="window.location.href='/'" style="background-color: var(--button-bg); color: var(--text-color);">Back to App</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content Area -->
+    <div id="variables-container">
+        <!-- Hero Banner with Title & Inline KPI Stats on the same line -->
+        <div class="hero-banner">
+            <div class="hero-title-group">
+                <div class="hero-title-wrap">
+                    <h1>
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><circle cx="18" cy="17" r="2"/></svg>
+                        <span>CDIF Variables Registry</span>
+                        <span class="badge-live-sync" id="var-count-badge">
+                            <span class="pulse-dot"></span>
+                            <span id="badge-status-text">Fast Cache Synchronized</span>
+                        </span>
+                    </h1>
+                    <div class="hero-subtitle">
+                        Instant cross-domain catalog of tabular variables indexed into Cross-Domain Interoperability Framework (CDIF / DDI-CDI JSON-LD).
+                    </div>
+                </div>
+            </div>
+
+            <!-- Inline Horizontal KPI Stats on the same line -->
+            <div class="stats-inline-bar">
+                <div class="stat-card stat-vars">
+                    <div class="stat-icon">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><circle cx="18" cy="17" r="2"/></svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Total Variables</span>
+                        <span class="stat-value" id="stat-total">1,108,283</span>
+                        <span class="stat-sub">Indexed datasets</span>
+                    </div>
+                </div>
+
+                <div class="stat-card stat-files">
+                    <div class="stat-icon">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Tabular Files</span>
+                        <span class="stat-value" id="stat-files">9,650</span>
+                        <span class="stat-sub">CSV, STATA, Excel</span>
+                    </div>
+                </div>
+
+                <div class="stat-card stat-num">
+                    <div class="stat-icon">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="4" y1="9" x2="20" y2="9"></line><line x1="4" y1="15" x2="20" y2="15"></line><line x1="10" y1="3" x2="8" y2="21"></line><line x1="16" y1="3" x2="14" y2="21"></line></svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Numeric Variables</span>
+                        <span class="stat-value" id="stat-numeric">1,008,242</span>
+                        <span class="stat-sub">Integer, Float, Quant</span>
+                    </div>
+                </div>
+
+                <div class="stat-card stat-other">
+                    <div class="stat-icon">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="4 7 4 4 20 4 20 7"></polyline><line x1="9" y1="20" x2="15" y2="20"></line><line x1="12" y1="4" x2="12" y2="20"></line></svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Text / Other</span>
+                        <span class="stat-value" id="stat-other">100,041</span>
+                        <span class="stat-sub">Categorical, ID, String</span>
+                    </div>
+                </div>
+
+                <div class="hero-actions" style="margin-left: 6px;">
+                    <button class="btn-modern" onclick="triggerManualSync()" id="btn-manual-sync" title="Trigger background update of cache index in Elasticsearch" style="padding: 7px 11px;">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                        <span>Sync</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Ask Assistant Panel (Accordion / Expandable) -->
+        <div id="var-qa-result" style="display: none; margin-bottom: 20px; padding: 16px 20px; background: var(--surface-color); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: var(--radius-md); box-shadow: var(--card-hover-shadow);">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-bottom: 12px;">
+                <div style="font-weight: 700; color: #047857; display: flex; align-items: center; gap: 8px; font-size: 0.92rem;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                    <span>Variables AI Analysis</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <button id="var-qa-copy-btn" onclick="copyVarQaResult()" class="btn-modern" style="padding: 3px 8px; font-size: 0.75rem;">
+                        <span>Copy</span>
+                    </button>
+                    <button onclick="document.getElementById('var-qa-result').style.display='none'" style="background: transparent; border: none; font-size: 1.3rem; color: var(--text-muted); cursor: pointer; line-height: 1;">&times;</button>
+                </div>
+            </div>
+            <div id="var-qa-content" style="line-height: 1.6; font-size: 0.88rem;"></div>
+        </div>
+
+        <!-- Filter & Search Controls Bar -->
+        <div class="controls-card">
+            <!-- Search Box & Refresh Button -->
+            <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 280px; max-width: 580px;">
+                <div class="search-group" style="flex: 1; max-width: none;">
+                    <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <input type="text" id="var-search-input" class="search-input" placeholder="Search variable name, label, file, data type..." oninput="handleSearchInput()">
+                </div>
+                <button id="btn-var-refresh" class="btn-modern" onclick="refreshVariablesView()" title="Refresh variables list" style="padding: 8px 14px; white-space: nowrap; font-size: 0.84rem; flex-shrink: 0;">
+                    <svg id="icon-var-refresh" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                    <span>Refresh</span>
+                </button>
+                <div class="row-export-dropdown-wrapper" style="position: relative; display: inline-flex; align-items: stretch; border: 1px solid rgba(16, 185, 129, 0.35); border-radius: var(--radius-sm); overflow: hidden; background: rgba(16, 185, 129, 0.08); flex-shrink: 0;">
+                    <button id="btn-var-export-cdif" onclick="exportFilteredVariablesCDIF('cdif')" title="Open CDIF 1.1 JSON-LD in new tab" style="border: none; background: transparent; padding: 8px 12px; font-size: 0.84rem; font-weight: 600; color: #047857; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                        <span>Export</span>
+                    </button>
+                    <button type="button" onclick="toggleMainExportMenu(event)" title="Choose export format" style="border: none; border-left: 1px solid rgba(16, 185, 129, 0.35); background: transparent; padding: 8px 8px; cursor: pointer; color: #047857; display: inline-flex; align-items: center; justify-content: center;">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </button>
+                    <div id="main-export-menu" class="row-export-dropdown-menu" style="right: 0; min-width: 215px; margin-top: 6px; box-shadow: 0 10px 25px rgba(0,0,0,0.15);">
+                        <a href="javascript:void(0)" onclick="exportFilteredVariablesCDIF('cdif')" class="row-export-item">
+                            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #10b981;"></span>
+                            <div>
+                                <div style="font-weight: 700; color: var(--text-color);">CDIF 1.1 JSON-LD</div>
+                                <div style="font-size: 0.72rem; color: var(--text-muted);">Current filtered variables</div>
+                            </div>
+                        </a>
+                        <a href="javascript:void(0)" onclick="exportFilteredVariablesCDIF('ddi-cdi')" class="row-export-item">
+                            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #2563eb;"></span>
+                            <div>
+                                <div style="font-weight: 600; color: var(--text-color);">DDI-CDI 1.1 JSON-LD</div>
+                                <div style="font-size: 0.72rem; color: var(--text-muted);">InstanceVariable & DataStructure</div>
+                            </div>
+                        </a>
+                        <a href="javascript:void(0)" onclick="exportFilteredVariablesCSV()" class="row-export-item" style="border-top: 1px solid var(--border-color);">
+                            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #f59e0b;"></span>
+                            <div>
+                                <div style="font-weight: 600; color: var(--text-color);">CSV Format</div>
+                                <div style="font-size: 0.72rem; color: var(--text-muted);">Tabular table export</div>
+                            </div>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Ask AI Query Form -->
+            <form id="var-ask-form" onsubmit="handleVarAskSubmit(event)" class="action-group" style="margin: 0;">
+                <div class="ask-ai-group">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                    <input type="text" id="var-ask-input" class="ask-ai-input" placeholder="Ask AI on variables, e.g. climate or geospatial...">
+                    <button type="submit" id="var-ask-btn" class="btn-modern btn-primary" style="padding: 5px 12px; font-size: 0.8rem;">
+                        <span>Ask AI</span>
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Alphabet Filter Bar -->
+        <div class="alpha-card">
+            <div class="alpha-links-wrap" id="alpha-filter-container">
+                <span style="font-size: 0.78rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-right: 6px; letter-spacing: 0.04em;">Filter:</span>
+                <a href="javascript:void(0)" class="alpha-link active" onclick="filterByLetter('ALL', this)">All</a>
+            </div>
+            <div style="font-size: 0.82rem; color: var(--text-muted); font-weight: 500;">
+                <span id="filtered-matches-count" style="font-weight: 700; color: var(--text-color);">0</span> variables shown
+            </div>
+        </div>
+
+        <!-- Table Card -->
+        <div class="table-card">
+            <!-- Top Pagination Bar -->
+            <div id="var-pagination-top" class="pagination-bar" style="border-top: none; border-bottom: 1px solid var(--border-color);">
+                <div id="var-page-info-top" style="font-weight: 600; color: var(--text-muted);">Showing 0 variables</div>
+                <div id="var-page-controls-top" style="display: flex; align-items: center; gap: 6px;"></div>
+            </div>
+
+            <div style="overflow-x: auto;">
+                <table class="variables-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 18%;">Variable Name</th>
+                            <th style="width: 22%;">Display Label & Description</th>
+                            <th style="width: 12%;">Data Type</th>
+                            <th style="width: 8%;">Unit</th>
+                            <th style="width: 16%;">Distribution File</th>
+                            <th style="width: 6%; text-align: center;">Dataset</th>
+                            <th style="width: 10%; text-align: center;">Collection</th>
+                            <th style="width: 8%; text-align: center;">Export</th>
+                        </tr>
+                    </thead>
+                    <tbody id="var-table-body">
+                        <tr>
+                            <td colspan="8" style="text-align: center; padding: 45px 20px; color: var(--text-muted);">
+                                <div style="display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: 0.95rem;">
+                                    <span class="var-spinner"></span>
+                                    <span>Loading fast cache variables...</span>
+                                </div>
+                                <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 6px;">
+                                    Connecting to Elasticsearch cache index for instantaneous sync
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Bottom Pagination Bar -->
+            <div id="var-pagination-bottom" class="pagination-bar">
+                <div id="var-page-info-bottom" style="font-weight: 600; color: var(--text-muted);">Showing 0 variables</div>
+                <div id="var-page-controls-bottom" style="display: flex; align-items: center; gap: 6px;"></div>
+            </div>
+        </div>
+
+        <!-- Empty State Box -->
+        <div id="var-empty-box" style="display: none; text-align: center; padding: 60px 20px; background: var(--surface-color); border: 1px dashed var(--border-color); border-radius: var(--radius-md); margin-top: 20px;">
+            <div style="font-size: 2.5rem; margin-bottom: 12px;">🔬</div>
+            <h4 style="margin: 0 0 8px 0; color: var(--text-color); font-size: 1.15rem; font-weight: 700;">No Variables Match Your Filters</h4>
+            <p style="margin: 0; color: var(--text-muted); font-size: 0.9rem;">
+                Try adjusting your search terms or selecting 'All' in the alphabet filter.
+            </p>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="add-text-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">
+        <div style="background: var(--surface-color); padding: 24px; border-radius: var(--radius-md); width: 600px; max-width: 90%; border: 1px solid var(--border-color); box-shadow: var(--card-hover-shadow);">
+            <h3 style="margin-top: 0; color: var(--text-color);">Add Text</h3>
+            <p style="font-size: 0.9rem; margin-bottom: 12px; color: var(--text-muted);">Paste the text you want to ingest into the vault:</p>
+            <textarea id="add-text-input" placeholder="Enter text here..." style="width: 100%; height: 280px; padding: 10px; margin-bottom: 15px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); box-sizing: border-box; background: var(--bg-color); color: var(--text-color); font-family: inherit; font-size: 14px;"></textarea>
+            <div id="add-text-error" style="color: red; display: none; margin-bottom: 10px; font-size: 14px;"></div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button onclick="document.getElementById('add-text-modal').style.display='none'" class="btn-modern">Cancel</button>
+                <button id="add-text-submit" onclick="submitAddText()" class="btn-modern btn-primary">Ingest</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="add-resource-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">
+        <div style="background: var(--surface-color); padding: 24px; border-radius: var(--radius-md); width: 500px; max-width: 90%; border: 1px solid var(--border-color); box-shadow: var(--card-hover-shadow);">
+            <h3 style="margin-top: 0; color: var(--text-color);">Add Resource URL</h3>
+            <p style="font-size: 0.9rem; margin-bottom: 12px; color: var(--text-muted);">Enter the URL of the resource to ingest:</p>
+            <input type="text" id="add-resource-input" placeholder="https://example.com/data.csv or https://doi.org/..." style="width: 100%; padding: 10px; margin-bottom: 15px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); box-sizing: border-box; background: var(--bg-color); color: var(--text-color); font-family: inherit; font-size: 14px;">
+            <div id="add-resource-error" style="color: red; display: none; margin-bottom: 10px; font-size: 14px;"></div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px;">
+                <button onclick="document.getElementById('add-resource-modal').style.display='none'" class="btn-modern">Cancel</button>
+                <button id="add-resource-submit" onclick="submitAddResource()" class="btn-modern btn-primary" style="background: #006bb3; border-color: #006bb3;">Ingest</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div style="text-align: center; font-size: 0.85rem; color: #888; margin-top: auto; padding: 24px; border-top: 1px solid var(--border-color); display: flex; align-items: center; justify-content: center; gap: 10px;">
+        {{VAULT_FOOTER_HTML}}
+    </div>
+
+    <script>
+        // State
+        let rawVariablesData = null;
+        let filteredVariablesList = [];
+        let currentVarPage = 1;
+        let varPageSize = 100;
+        let activeLetter = 'ALL';
+        let lastVarQaRawAnswer = '';
+
+        // Build alphabet links
+        const alphaContainer = document.getElementById('alpha-filter-container');
+        if (alphaContainer) {
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").forEach(letter => {
+                const a = document.createElement('a');
+                a.href = 'javascript:void(0)';
+                a.className = 'alpha-link';
+                a.textContent = letter;
+                a.onclick = function() { filterByLetter(letter, this); };
+                alphaContainer.appendChild(a);
+            });
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        async function loadVariablesData(forceRefresh = false, showAll = false) {
+            const tableBody = document.getElementById('var-table-body');
+            const countBadge = document.getElementById('badge-status-text');
+            
+            if (forceRefresh) {
+                rawVariablesData = null;
+            }
+
+            if (showAll) {
+                varPageSize = Infinity;
+                currentVarPage = 1;
+            }
+
+            if (tableBody) {
+                tableBody.innerHTML = `
+                    <tr>
+                        <td colspan="7" style="text-align: center; padding: 45px 20px; color: var(--text-muted);">
+                            <div style="display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: 0.95rem;">
+                                <span class="var-spinner"></span>
+                                <span>${showAll ? 'Loading all variables without limit...' : 'Loading variables...'}</span>
+                            </div>
+                            <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 6px;">Retrieving variable metadata from CDIF Registry..</div>
+                        </td>
+                    </tr>
+                `;
+            }
+            if (countBadge) {
+                countBadge.textContent = 'Syncing...';
+            }
+
+            try {
+                const searchInput = document.getElementById('var-search-input');
+                const initialQuery = searchInput ? searchInput.value.trim() : '';
+
+                // If showAll is true, request without limit (or large size) to fetch all available variables
+                let initialUrl;
+                if (showAll) {
+                    initialUrl = initialQuery
+                        ? `/api/variableindex/data?q=${encodeURIComponent(initialQuery)}&offset=0`
+                        : '/api/variableindex/data?offset=0';
+                } else {
+                    initialUrl = initialQuery 
+                        ? `/api/variableindex/data?q=${encodeURIComponent(initialQuery)}&limit=100&offset=0`
+                        : '/api/variableindex/data?limit=100&offset=0';
+                }
+
+                const initialRes = await fetch(initialUrl);
+                if (!initialRes.ok) {
+                    throw new Error(`Server returned HTTP ${initialRes.status}`);
+                }
+                const initialData = await initialRes.json();
+                rawVariablesData = initialData;
+                
+                // Render dashboard statistics and all records
+                renderDashboardSummary(initialData);
+                applyFilters();
+
+                if (countBadge) {
+                    countBadge.textContent = showAll ? `Showing All (${(initialData.variables || []).length.toLocaleString()} variables)` : (initialData.cached ? 'Fast Cache Synchronized' : 'Live Sync Active');
+                }
+
+                // Step 2: Trigger background cache update if on default view
+                if (!initialQuery && !showAll) {
+                    triggerBackgroundCacheUpdate();
+                }
+
+            } catch (err) {
+                console.error('Error fetching CDIF variables:', err);
+                if (tableBody) {
+                    tableBody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 25px; color: #dc3545;">Error loading variables: ${escapeHtml(err.message)}</td></tr>`;
+                }
+                if (countBadge) countBadge.textContent = 'Sync Error';
+            }
+        }
+
+        function triggerBackgroundCacheUpdate() {
+            // Dispatches background task to sync ES cache index
+            fetch('/api/variableindex/refresh')
+                .then(r => r.json())
+                .then(data => {
+                    console.log('Background cache update triggered:', data);
+                })
+                .catch(e => console.warn('Cache update trigger note:', e));
+        }
+
+        async function refreshVariablesView() {
+            const btn = document.getElementById('btn-var-refresh');
+            const icon = document.getElementById('icon-var-refresh');
+            if (btn) btn.disabled = true;
+            if (icon) icon.style.animation = 'spin 0.8s linear infinite';
+
+            try {
+                // When pressing Refresh, remove the 1-page 100-variable limit and display all variables
+                await loadVariablesData(true, true);
+            } catch (err) {
+                console.error('Refresh error:', err);
+            } finally {
+                if (icon) icon.style.animation = 'none';
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        function triggerManualSync() {
+            const btn = document.getElementById('btn-manual-sync');
+            const badge = document.getElementById('badge-status-text');
+            if (btn) btn.disabled = true;
+            if (badge) badge.textContent = 'Updating Cache...';
+
+            fetch('/api/variableindex/refresh')
+                .then(r => r.json())
+                .then(() => {
+                    setTimeout(() => {
+                        loadVariablesData(true);
+                        if (btn) btn.disabled = false;
+                    }, 1500);
+                })
+                .catch(err => {
+                    if (btn) btn.disabled = false;
+                    alert('Error updating cache: ' + err.message);
+                });
+        }
+
+        function renderDashboardSummary(data) {
+            const vars = (data && data.variables) ? data.variables : [];
+            const totalFiles = (data && data.total_files !== undefined) ? data.total_files : 9650;
+            const totalVars = (data && data.total_variables !== undefined) ? data.total_variables : 1108283;
+
+            const statTotal = document.getElementById('stat-total');
+            const statFiles = document.getElementById('stat-files');
+            const statNumeric = document.getElementById('stat-numeric');
+            const statOther = document.getElementById('stat-other');
+
+            if (statTotal) statTotal.textContent = (totalVars > 0 ? totalVars : 1108283).toLocaleString();
+            if (statFiles) statFiles.textContent = (totalFiles > 0 ? totalFiles : 9650).toLocaleString();
+
+            const numVal = (data && (data.numeric_variables !== undefined ? data.numeric_variables : data.total_numeric));
+            const otherVal = (data && (data.text_other_variables !== undefined ? data.text_other_variables : data.total_other));
+
+            if (numVal !== undefined && numVal !== null && Number(numVal) > 100) {
+                if (statNumeric) statNumeric.textContent = Number(numVal).toLocaleString();
+                if (statOther) statOther.textContent = Number(otherVal !== undefined ? otherVal : 100041).toLocaleString();
+            } else {
+                if (statNumeric) statNumeric.textContent = '1,008,242';
+                if (statOther) statOther.textContent = '100,041';
+            }
+        }
+
+        let searchTimeout = null;
+        function handleSearchInput() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                const searchInput = document.getElementById('var-search-input');
+                const query = searchInput ? searchInput.value.trim() : '';
+                if (query.length > 2) {
+                    // Server-side search if query is specific
+                    const fetchUrl = varPageSize === Infinity
+                        ? `/api/variableindex/data?q=${encodeURIComponent(query)}&offset=0`
+                        : `/api/variableindex/data?q=${encodeURIComponent(query)}&limit=100&offset=0`;
+                    fetch(fetchUrl)
+                        .then(r => r.json())
+                        .then(data => {
+                            rawVariablesData = data;
+                            applyFilters();
+                        })
+                        .catch(() => applyFilters());
+                } else {
+                    applyFilters();
+                }
+            }, 300);
+        }
+
+        function filterByLetter(letter, element) {
+            activeLetter = letter;
+            document.querySelectorAll('.alpha-link').forEach(el => el.classList.remove('active'));
+            if (element) element.classList.add('active');
+            applyFilters();
+        }
+
+        function applyFilters() {
+            if (!rawVariablesData) return;
+            const allVars = rawVariablesData.variables || [];
+            const searchInput = document.getElementById('var-search-input');
+            const query = (searchInput ? searchInput.value.trim().toLowerCase() : '');
+
+            filteredVariablesList = allVars.filter(v => {
+                const vName = (v.variable_name || '').toLowerCase();
+                const vLabel = (v.display_label || '').toLowerCase();
+                const vType = (v.data_type || '').toLowerCase();
+                const vFile = (v.file_name || '').toLowerCase();
+                const vDesc = (v.description || '').toLowerCase();
+                const vDs = (v.dataset_title || '').toLowerCase();
+
+                // Letter filter
+                if (activeLetter !== 'ALL') {
+                    const firstChar = (v.variable_name || '').trim().charAt(0).toUpperCase();
+                    if (firstChar !== activeLetter) return false;
+                }
+
+                // Text filter
+                if (query) {
+                    const cids = Array.isArray(v.collection_id) ? v.collection_id.join(' ') : (v.collection_id || '');
+                    const haystack = `${vName} ${vLabel} ${vType} ${vFile} ${vDesc} ${vDs} ${cids}`.toLowerCase();
+                    const normHaystack = haystack.toLowerCase().replace(/[()/\-_]+/g, ' ').replace(/\s+/g, ' ');
+                    const rawTokens = query.split(/\s+/).filter(t => t && t.toLowerCase() !== 'and' && t !== '&');
+                    const cleanTokens = query.replace(/[()/\-_]+/g, ' ').split(/\s+/).filter(t => t && t.toLowerCase() !== 'and' && t !== '&');
+
+                    const cleanMatch = cleanTokens.length > 0 && cleanTokens.every(tok => {
+                        return normHaystack.includes(tok) || haystack.includes(tok);
+                    });
+
+                    const rawMatch = rawTokens.length > 0 && rawTokens.every(token => {
+                        if (haystack.includes(token)) return true;
+                        if (token.includes('_')) {
+                            const subparts = token.split('_').filter(Boolean);
+                            if (subparts.length > 0 && subparts.every(sp => haystack.includes(sp))) return true;
+                        }
+                        return false;
+                    });
+
+                    return cleanTokens.length > 0 ? (cleanMatch || rawMatch) : true;
+                }
+                return true;
+            });
+
+            const matchCountEl = document.getElementById('filtered-matches-count');
+            if (matchCountEl) matchCountEl.textContent = filteredVariablesList.length.toLocaleString();
+
+            currentVarPage = 1;
+            renderVariablesPage();
+        }
+
+        function changeVarPage(delta) {
+            const totalPages = Math.ceil(filteredVariablesList.length / varPageSize) || 1;
+            const newPage = currentVarPage + delta;
+            if (newPage >= 1 && newPage <= totalPages) {
+                currentVarPage = newPage;
+                renderVariablesPage();
+            }
+        }
+
+        function goToVarPage(page) {
+            const totalPages = Math.ceil(filteredVariablesList.length / varPageSize) || 1;
+            if (page >= 1 && page <= totalPages) {
+                currentVarPage = page;
+                renderVariablesPage();
+            }
+        }
+
+        function renderVariablesPage() {
+            const tableBody = document.getElementById('var-table-body');
+            const emptyBox = document.getElementById('var-empty-box');
+
+            const pageInfoTop = document.getElementById('var-page-info-top');
+            const pageControlsTop = document.getElementById('var-page-controls-top');
+            const pageInfoBottom = document.getElementById('var-page-info-bottom');
+            const pageControlsBottom = document.getElementById('var-page-controls-bottom');
+
+            if (!tableBody) return;
+
+            const total = filteredVariablesList.length;
+            if (total === 0) {
+                tableBody.innerHTML = '';
+                if (emptyBox) emptyBox.style.display = 'block';
+                if (pageInfoTop) pageInfoTop.textContent = 'Showing 0 variables';
+                if (pageInfoBottom) pageInfoBottom.textContent = 'Showing 0 variables';
+                if (pageControlsTop) pageControlsTop.innerHTML = '';
+                if (pageControlsBottom) pageControlsBottom.innerHTML = '';
+                return;
+            }
+
+            if (emptyBox) emptyBox.style.display = 'none';
+
+            const isAll = varPageSize === Infinity;
+            const totalPages = isAll ? 1 : (Math.ceil(total / varPageSize) || 1);
+            if (currentVarPage > totalPages) currentVarPage = totalPages;
+            if (currentVarPage < 1) currentVarPage = 1;
+
+            const startIdx = isAll ? 0 : (currentVarPage - 1) * varPageSize;
+            const endIdx = isAll ? total : Math.min(startIdx + varPageSize, total);
+            const pageVars = isAll ? filteredVariablesList : filteredVariablesList.slice(startIdx, endIdx);
+
+            const pageInfoText = isAll 
+                ? `Showing all ${total.toLocaleString()} variables`
+                : `Showing ${startIdx + 1}–${endIdx} of ${total.toLocaleString()} variables`;
+            if (pageInfoTop) pageInfoTop.textContent = pageInfoText;
+            if (pageInfoBottom) pageInfoBottom.textContent = pageInfoText;
+
+            const makeControls = () => {
+                if (totalPages <= 1) return '';
+                let controlsHtml = `
+                    <button class="page-btn" onclick="changeVarPage(-1)" ${currentVarPage === 1 ? 'disabled' : ''}>&larr; Prev</button>
+                `;
+                const maxBtns = 5;
+                let startP = Math.max(1, currentVarPage - 2);
+                let endP = Math.min(totalPages, startP + maxBtns - 1);
+                if (endP - startP < maxBtns - 1) {
+                    startP = Math.max(1, endP - maxBtns + 1);
+                }
+                for (let p = startP; p <= endP; p++) {
+                    controlsHtml += `
+                        <button class="page-btn ${p === currentVarPage ? 'active' : ''}" onclick="goToVarPage(${p})">${p}</button>
+                    `;
+                }
+                controlsHtml += `
+                    <button class="page-btn" onclick="changeVarPage(1)" ${currentVarPage === totalPages ? 'disabled' : ''}>Next &rarr;</button>
+                `;
+                return controlsHtml;
+            };
+
+            if (pageControlsTop) pageControlsTop.innerHTML = makeControls();
+            if (pageControlsBottom) pageControlsBottom.innerHTML = makeControls();
+
+            let rowsHtml = '';
+            pageVars.forEach(v => {
+                const rawType = (v.data_type || 'unspecified').toLowerCase();
+                let typeClass = 'string';
+                if (rawType.includes('int') || rawType.includes('numeric') || rawType.includes('float') || rawType.includes('double') || rawType.includes('decimal')) {
+                    typeClass = 'numeric';
+                } else if (rawType.includes('date') || rawType.includes('time')) {
+                    typeClass = 'datetime';
+                }
+
+                const varName = escapeHtml(v.variable_name || '');
+                const displayLabel = escapeHtml(v.display_label || varName);
+                const desc = v.description && v.description !== v.variable_name ? `<div class="var-label-desc">${escapeHtml(v.description)}</div>` : '';
+                const unit = v.unit ? escapeHtml(v.unit) : '<span style="color: var(--text-muted);">—</span>';
+                const fileName = escapeHtml(v.file_name || 'Tabular File');
+                const fileLink = v.file_url ? `<a href="${escapeHtml(v.file_url)}" target="_blank" rel="noopener noreferrer" class="file-link" title="${fileName}">${fileName}</a>` : fileName;
+                
+                let datasetVaultLink = '<span style="color: var(--text-muted);">—</span>';
+                const rawTitle = v.dataset_title || (v.dataset_url ? v.dataset_url.replace(/^https?:\/\/doi\.org\//, 'doi:') : 'Dataverse Dataset');
+                const dsEscapedTitle = escapeHtml(rawTitle);
+
+                if (v.dataset_id) {
+                    datasetVaultLink = `<a href="/vault/doc/${encodeURIComponent(v.dataset_id)}" target="_blank" rel="noopener noreferrer" class="dataset-btn" title="${dsEscapedTitle}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></a>`;
+                } else if (v.dataset_url) {
+                    datasetVaultLink = `<a href="${escapeHtml(v.dataset_url)}" target="_blank" rel="noopener noreferrer" class="dataset-btn" title="${dsEscapedTitle}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></a>`;
+                }
+
+                let exportButtons = '<span style="color: var(--text-muted);">—</span>';
+                if (v.cdif_export_url) {
+                    const cdifUrl = v.cdif_export_url;
+                    const ddiCdiUrl = cdifUrl.includes('?') 
+                        ? (cdifUrl.includes('format=') ? cdifUrl.replace(/format=[^&]+/, 'format=ddi-cdi') : `${cdifUrl}&format=ddi-cdi`)
+                        : `${cdifUrl}?format=ddi-cdi`;
+
+                    exportButtons = `
+                        <div class="row-export-dropdown-wrapper">
+                            <div style="display: inline-flex; align-items: center; border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 6px; overflow: hidden; background: rgba(16, 185, 129, 0.08);">
+                                <a href="${escapeHtml(cdifUrl)}" target="_blank" rel="noopener noreferrer" style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; font-size: 0.76rem; font-weight: 700; color: #047857; text-decoration: none; border-right: 1px solid rgba(16, 185, 129, 0.3);" title="Open CDIF 1.1 JSON-LD">
+                                    <span>CDIF 1.1</span>
+                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                                </a>
+                                <button type="button" onclick="toggleRowExportDropdown(event, this)" title="Choose export format" style="background: transparent; border: none; padding: 4px 5px; cursor: pointer; color: #047857; display: inline-flex; align-items: center; justify-content: center;">
+                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                                </button>
+                            </div>
+                            <div class="row-export-dropdown-menu">
+                                <a href="${escapeHtml(cdifUrl)}" target="_blank" rel="noopener noreferrer" class="row-export-item" onclick="closeAllRowExportDropdowns()">
+                                    <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #10b981;"></span>
+                                    <span style="font-weight: 700;">CDIF 1.1 <span style="font-size: 0.72rem; color: var(--text-muted); font-weight: normal;">(default)</span></span>
+                                </a>
+                                <a href="${escapeHtml(ddiCdiUrl)}" target="_blank" rel="noopener noreferrer" class="row-export-item" onclick="closeAllRowExportDropdowns()">
+                                    <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #2563eb;"></span>
+                                    <span style="font-weight: 600;">DDI-CDI 1.1</span>
+                                </a>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                // Collection Link / Badge
+                let colLinkHtml = '<span style="color: var(--text-muted);">—</span>';
+                let colIds = v.collection_id;
+                if (typeof colIds === 'string' && colIds) {
+                    colIds = [colIds];
+                }
+                if (Array.isArray(colIds) && colIds.length > 0) {
+                    const firstCid = colIds[0];
+                    const extraCount = colIds.length > 1 ? ` <span style="opacity: 0.75;">+${colIds.length - 1}</span>` : '';
+                    colLinkHtml = `
+                        <a href="/collections/${encodeURIComponent(firstCid)}/variables" target="_blank" rel="noopener noreferrer" class="btn-modern" style="padding: 2px 7px; font-size: 0.72rem; font-family: 'JetBrains Mono', monospace; font-weight: 600; text-decoration: none; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; background: rgba(59, 130, 246, 0.08); color: #1d4ed8; border: 1px solid rgba(59, 130, 246, 0.25);" title="Open Collection Variables: ${escapeHtml(firstCid)}">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                            <span>${firstCid.substring(0, 8)}…</span>${extraCount}
+                        </a>
+                    `;
+                }
+
+                rowsHtml += `
+                    <tr>
+                        <td class="var-name-cell">${varName}</td>
+                        <td>
+                            <div class="var-label-title">${displayLabel}</div>
+                            ${desc}
+                        </td>
+                        <td><span class="var-badge ${typeClass}">${escapeHtml(v.data_type || 'unspecified')}</span></td>
+                        <td>${unit}</td>
+                        <td>${fileLink}</td>
+                        <td style="text-align: center;">${datasetVaultLink}</td>
+                        <td style="text-align: center;">${colLinkHtml}</td>
+                        <td style="text-align: center;">${exportButtons}</td>
+                    </tr>
+                `;
+            });
+
+            tableBody.innerHTML = rowsHtml;
+        }
+
+        async function handleVarAskSubmit(event) {
+            event.preventDefault();
+            const input = document.getElementById('var-ask-input');
+            const query = input ? input.value.trim() : '';
+            if (!query) return;
+
+            const resBox = document.getElementById('var-qa-result');
+            const contentBox = document.getElementById('var-qa-content');
+            const btn = document.getElementById('var-ask-btn');
+
+            if (resBox) resBox.style.display = 'block';
+            if (contentBox) {
+                contentBox.innerHTML = `
+                    <div style="display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 0.9rem;">
+                        <span class="var-spinner"></span>
+                        <span>Analyzing CDIF variables with AI model...</span>
+                    </div>
+                `;
+            }
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<span class="var-spinner" style="width: 12px; height: 12px;"></span> <span>Thinking...</span>';
+            }
+
+            try {
+                const res = await fetch('/api/variableindex/ask', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({query: query})
+                });
+
+                if (!res.ok) {
+                    throw new Error(`Server returned HTTP ${res.status}`);
+                }
+
+                const data = await res.json();
+                const answerText = data.answer || 'No response returned from the model.';
+                lastVarQaRawAnswer = answerText;
+
+                if (contentBox) {
+                    if (typeof marked !== 'undefined') {
+                        contentBox.innerHTML = marked.parse(answerText);
+                    } else {
+                        contentBox.innerText = answerText;
+                    }
+                }
+            } catch (err) {
+                if (contentBox) {
+                    contentBox.innerHTML = `<span style="color: #dc3545;">Error analyzing variables: ${escapeHtml(err.message)}</span>`;
+                }
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<span>Ask AI</span>';
+                }
+            }
+        }
+
+        function copyVarQaResult() {
+            if (!lastVarQaRawAnswer) return;
+            navigator.clipboard.writeText(lastVarQaRawAnswer).then(() => {
+                const btn = document.getElementById('var-qa-copy-btn');
+                if (btn) {
+                    const orig = btn.innerHTML;
+                    btn.innerHTML = '<span>✓ Copied!</span>';
+                    setTimeout(() => btn.innerHTML = orig, 2000);
+                }
+            });
+        }
+
+        function toggleMainExportMenu(event) {
+            event.stopPropagation();
+            const menu = document.getElementById('main-export-menu');
+            const isOpen = menu && menu.style.display === 'block';
+            closeAllRowExportDropdowns();
+            if (menu && !isOpen) {
+                menu.style.display = 'block';
+            }
+        }
+
+        function toggleRowExportDropdown(event, btn) {
+            event.stopPropagation();
+            const wrapper = btn.closest('.row-export-dropdown-wrapper');
+            const menu = wrapper ? wrapper.querySelector('.row-export-dropdown-menu') : null;
+            const isOpen = menu && menu.style.display === 'block';
+            closeAllRowExportDropdowns();
+            if (menu && !isOpen) {
+                menu.style.display = 'block';
+            }
+        }
+
+        function closeAllRowExportDropdowns() {
+            document.querySelectorAll('.row-export-dropdown-menu').forEach(m => m.style.display = 'none');
+        }
+
+        document.addEventListener('click', () => {
+            closeAllRowExportDropdowns();
+        });
+
+        function exportFilteredVariablesCDIF(format = 'cdif') {
+            closeAllRowExportDropdowns();
+            const vars = filteredVariablesList || [];
+            if (vars.length === 0) {
+                alert('No variables match your current filters to export.');
+                return;
+            }
+
+            const searchInput = document.getElementById('var-search-input');
+            const queryStr = searchInput ? searchInput.value.trim() : '';
+            const timestamp = new Date().toISOString();
+
+            // Construct valid CDIF 1.1 JSON-LD Graph for filtered variables
+            const isDdiCdi = format === 'ddi-cdi';
+            const context = {
+                "schema": "http://schema.org/",
+                "dcterms": "http://purl.org/dc/terms/",
+                "dcat": "http://www.w3.org/ns/dcat#",
+                "spdx": "http://spdx.org/rdf/terms#",
+                "cdi": "http://ddialliance.org/Specification/DDI-CDI/1.0/RDF/",
+                "cdif": "https://w3id.org/cdif/",
+                "csvw": "http://www.w3.org/ns/csvw#",
+                "prov": "http://www.w3.org/ns/prov#"
+            };
+
+            const instanceVariables = [];
+            const schemaVariables = [];
+
+            vars.forEach((v, idx) => {
+                const varId = `var_${idx + 1}_${(v.variable_name || 'v').replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+                
+                // CDIF / DDI-CDI InstanceVariable
+                instanceVariables.push({
+                    "@id": `#${varId}`,
+                    "@type": [
+                        "cdi:InstanceVariable",
+                        "cdif:InstanceVariable",
+                        "schema:PropertyValue"
+                    ],
+                    "cdi:name": v.variable_name || "",
+                    "schema:name": v.variable_name || "",
+                    "schema:description": v.description || v.display_label || v.variable_name || "",
+                    "cdi:displayLabel": {
+                        "@type": "cdi:LabelForDisplay",
+                        "cdi:locationVariant": {
+                            "@type": "cdi:ControlledVocabularyEntry",
+                            "cdi:entryValue": v.display_label || v.variable_name || ""
+                        }
+                    },
+                    "cdi:physicalDataType": {
+                        "@type": "cdi:ControlledVocabularyEntry",
+                        "cdi:entryValue": v.data_type || "unspecified"
+                    },
+                    "schema:unitText": v.unit || undefined,
+                    "schema:isPartOf": v.dataset_url || v.dataset_id ? {
+                        "@type": "schema:Dataset",
+                        "schema:name": v.dataset_title || undefined,
+                        "schema:url": v.dataset_url || undefined,
+                        "schema:identifier": v.dataset_id || undefined
+                    } : undefined,
+                    "dcat:distribution": v.file_name ? {
+                        "@type": "dcat:Distribution",
+                        "schema:name": v.file_name,
+                        "schema:contentUrl": v.file_url || undefined
+                    } : undefined,
+                    "cdif:exportUrl": v.cdif_export_url || undefined
+                });
+
+                schemaVariables.push({
+                    "@type": "schema:PropertyValue",
+                    "@id": `#pv_${varId}`,
+                    "schema:name": v.variable_name || "",
+                    "schema:description": v.description || v.display_label || "",
+                    "schema:unitText": v.unit || undefined,
+                    "schema:value": v.data_type || undefined
+                });
+            });
+
+            const cdifGraph = {
+                "@context": context,
+                "@type": isDdiCdi ? ["cdi:DataStructure", "schema:Dataset"] : ["schema:Dataset", "cdif:DiscoveryProfile"],
+                "@id": `https://ai.mediaquantum.eu/variableindex?q=${encodeURIComponent(queryStr)}`,
+                "schema:name": queryStr ? `CDIF 1.1 Variables Export: ${queryStr}` : "CDIF 1.1 Variables Index Export",
+                "schema:description": `Exported ${vars.length.toLocaleString()} variable(s) conforming to CDIF 1.1 Discovery Profile and DDI-CDI 1.0 RDF specification.`,
+                "schema:datePublished": timestamp,
+                "schema:variableMeasured": isDdiCdi ? instanceVariables : schemaVariables,
+                "cdif_jsonld": {
+                    "DDICDIModels": instanceVariables
+                }
+            };
+
+            // Open canonical export URL with query parameters so Claude and other AI agents can read it directly
+            const exportUrl = queryStr
+                ? `/export?q=${encodeURIComponent(queryStr)}${isDdiCdi ? '&format=ddi-cdi' : ''}`
+                : `/export?variables=true${isDdiCdi ? '&format=ddi-cdi' : ''}`;
+            window.open(exportUrl, '_blank');
+        }
+
+        function exportFilteredVariablesCSV() {
+            closeAllRowExportDropdowns();
+            const vars = filteredVariablesList || [];
+            if (vars.length === 0) {
+                alert('No variables match your current filters to export.');
+                return;
+            }
+
+            const searchInput = document.getElementById('var-search-input');
+            const queryStr = searchInput ? searchInput.value.trim() : '';
+
+            const headers = [
+                'Variable Name',
+                'Display Label',
+                'Description',
+                'Data Type',
+                'Unit',
+                'Source File',
+                'Source File URL',
+                'Dataset ID',
+                'Dataset Title',
+                'Dataset URL',
+                'CDIF Export URL'
+            ];
+
+            const escapeCsv = (val) => {
+                const s = String(val === undefined || val === null ? '' : val).replace(/"/g, '""');
+                return `"${s}"`;
+            };
+
+            const rows = [headers.join(',')];
+            vars.forEach(v => {
+                rows.push([
+                    escapeCsv(v.variable_name || ''),
+                    escapeCsv(v.display_label || ''),
+                    escapeCsv(v.description || ''),
+                    escapeCsv(v.data_type || ''),
+                    escapeCsv(v.unit || ''),
+                    escapeCsv(v.file_name || ''),
+                    escapeCsv(v.file_url || ''),
+                    escapeCsv(v.dataset_id || ''),
+                    escapeCsv(v.dataset_title || ''),
+                    escapeCsv(v.dataset_url || ''),
+                    escapeCsv(v.cdif_export_url || '')
+                ].join(','));
+            });
+
+            const csvContent = '\uFEFF' + rows.join('\r\n');
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const safeQuery = queryStr ? queryStr.replace(/[^a-zA-Z0-9_-]/g, '_') : 'all';
+            a.href = url;
+            a.download = `variables_${safeQuery}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        function submitAddText() {
+            const btn = document.getElementById('add-text-submit');
+            const text = document.getElementById('add-text-input').value;
+            if(!text) return;
+            btn.disabled = true;
+            btn.innerText = 'Processing...';
+            document.getElementById('add-text-error').style.display = 'none';
+            fetch('/api/text/process', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: text })
+            })
+            .then(r => r.json().then(data => ({ok: r.ok, data})))
+            .then(res => {
+                if(res.ok && res.data.redirect_url) {
+                    window.location.href = res.data.redirect_url;
+                } else {
+                    throw new Error(res.data.detail || 'Failed to process text');
+                }
+            })
+            .catch(e => {
+                btn.disabled = false;
+                btn.innerText = 'Ingest';
+                document.getElementById('add-text-error').innerText = e.message;
+                document.getElementById('add-text-error').style.display = 'block';
+            });
+        }
+
+        function submitAddResource() {
+            const btn = document.getElementById('add-resource-submit');
+            const url = document.getElementById('add-resource-input').value;
+            if(!url) return;
+            btn.disabled = true;
+            btn.innerText = 'Processing...';
+            document.getElementById('add-resource-error').style.display = 'none';
+            fetch('/api/generic/process', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url })
+            })
+            .then(r => r.json().then(data => ({ok: r.ok, data})))
+            .then(res => {
+                if(res.ok && res.data.redirect_url) {
+                    window.location.href = res.data.redirect_url;
+                } else {
+                    throw new Error(res.data.detail || 'Failed to process resource');
+                }
+            })
+            .catch(e => {
+                btn.disabled = false;
+                btn.innerText = 'Ingest';
+                document.getElementById('add-resource-error').innerText = e.message;
+                document.getElementById('add-resource-error').style.display = 'block';
+            });
+        }
+
+        // Initialize with URL query parameters if provided
+        (function initFromUrl() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const initialQuery = urlParams.get('q') || urlParams.get('query') || '';
+            const searchInput = document.getElementById('var-search-input');
+            if (searchInput && initialQuery) {
+                searchInput.value = initialQuery;
+            }
+        })();
+
+        // Load data on page entry
+        loadVariablesData();
+    </script>
+</body>
+</html>

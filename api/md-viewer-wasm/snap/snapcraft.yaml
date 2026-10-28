@@ -1,0 +1,106 @@
+name: md-viewer
+base: core22
+version: '0.3.0'
+summary: Fast, lightweight markdown viewer for Linux
+description: |
+  A fast, lightweight markdown viewer for Linux built with Rust and egui.
+  Designed for distraction-free reading with excellent typography and syntax highlighting.
+
+  Rendering:
+  - GitHub Flavored Markdown (tables, task lists, footnotes)
+  - Syntax highlighting for 200+ languages
+  - Mermaid diagrams (flowcharts, sequence diagrams) rendered natively, click to enlarge
+  - Math rendering (LaTeX via typst)
+  - Resizable table columns - drag dividers to fit content
+  - HTML tables with proper cell padding
+  - Images and SVG support (PNG, JPEG, GIF, SVG, HTTP URLs) - click images to enlarge
+  - Unicode support with system font fallbacks (emojis, CJK, non-Latin scripts)
+  - 60 FPS rendering with viewport-based lazy rendering
+  - WCAG 2.1 compliant typography (1.5x line height)
+
+  Navigation:
+  - Tab system for multiple documents (Ctrl+Click links to open in new tab)
+  - In-document search (Ctrl+F) with inline highlights and Enter/Shift+Enter to cycle
+  - File explorer sidebar with hierarchical directory tree
+  - Outline sidebar with click-to-navigate table of contents
+  - Per-tab back/forward history (Alt+Left/Right)
+  - Internal links between markdown files
+
+  View:
+  - Dark and light themes (Ctrl+D)
+  - Zoom 50%-300% (Ctrl++/-/0 or Ctrl+Scroll)
+  - Full-width content toggle (View menu) to use the entire content pane
+  - Shift+Scroll over a wide table scrolls it horizontally
+  - Live reload on file changes (enabled by default)
+
+  Usability:
+  - Drag and drop files to open
+  - Native file dialogs
+  - Session persistence (tabs, theme, zoom, sidebar state)
+  - Native X11 and Wayland support
+
+grade: stable
+confinement: strict
+
+architectures:
+  - build-on: amd64
+
+apps:
+  md-viewer:
+    command: bin/md-viewer
+    plugs:
+      - home
+      - removable-media
+      - desktop
+      - desktop-legacy
+      - wayland
+      - x11
+      - opengl
+      - gsettings
+    environment:
+      XDG_DATA_DIRS: $SNAP/usr/share:$XDG_DATA_DIRS
+      # xkbcommon and Mesa search compiled-in absolute paths, which inside the
+      # strict-confinement mount namespace resolve to the (empty) core22 base,
+      # not $SNAP — point both at the staged copies (#55).
+      XKB_CONFIG_ROOT: $SNAP/usr/share/X11/xkb
+      LIBGL_DRIVERS_PATH: $SNAP/usr/lib/x86_64-linux-gnu/dri
+
+parts:
+  md-viewer:
+    plugin: rust
+    source: .
+    rust-channel: stable
+    build-packages:
+      - clang
+      - pkg-config
+      - libxcb1-dev
+      - libxcb-render0-dev
+      - libxcb-shape0-dev
+      - libxcb-xfixes0-dev
+      - libxkbcommon-dev
+      - libssl-dev
+      - libgtk-3-dev
+      - libfontconfig1-dev
+      - libdbus-1-dev
+    stage-packages:
+      - libxcb1
+      - libxkbcommon0
+      # winit dlopens its X11 stack at runtime, so snapcraft's link-time
+      # dependency staging never picks these up (#55):
+      - libxkbcommon-x11-0
+      - libx11-6
+      - libx11-data
+      - xkb-data
+      - libfontconfig1
+      - libgtk-3-0
+      - libglib2.0-0
+      - libgl1
+      - libwayland-client0
+      - libwayland-egl1
+    override-build: |
+      # Remove optional MCP dependency (not needed in production, path doesn't exist in snap build)
+      sed -i '/egui-mcp-bridge/d' Cargo.toml
+      sed -i 's/mcp = \["dep:egui-mcp-bridge"\]/mcp = []/' Cargo.toml
+      craftctl default
+      install -Dm644 LICENSE "$CRAFT_PART_INSTALL/usr/share/doc/md-viewer/LICENSE"
+      install -Dm644 THIRD_PARTY_NOTICES "$CRAFT_PART_INSTALL/usr/share/doc/md-viewer/THIRD_PARTY_NOTICES"

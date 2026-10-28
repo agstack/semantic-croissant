@@ -1,0 +1,18 @@
+{
+  "displayName": "Ghostwriter 2.0",
+  "toolName": "ghostwriter",
+  "description": "Ghostwriter 2.0",
+  "scope": "dataset",
+  "type": "explore",
+  "toolUrl": "https://ai.codata.org/dataverse",
+  "toolParameters": {
+    "queryParameters": [
+      {
+        "datasetPid": "{datasetPid}"
+      },
+      {
+        "siteUrl": "{siteUrl}"
+      }
+    ]
+  }
+}

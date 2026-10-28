@@ -6,8 +6,8 @@ import urllib.parse
 import os
 from rdflib import Graph
 
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-MODEL_NAME = "gemma4-croissant"
+OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:31b-cloud")
+MODEL_NAME = os.environ.get("MODEL_NAME") or os.environ.get("MODEL") or OLLAMA_DEFAULT_MODEL
 
 def fetch_oai_ore(doi):
     # Properly encode the DOI
@@ -69,6 +69,29 @@ def convert_to_croissant(doi):
         try:
             json_data = json.loads(output)
             print("✓ JSON is well-formed")
+
+            # Inject the correct Croissant/ODRL/CDIF context
+            json_data["@context"] = {
+                "@vocab": "http://schema.org/",
+                "sc": "http://schema.org/",
+                "schema": "http://schema.org/",
+                "cr": "http://mlcommons.org/croissant/",
+                "dct": "http://purl.org/dc/terms/",
+                "conformsTo": "dct:conformsTo",
+                "distribution": {
+                    "@id": "cr:distribution"
+                },
+                "bs4ExtractionPattern": {
+                    "@id": "sc:processingRequirement",
+                    "@type": "@json"
+                },
+                "unf": "https://guides.dataverse.org/en/6.9/developers/unf/unf-v6.html",
+                "odrl": "http://www.w3.org/ns/odrl/2/",
+                "cdif": "https://cdif.org/1.1/",
+                "did": "https://www.w3.org/ns/did/v1",
+                "url": {"@type": "http://www.w3.org/2001/XMLSchema#string"}
+            }
+            output = json.dumps(json_data, indent=2)
             
             # Write to temporary file for rdflib
             import tempfile

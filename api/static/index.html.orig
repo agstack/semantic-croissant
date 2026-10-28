@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Semantic Croissant AI Studio</title>
+    
+    <!-- Marked.js for Markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+    <!-- Highlight.js for code highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --sidebar-bg: #f8f9fa;
+            --panel-bg: #ffffff;
+            --text-color: #333333;
+            --border-color: #e0e0e0;
+            --accent-color: #1a73e8;
+            --user-msg-bg: #e8f0fe;
+            --bot-msg-bg: #f8f9fa;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 300px;
+            background-color: var(--sidebar-bg);
+            border-right: 1px solid var(--border-color);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .sidebar h2 {
+            margin-top: 0;
+            font-size: 1.2rem;
+            color: #202124;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .control-group label {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #5f6368;
+        }
+
+        select, input[type="text"], input[type="password"] {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            padding: 10px;
+            border-radius: 6px;
+            outline: none;
+            font-size: 0.9rem;
+        }
+
+        select:focus, input:focus {
+            border-color: var(--accent-color);
+        }
+
+        .auth-card {
+            background-color: var(--panel-bg);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            font-size: 0.9rem;
+        }
+
+        .auth-card a {
+            display: inline-block;
+            margin-top: 10px;
+            color: var(--accent-color);
+            text-decoration: none;
+        }
+        
+        .auth-card a:hover {
+            text-decoration: underline;
+        }
+
+        /* Main Chat Area */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .chat-history {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 40px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .message {
+            display: flex;
+            gap: 15px;
+            max-width: 800px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        .message .avatar {
+            width: 35px;
+            height: 35px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+
+        .message.user .avatar {
+            background-color: var(--accent-color);
+            color: #fff;
+        }
+
+        .message.assistant .avatar {
+            background-color: #10a37f;
+            color: #fff;
+        }
+
+        .message-content {
+            flex: 1;
+            background-color: var(--panel-bg);
+            padding: 15px 20px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            line-height: 1.5;
+            overflow-x: auto;
+        }
+
+        .message.user .message-content {
+            background-color: var(--user-msg-bg);
+        }
+
+        .message-content p:first-child {
+            margin-top: 0;
+        }
+        
+        .message-content p:last-child {
+            margin-bottom: 0;
+        }
+
+        /* Input Area */
+        .input-area {
+            padding: 20px 40px;
+            background-color: var(--bg-color);
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: center;
+        }
+
+        .input-container {
+            max-width: 800px;
+            width: 100%;
+            position: relative;
+            display: flex;
+            gap: 10px;
+        }
+
+        textarea {
+            width: 100%;
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            color: var(--text-color);
+            padding: 15px;
+            padding-right: 50px;
+            border-radius: 12px;
+            resize: none;
+            outline: none;
+            font-family: inherit;
+            font-size: 1rem;
+            min-height: 24px;
+            max-height: 200px;
+            line-height: 1.5;
+            overflow-y: auto;
+        }
+
+        textarea:focus {
+            border-color: var(--accent-color);
+        }
+
+        .send-btn {
+            position: absolute;
+            right: 15px;
+            bottom: 15px;
+            background-color: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            width: 32px;
+            height: 32px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .send-btn:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+
+        .send-btn:hover:not(:disabled) {
+            background-color: #006bb3;
+        }
+
+        @keyframes blink {
+            0% { opacity: 0.2; }
+            20% { opacity: 1; }
+            100% { opacity: 0.2; }
+        }
+        .typing span {
+            animation: blink 1.4s infinite both;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+        .typing span:nth-child(2) { animation-delay: 0.2s; }
+        .typing span:nth-child(3) { animation-delay: 0.4s; }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <h2>🥐 Croissant Studio</h2>
+        
+        <div class="control-group">
+            <label for="model-select">Model</label>
+            <select id="model-select">
+                <option value="">Loading models...</option>
+            </select>
+        </div>
+        
+        <div class="control-group">
+            <label for="api-key">API Key (Optional)</label>
+            <input type="password" id="api-key" placeholder="Enter gateway key">
+        </div>
+
+        <div class="auth-card">
+            <strong>ODRL Authentication</strong><br>
+            <span id="auth-status" style="color: #5f6368;">Checking...</span><br>
+            <a href="https://odrl.dev.codata.org/vcs">Login with Identity</a>
+        </div>
+        
+        <div class="auth-card" style="margin-top: auto; font-size: 0.8rem; color: #888;">
+            Connected to <strong>/gateway/v1/messages</strong><br>
+            Powered by QLever MCP
+        </div>
+    </div>
+
+    <div class="main-content">
+        <!-- Static Menu -->
+        <div class="static-menu" style="display: flex; justify-content: center; align-items: center; gap: 20px; padding: 15px; background: var(--panel-bg); border-bottom: 1px solid var(--border-color); font-size: 0.95rem;">
+            <a href="#" id="menu-about" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.7'" onmouseout="this.style.opacity='1'">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                About
+            </a> 
+            <span style="color: #e0e0e0; font-weight: 300;">|</span>
+            <a href="#" id="menu-vault" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.7'" onmouseout="this.style.opacity='1'">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                Vault
+            </a> 
+            <span style="color: #e0e0e0; font-weight: 300;">|</span>
+            <a href="#" id="menu-search" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.7'" onmouseout="this.style.opacity='1'">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                Search
+            </a> 
+            <span style="color: #e0e0e0; font-weight: 300;">|</span>
+            <a href="#" id="menu-settings" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.7'" onmouseout="this.style.opacity='1'">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                Settings
+            </a>
+            <span style="color: #e0e0e0; font-weight: 300;">|</span>
+            <a href="#" id="menu-history" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.7'" onmouseout="this.style.opacity='1'">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                History
+            </a>
+            <span style="color: #e0e0e0; font-weight: 300;">|</span>
+            <a href="#" id="menu-collections" style="color: var(--accent-color); text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 6px; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.7'" onmouseout="this.style.opacity='1'">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                Collections
+            </a>
+        </div>
+
+        <div class="chat-history" id="chat-history">
+            <div class="message assistant">
+                <div class="avatar">AI</div>
+                <div class="message-content">
+                    <p>Welcome to the Semantic Croissant AI Studio! How can I help you query the dataset today?</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="input-area">
+            <div class="input-container">
+                <textarea id="prompt-input" placeholder="Ask a question about the datasets..." rows="1"></textarea>
+                <button id="send-btn" class="send-btn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configure marked to use highlight.js
+        marked.setOptions({
+            highlight: function(code, lang) {
+                const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+                return hljs.highlight(code, { language }).value;
+            }
+        });
+
+        const chatHistory = document.getElementById('chat-history');
+        const promptInput = document.getElementById('prompt-input');
+        const sendBtn = document.getElementById('send-btn');
+        const modelSelect = document.getElementById('model-select');
+        const apiKeyInput = document.getElementById('api-key');
+        
+        let messages = [];
+        let chatHistoryStorage = JSON.parse(localStorage.getItem('ai_studio_history') || '[]');
+        let currentInteraction = null;
+        let availableTools = [];
+
+        // Auto-resize textarea
+        promptInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            promptInput.style.height = (promptInput.scrollHeight) + 'px';
+        });
+
+        // Static Menu Events
+        document.getElementById('menu-about').addEventListener('click', (e) => {
+            e.preventDefault();
+            promptInput.value = "What is the Semantic Croissant AI Studio?";
+            sendMessage();
+        });
+        
+        document.getElementById('menu-history').addEventListener('click', (e) => {
+            e.preventDefault();
+            
+            const ui = appendMessage('assistant', '<p>Loading your conversation history...</p>');
+            
+            if (chatHistoryStorage.length === 0) {
+                ui.contentDiv.innerHTML = '<p>No history found on this device.</p>';
+                chatHistory.scrollTop = chatHistory.scrollHeight;
+                return;
+            }
+            
+            let historyHTML = `<h3>Your Prompt History</h3><ul style="list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:15px;">`;
+            
+            // Render from newest to oldest
+            const sortedHistory = [...chatHistoryStorage].reverse();
+            
+            sortedHistory.forEach((item, index) => {
+                const dateStr = new Date(item.date).toLocaleString();
+                // Escape HTML from prompt to prevent XSS
+                const safePrompt = item.prompt.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                const shortPrompt = safePrompt.length > 80 ? safePrompt.substring(0, 80) + '...' : safePrompt;
+                
+                historyHTML += `
+                <li style="background:var(--panel-bg); border:1px solid var(--border-color); border-radius:6px; padding:12px;">
+                    <div style="font-size:0.85rem; color:#888; margin-bottom:5px;">${dateStr}</div>
+                    <div style="font-weight:600; margin-bottom:10px; font-size:1.05rem;">Q: ${shortPrompt}</div>
+                    <details style="cursor:pointer;">
+                        <summary style="color:var(--accent-color); font-weight:600; outline:none;">View Answer from LLM</summary>
+                        <div style="margin-top:10px; padding:10px; background:#ffffff; color:#333333; border-radius:4px; font-size:0.95rem; border-left: 3px solid var(--accent-color); max-height:400px; overflow-y:auto;" class="message-content">
+                            ${marked.parse(item.response || "No response recorded.")}
+                        </div>
+                    </details>
+                </li>`;
+            });
+            historyHTML += `</ul>`;
+            
+            const backBtnHTML = '<button onclick="this.closest(\'.message\').remove()" style="margin-bottom:15px; padding:6px 12px; background:var(--button-bg); color:white; border:none; border-radius:4px; cursor:pointer; font-size:0.9rem;">&larr; Back</button>\n\n';
+            
+            ui.contentDiv.innerHTML = backBtnHTML + historyHTML;
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        });
+
+        document.getElementById('menu-collections').addEventListener('click', (e) => {
+            e.preventDefault();
+            promptInput.value = "Show my collections.";
+            sendMessage();
+        });
+        
+        document.getElementById('menu-vault').addEventListener('click', async (e) => {
+            e.preventDefault();
+            const ui = appendMessage('assistant', '<p>Fetching vault records from Elasticsearch<span class="typing"><span>.</span><span>.</span><span>.</span></span></p>');
+            
+            // Bypass LLM and call the search tool directly with a wildcard query
+            const result = await executeTool('elasticsearch_fulltext_search', { q: "*", format: "vault_list", limit: 10 }, ui.contentDiv);
+            
+            let resText = "No records found.";
+            if (result && result.length > 0 && result[0].text) resText = result[0].text;
+            
+            // Strip the system instructions from the markdown text
+            resText = resText.replace(/\n---\nSYSTEM INSTRUCTION FOR LLM:.*$/g, '');
+            
+            // Add a Back button
+            const backBtnHTML = '<button onclick="this.closest(\'.message\').remove()" style="margin-bottom:15px; padding:6px 12px; background:var(--button-bg); color:white; border:none; border-radius:4px; cursor:pointer; font-size:0.9rem;">&larr; Back</button>\n\n';
+            
+            ui.contentDiv.innerHTML = backBtnHTML + marked.parse(resText);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        });
+        
+        document.getElementById('menu-search').addEventListener('click', (e) => {
+            e.preventDefault();
+            promptInput.value = "Search Croissant datasets for: ";
+            promptInput.focus();
+        });
+        
+        document.getElementById('menu-settings').addEventListener('click', (e) => {
+            e.preventDefault();
+            promptInput.value = "Show settings";
+            sendMessage();
+        });
+
+        // Load models on startup
+        async function loadModels() {
+            try {
+                const res = await fetch('/gateway/v1/models');
+                const data = await res.json();
+                
+                modelSelect.innerHTML = '';
+                if (data.data && data.data.length > 0) {
+                    data.data.forEach(model => {
+                        const opt = document.createElement('option');
+                        opt.value = model.id;
+                        opt.textContent = model.display_name || model.id;
+                        modelSelect.appendChild(opt);
+                    });
+                } else {
+                    modelSelect.innerHTML = '<option value="">No models found</option>';
+                }
+            } catch (err) {
+                console.error("Failed to load models", err);
+                modelSelect.innerHTML = '<option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>';
+            }
+        }
+        
+        async function loadTools() {
+            try {
+                const res = await fetch('/gateway/v1/tools');
+                if (res.ok) {
+                    availableTools = await res.json();
+                    console.log("Loaded tools:", availableTools.length);
+                }
+            } catch (err) {
+                console.error("Failed to load tools", err);
+            }
+        }
+        
+        loadModels();
+        loadTools();
+
+        function appendMessage(role, content) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${role}`;
+            
+            const avatarDiv = document.createElement('div');
+            avatarDiv.className = 'avatar';
+            avatarDiv.textContent = role === 'user' ? 'U' : 'AI';
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.innerHTML = marked.parse(content);
+            
+            msgDiv.appendChild(avatarDiv);
+            msgDiv.appendChild(contentDiv);
+            chatHistory.appendChild(msgDiv);
+            
+            // Scroll to bottom
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+            return { msgDiv, contentDiv };
+        }
+        
+        async function executeTool(toolName, args, contentDiv) {
+            const toolId = 'tool-' + Math.random().toString(36).substr(2, 9);
+            contentDiv.innerHTML += `<div id="${toolId}" style="background:#f0f0f0; padding:10px; border-radius:5px; margin-top:10px; font-family:monospace; font-size:12px; border-left: 3px solid #0066cc;">
+                <span style="font-weight:bold; color:#0066cc;">⚙️ Running tool: ${toolName}</span> <span class="typing"><span>.</span><span>.</span><span>.</span></span>
+                <details style="margin-top:5px; cursor:pointer; color:#555;"><summary>View Arguments</summary><pre style="font-size:10px; white-space:pre-wrap;">${JSON.stringify(args, null, 2)}</pre></details>
+            </div>`;
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+            
+            let result;
+            try {
+                const res = await fetch('/gateway/v1/tools/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: toolName, arguments: args })
+                });
+                
+                if (!res.ok) {
+                    const errText = await res.text();
+                    result = [{ type: "text", text: `Error: ${res.status} - ${errText}` }];
+                } else {
+                    result = await res.json();
+                }
+            } catch (err) {
+                result = [{ type: "text", text: `Error: ${err.message}` }];
+            }
+
+            const toolDiv = document.getElementById(toolId);
+            if (toolDiv) {
+                let resText = "No output";
+                if (result && result.length > 0 && result[0].text) resText = result[0].text;
+                // Escape HTML tags to prevent rendering issues in pre block
+                resText = resText.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                
+                toolDiv.innerHTML = `
+                    <span style="font-weight:bold; color:#008800;">✅ Tool finished: ${toolName}</span>
+                    <details style="margin-top:5px; cursor:pointer; color:#555;"><summary>View Result</summary><pre style="font-size:10px; white-space:pre-wrap; max-height:200px; overflow-y:auto; background:#fff; padding:5px; border:1px solid #ccc;">${resText}</pre></details>
+                `;
+                chatHistory.scrollTop = chatHistory.scrollHeight;
+            }
+            return result;
+        }
+
+        async function sendMessage(isToolCallback = false, toolCallbackData = null) {
+            if (!isToolCallback) {
+                const text = promptInput.value.trim();
+                if (!text) return;
+                
+                // Add to UI
+                appendMessage('user', text);
+                promptInput.value = '';
+                promptInput.style.height = 'auto';
+                
+                // Intercept static search queries to bypass LLM
+                const searchPrefix = "Search Croissant datasets for:";
+                if (text.startsWith(searchPrefix)) {
+                    const query = text.substring(searchPrefix.length).trim();
+                    if (query) {
+                        const ui = appendMessage('assistant', '<p>Searching Elasticsearch<span class="typing"><span>.</span><span>.</span><span>.</span></span></p>');
+                        
+                        executeTool('elasticsearch_fulltext_search', { q: query, format: "vault_list", limit: 10 }, ui.contentDiv).then(result => {
+                            let resText = "No records found.";
+                            if (result && result.length > 0 && result[0].text) resText = result[0].text;
+                            resText = resText.replace(/\n---\nSYSTEM INSTRUCTION FOR LLM:.*$/g, '');
+                            const backBtnHTML = '<button onclick="this.closest(\'.message\').remove()" style="margin-bottom:15px; padding:6px 12px; background:var(--button-bg); color:white; border:none; border-radius:4px; cursor:pointer; font-size:0.9rem;">&larr; Back</button>\n\n';
+                            ui.contentDiv.innerHTML = backBtnHTML + marked.parse(resText);
+                            chatHistory.scrollTop = chatHistory.scrollHeight;
+                        });
+                        return; // Stop execution to bypass LLM
+                    }
+                }
+                
+                // Save to history tracking
+                currentInteraction = {
+                    prompt: text,
+                    date: new Date().toISOString(),
+                    response: ""
+                };
+                chatHistoryStorage.push(currentInteraction);
+                
+                // Add to messages array
+                messages.push({ role: 'user', content: text });
+            } else {
+                // If it's a tool callback, messages array already has the user's tool_result
+            }
+            
+            const model = modelSelect.value || "claude-3-5-sonnet-20241022";
+            const apiKey = apiKeyInput.value.trim();
+            sendBtn.disabled = true;
+            
+            // Create placeholder for assistant response
+            let contentDiv = null;
+            if (!isToolCallback) {
+                const ui = appendMessage('assistant', '<p>Thinking<span class="typing"><span>.</span><span>.</span><span>.</span></span></p>');
+                contentDiv = ui.contentDiv;
+            } else {
+                const ui = appendMessage('assistant', '<p>Processing tool result<span class="typing"><span>.</span><span>.</span><span>.</span></span></p>');
+                contentDiv = ui.contentDiv;
+            }
+
+            try {
+                const headers = { 'Content-Type': 'application/json' };
+                if (apiKey) {
+                    headers['Authorization'] = `Bearer ${apiKey}`;
+                    headers['X-API-Key'] = apiKey;
+                }
+
+                const payload = {
+                    model: model,
+                    system: "You are the Semantic Croissant AI Assistant, connected to an MCP (Model Context Protocol) server. You have access to various tools to interact with the system, such as reading from the vault (read_vault_article), searching the web, and extracting variables. YOU MUST USE THESE TOOLS when the user asks you to read, search, or fetch data. Do not refuse to read the vault; instead, use the read_vault_article tool.",
+                    messages: messages,
+                    stream: true,
+                    max_tokens: 4096
+                };
+                if (availableTools.length > 0) {
+                    payload.tools = availableTools;
+                }
+
+                const response = await fetch('/gateway/v1/messages', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const err = await response.text();
+                    contentDiv.innerHTML = `<p style="color: #ff6b6b;">Error: ${response.status} - ${err}</p>`;
+                    sendBtn.disabled = false;
+                    return;
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+                let fullResponse = "";
+                
+                let currentToolCall = null;
+                let assistantMessageContent = []; // To store in messages array
+                
+                // Do not clear contentDiv immediately so the Thinking indicator stays visible
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n');
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                
+                                if (data.type === 'content_block_start') {
+                                    if (data.content_block && data.content_block.type === 'tool_use') {
+                                        currentToolCall = {
+                                            type: 'tool_use',
+                                            id: data.content_block.id,
+                                            name: data.content_block.name,
+                                            input_json: ""
+                                        };
+                                        assistantMessageContent.push(currentToolCall);
+                                    } else if (data.content_block && data.content_block.type === 'text') {
+                                        assistantMessageContent.push({ type: 'text', text: data.content_block.text });
+                                    }
+                                }
+                                
+                                else if (data.type === 'content_block_delta') {
+                                    if (data.delta && data.delta.type === 'text_delta') {
+                                        fullResponse += data.delta.text;
+                                        contentDiv.innerHTML = marked.parse(fullResponse);
+                                        chatHistory.scrollTop = chatHistory.scrollHeight;
+                                        
+                                        // Update the last text block in assistantMessageContent
+                                        for (let i = assistantMessageContent.length - 1; i >= 0; i--) {
+                                            if (assistantMessageContent[i].type === 'text') {
+                                                assistantMessageContent[i].text += data.delta.text;
+                                                break;
+                                            }
+                                        }
+                                    } else if (data.delta && data.delta.type === 'input_json_delta' && currentToolCall) {
+                                        currentToolCall.input_json += data.delta.partial_json;
+                                    }
+                                }
+                                
+                                else if (data.type === 'content_block_stop') {
+                                    if (currentToolCall) {
+                                        try {
+                                            currentToolCall.input = JSON.parse(currentToolCall.input_json);
+                                            delete currentToolCall.input_json; // clean up
+                                        } catch (e) {
+                                            console.error("Failed to parse tool JSON", currentToolCall.input_json);
+                                        }
+                                    }
+                                }
+                            } catch (e) {
+                                // Ignore parse errors for incomplete chunks
+                            }
+                        }
+                    }
+                }
+                
+                // If stream finished and no text was generated, clear the typing indicator
+                if (fullResponse.trim() === '') {
+                    contentDiv.innerHTML = '';
+                }
+                
+                // Save assistant message to history
+                messages.push({ role: 'assistant', content: assistantMessageContent });
+
+                // Hide empty assistant messages that resulted from processing a tool
+                if (isToolCallback && fullResponse.trim() === '' && (!currentToolCall || !currentToolCall.name)) {
+                    contentDiv.parentElement.style.display = 'none';
+                }
+                
+                // If a tool was called, execute it and automatically send the result
+                if (currentToolCall && currentToolCall.name) {
+                    const resultContent = await executeTool(currentToolCall.name, currentToolCall.input, contentDiv);
+                    
+                    // Append user message with tool result
+                    messages.push({
+                        role: 'user',
+                        content: [
+                            {
+                                type: 'tool_result',
+                                tool_use_id: currentToolCall.id,
+                                content: resultContent
+                            }
+                        ]
+                    });
+                    
+                    // Recursive call to send the tool result back
+                    await sendMessage(true);
+                    return;
+                }
+                
+                // Save final text to history interaction
+                if (currentInteraction) {
+                    if (isToolCallback && currentInteraction.response.trim() !== '') {
+                        currentInteraction.response += "\n\n" + fullResponse;
+                    } else {
+                        currentInteraction.response = fullResponse;
+                    }
+                    localStorage.setItem('ai_studio_history', JSON.stringify(chatHistoryStorage));
+                }
+                
+            } catch (err) {
+                console.error(err);
+                if (contentDiv) {
+                    contentDiv.innerHTML += `<p style="color: #ff6b6b;">Connection failed: ${err.message}</p>`;
+                }
+            } finally {
+                sendBtn.disabled = false;
+                if (!isToolCallback) promptInput.focus();
+            }
+        }
+
+        sendBtn.addEventListener('click', () => sendMessage(false));
+        
+        promptInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+        
+        // Simple auth check injected by server
+        document.getElementById('auth-status').innerHTML = `{{AUTH_STATUS}}`;
+    </script>
+</body>
+</html>

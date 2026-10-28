@@ -7,3 +7,9 @@
 [submodule "palefire"]
 	path = palefire
 	url = https://github.com/agstack/palefire
+[submodule "lot"]
+	path = lot
+	url = https://github.com/CA4EOSC/lot
+[submodule "tools/converters"]
+	path = tools/converters
+	url = https://github.com/codata/converters.git
