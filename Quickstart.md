@@ -87,11 +87,20 @@ cd ../..
 ```
 
 ### B. MinIO Base Image (if pulling `minio/minio:latest` is restricted)
-If your server cannot pull `minio/minio:latest` directly from Docker Hub, load the bundled tarball:
+Docker Compose defaults to the unrestricted public mirror `cgr.dev/chainguard/minio:latest`.
+
+If you prefer using the official Docker Hub image or a local archive, you can::
+1. Override via environment variable `MINIO_IMAGE=minio/minio:latest`
+2. Or load from a bundled tarball if available:
 ```bash
 if [ -f "minio-image.tar.gz" ]; then
     docker load -i minio-image.tar.gz
 fi
+```
+3. Or pull and retag the unrestricted Chainguard mirror as standard MinIO:
+```bash
+docker pull cgr.dev/chainguard/minio:latest
+docker tag cgr.dev/chainguard/minio:latest minio/minio:latest
 ```
 
 ### C. Build the Profile API Image
