@@ -6380,20 +6380,7 @@ Please answer the question based ONLY on the context provided above (including t
                 safe_q = re.sub(r'[^a-zA-Z0-9_-]', '_', q_param) if q_param else "all"
                 return build_export_response(resp_bytes, f"export_variables_{safe_q}.jsonld", cache_header="MISS")
 
-            target_url = raw_file_param or raw_url_param
-            if not target_url:
-                return JSONResponse({"error": "Missing 'file', 'url', or 'q' query parameter, e.g. /export?file=<file_url> or /export?q=<query>"}, status_code=400)
-
-            # Strip any accidental surrounding or trailing quotes/brackets (e.g. from copy-pasted URLs or JSON strings)
-            target_url = target_url.strip().strip("'\"`<>")
-            while target_url.endswith("%22") or target_url.endswith("%27"):
-                if target_url.endswith("%22"):
-                    target_url = target_url[:-3]
-                elif target_url.endswith("%27"):
-                    target_url = target_url[:-3]
-            target_url = target_url.strip().strip("'\"`<>")
-
-            ds_param = request.query_params.get("ds")
+            ds_param = request.query_params.get("ds") or request.query_params.get("dataset")
             ds_url = None
             if ds_param:
                 # Clean markdown links e.g. [https://doi.org/...](https://doi.org/...)
@@ -6406,6 +6393,118 @@ Please answer the question based ONLY on the context provided above (including t
                         ds_url = m_ds2.group(0).strip()
                     else:
                         ds_url = ds_param.strip()
+
+            target_url = raw_file_param or raw_url_param
+
+            # If ?ds= is provided without a ?file= parameter, export the dataset in Croissant (default) or convert to CDIF
+            if not target_url and ds_url:
+                es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+                base_host = f"https://{MCP_DOMAIN}"
+                req_format = request.query_params.get("format", "").lower().strip()
+
+                norm_doi = ds_url
+                if "doi.org/" in norm_doi:
+                    norm_doi = "https://doi.org/" + norm_doi.split("doi.org/")[-1]
+                h1 = hashlib.sha256(norm_doi.encode("utf-8")).hexdigest()[:16]
+
+                croissant_doc = None
+                matched_id = None
+                try:
+                    async with httpx.AsyncClient(timeout=20.0) as es_ds_client:
+                        # Try direct hash lookup in croissant index
+                        r_c = await es_ds_client.get(f"{es_url}/croissant/_doc/{h1}")
+                        if r_c.status_code == 200:
+                            croissant_doc = r_c.json().get("_source", {})
+                            matched_id = h1
+                        else:
+                            # Try querying by url or identifier across croissant and dataverse indices
+                            es_q = {
+                                "query": {
+                                    "bool": {
+                                        "should": [
+                                            {"term": {"url.keyword": ds_url}},
+                                            {"term": {"url.keyword": norm_doi}},
+                                            {"term": {"identifier.keyword": ds_url}},
+                                            {"term": {"identifier.keyword": norm_doi}},
+                                            {"match_phrase": {"url": norm_doi}}
+                                        ]
+                                    }
+                                },
+                                "size": 1
+                            }
+                            r_search = await es_ds_client.post(f"{es_url}/croissant,dataverse/_search", json=es_q)
+                            if r_search.status_code == 200:
+                                hits = r_search.json().get("hits", {}).get("hits", [])
+                                if hits:
+                                    croissant_doc = hits[0].get("_source", {})
+                                    matched_id = hits[0].get("_id")
+                except Exception as e_ds:
+                    print(f"Error fetching dataset document: {e_ds}", file=sys.stderr)
+
+                if croissant_doc:
+                    clean_doc = {k: v for k, v in croissant_doc.items() if not k.startswith("_")}
+
+                    # If cdif format explicitly requested, convert to CDIF
+                    if req_format in ["cdif", "ddi-cdi"]:
+                        cdif_service = os.environ.get("CDIF_SERVICE") or os.environ.get("CDIF_CONVERTER_URL", "http://converters:8000")
+                        if cdif_service.isdigit():
+                            cdif_converter_url = f"http://localhost:{cdif_service}".rstrip("/")
+                        elif ":" not in cdif_service and not cdif_service.startswith("http"):
+                            cdif_converter_url = f"http://{cdif_service}".rstrip("/")
+                        elif not cdif_service.startswith("http://") and not cdif_service.startswith("https://"):
+                            cdif_converter_url = f"http://{cdif_service}".rstrip("/")
+                        else:
+                            cdif_converter_url = cdif_service.rstrip("/")
+
+                        if "localhost:8082" in cdif_converter_url or "127.0.0.1:8082" in cdif_converter_url:
+                            cdif_converter_url = "http://converters:8000"
+
+                        conv_files = {
+                            "file": ("dataset.json", json.dumps(clean_doc).encode("utf-8"), "application/json")
+                        }
+                        conv_data = {"target_format": "cdif"}
+                        try:
+                            async with httpx.AsyncClient(timeout=45.0) as cdif_fetch_client:
+                                r_conv = await cdif_fetch_client.post(
+                                    f"{cdif_converter_url}/api/convert",
+                                    files=conv_files,
+                                    data=conv_data,
+                                    timeout=45.0
+                                )
+                                if r_conv.status_code == 200:
+                                    conv_res = r_conv.json()
+                                    converted_cdif = conv_res[0] if isinstance(conv_res, list) and conv_res else conv_res
+                                    if isinstance(converted_cdif, dict):
+                                        converted_cdif["@id"] = f"{base_host}/export?ds={urllib.parse.quote(ds_url, safe='')}"
+                                    resp_bytes = json.dumps(converted_cdif, indent=2).encode("utf-8")
+                                    return build_export_response(resp_bytes, "export_dataset_cdif.jsonld", cache_header="MISS")
+                        except Exception as conv_err:
+                            print(f"Error converting dataset to CDIF: {conv_err}", file=sys.stderr)
+
+                    # Default: Export dataset directly in Croissant JSON-LD format
+                    if "@context" not in clean_doc:
+                        clean_doc["@context"] = {
+                            "@vocab": "https://schema.org/",
+                            "cr": "http://mlcommons.org/croissant/",
+                            "rai": "http://mlcommons.org/croissant/RAI/"
+                        }
+                    clean_doc["@id"] = f"{base_host}/export?ds={urllib.parse.quote(ds_url, safe='')}"
+                    resp_bytes = json.dumps(clean_doc, indent=2).encode("utf-8")
+                    return build_export_response(resp_bytes, "export_dataset_croissant.jsonld", cache_header="HIT")
+                else:
+                    return JSONResponse({"error": f"Dataset with identifier/URL '{ds_url}' not found in indexed croissant records."}, status_code=404)
+
+            if not target_url:
+                return JSONResponse({"error": "Missing 'file', 'url', 'ds', or 'q' query parameter, e.g. /export?ds=<dataset_doi> or /export?file=<file_url>"}, status_code=400)
+
+            # Strip any accidental surrounding or trailing quotes/brackets (e.g. from copy-pasted URLs or JSON strings)
+            target_url = target_url.strip().strip("'\"`<>")
+            while target_url.endswith("%22") or target_url.endswith("%27"):
+                if target_url.endswith("%22"):
+                    target_url = target_url[:-3]
+                elif target_url.endswith("%27"):
+                    target_url = target_url[:-3]
+            target_url = target_url.strip().strip("'\"`<>")
 
             base_host = f"https://{MCP_DOMAIN}"
 
