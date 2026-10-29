@@ -803,6 +803,22 @@
             </div>
             <div id="var-qa-vault-alert" style="display: none; margin-bottom: 12px; padding: 8px 12px; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 6px; font-size: 0.84rem; color: #065f46;"></div>
             <div id="var-qa-content" style="line-height: 1.6; font-size: 0.88rem;"></div>
+
+            <!-- Bottom Action Menu for Variables AI Analysis -->
+            <div id="var-qa-bottom-actions" style="display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 14px; padding-top: 10px; border-top: 1px solid #d1fae5;">
+                <button id="var-qa-save-btn-bottom" onclick="saveVarQaToVault()" class="btn-modern" style="padding: 3px 10px; font-size: 0.75rem; display: inline-flex; align-items: center; gap: 4px; background: #059669; color: white; border: none; font-weight: 600;" title="Save document to Vault and link CDIF export file">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                    <span id="var-qa-save-btn-text-bottom">Save</span>
+                </button>
+                <button id="var-qa-download-md-btn-bottom" onclick="downloadVarQaMarkdown()" class="btn-modern" style="padding: 3px 8px; font-size: 0.75rem; display: inline-flex; align-items: center; gap: 4px; color: #6366f1; border-color: #c7d2fe;" title="Download explanation and variable references as Markdown file">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    <span>Download .md</span>
+                </button>
+                <button id="var-qa-copy-btn-bottom" onclick="copyVarQaResult()" class="btn-modern" style="padding: 3px 8px; font-size: 0.75rem;">
+                    <span>Copy</span>
+                </button>
+                <button onclick="document.getElementById('var-qa-result').style.display='none'" style="background: transparent; border: none; font-size: 1.3rem; color: var(--text-muted); cursor: pointer; line-height: 1;" title="Close">&times;</button>
+            </div>
         </div>
 
         <!-- Filter & Search Controls Bar -->
@@ -1520,6 +1536,8 @@
 
             const saveBtn = document.getElementById('var-qa-save-btn');
             const saveBtnText = document.getElementById('var-qa-save-btn-text');
+            const saveBtnBottom = document.getElementById('var-qa-save-btn-bottom');
+            const saveBtnTextBottom = document.getElementById('var-qa-save-btn-text-bottom');
             const alertBox = document.getElementById('var-qa-vault-alert');
             const searchInput = document.getElementById('var-search-input');
             const queryStr = searchInput ? searchInput.value.trim() : '';
@@ -1534,6 +1552,8 @@
 
             if (saveBtn) saveBtn.disabled = true;
             if (saveBtnText) saveBtnText.textContent = 'Saving...';
+            if (saveBtnBottom) saveBtnBottom.disabled = true;
+            if (saveBtnTextBottom) saveBtnTextBottom.textContent = 'Saving...';
 
             try {
                 const res = await fetch('/api/variables/explain/save', {
@@ -1570,14 +1590,19 @@
                 }
 
                 if (saveBtnText) saveBtnText.textContent = 'Saved ✓';
+                if (saveBtnTextBottom) saveBtnTextBottom.textContent = 'Saved ✓';
                 setTimeout(() => {
                     if (saveBtn) saveBtn.disabled = false;
                     if (saveBtnText) saveBtnText.textContent = 'Save';
+                    if (saveBtnBottom) saveBtnBottom.disabled = false;
+                    if (saveBtnTextBottom) saveBtnTextBottom.textContent = 'Save';
                 }, 3000);
             } catch (err) {
                 alert('Error saving to Vault: ' + err.message);
                 if (saveBtn) saveBtn.disabled = false;
                 if (saveBtnText) saveBtnText.textContent = 'Save';
+                if (saveBtnBottom) saveBtnBottom.disabled = false;
+                if (saveBtnTextBottom) saveBtnTextBottom.textContent = 'Save';
             }
         }
 

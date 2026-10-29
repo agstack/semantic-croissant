@@ -1174,6 +1174,23 @@
                             </div>
                             <div id="var-qa-vault-alert" style="display: none; margin-bottom: 12px; padding: 8px 12px; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 6px; font-size: 0.84rem; color: #065f46;"></div>
                             <div id="var-qa-content" style="line-height: 1.6;"></div>
+
+                            <!-- Bottom Action Menu for Variables AI Analysis -->
+                            <div id="var-qa-bottom-actions" style="display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin-top: 14px; padding-top: 10px; border-top: 1px solid #bbf7d0;">
+                                <button id="var-qa-save-btn-bottom" onclick="saveCollectionVarQaToVault()" title="Save document to Vault and link CDIF export file" style="padding: 4px 10px; background: #059669; border: 1px solid #059669; border-radius: 5px; color: #ffffff; cursor: pointer; font-size: 0.8rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                                    <span id="var-qa-save-btn-text-bottom">Save</span>
+                                </button>
+                                <button id="var-qa-download-md-btn-bottom" onclick="exportVarQaMarkdown()" title="Download explanation as Markdown file" style="padding: 4px 10px; background: #ffffff; border: 1px solid #c7d2fe; border-radius: 5px; color: #4338ca; cursor: pointer; font-size: 0.8rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                    <span>Download .md</span>
+                                </button>
+                                <button id="var-qa-copy-btn-bottom" onclick="copyVarQaResult()" title="Copy response to clipboard" style="padding: 4px 10px; background: #ffffff; border: 1px solid #86efac; border-radius: 5px; color: #166534; cursor: pointer; font-size: 0.8rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                                    <span>Copy</span>
+                                </button>
+                                <button onclick="document.getElementById('var-qa-result').style.display='none'" title="Close" style="background: transparent; border: none; font-size: 1.25rem; color: #4b5563; cursor: pointer; line-height: 1; padding: 0 4px; margin-left: 4px;">&times;</button>
+                            </div>
                         </div>
 
 
@@ -2185,6 +2202,8 @@
 
             const saveBtn = document.getElementById('var-qa-save-btn');
             const saveBtnText = document.getElementById('var-qa-save-btn-text');
+            const saveBtnBottom = document.getElementById('var-qa-save-btn-bottom');
+            const saveBtnTextBottom = document.getElementById('var-qa-save-btn-text-bottom');
             const alertBox = document.getElementById('var-qa-vault-alert');
             const searchInput = document.getElementById('var-quick-filter');
             const queryStr = searchInput ? searchInput.value.trim() : '';
@@ -2199,6 +2218,8 @@
 
             if (saveBtn) saveBtn.disabled = true;
             if (saveBtnText) saveBtnText.textContent = 'Saving...';
+            if (saveBtnBottom) saveBtnBottom.disabled = true;
+            if (saveBtnTextBottom) saveBtnTextBottom.textContent = 'Saving...';
             if (alertBox) alertBox.style.display = 'none';
 
             try {
@@ -2242,6 +2263,8 @@
             } finally {
                 if (saveBtn) saveBtn.disabled = false;
                 if (saveBtnText) saveBtnText.textContent = 'Save';
+                if (saveBtnBottom) saveBtnBottom.disabled = false;
+                if (saveBtnTextBottom) saveBtnTextBottom.textContent = 'Save';
             }
         }
 
