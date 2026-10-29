@@ -1903,4 +1903,85 @@ async def api_validate_proxy(request: Request):
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
+@app.api_route("/api/variables/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def api_variables_proxy(path: str, request: Request):
+    import httpx
+    from fastapi import Response, HTTPException
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    body = await request.body()
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        try:
+            resp = await client.request(
+                request.method,
+                f"http://mcp:7070/api/variables/{path}",
+                headers=headers,
+                params=dict(request.query_params),
+                content=body
+            )
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+@app.api_route("/api/variableindex/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def api_variableindex_proxy(path: str, request: Request):
+    import httpx
+    from fastapi import Response, HTTPException
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    body = await request.body()
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        try:
+            resp = await client.request(
+                request.method,
+                f"http://mcp:7070/api/variableindex/{path}",
+                headers=headers,
+                params=dict(request.query_params),
+                content=body
+            )
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+@app.api_route("/api/collections/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def api_collections_sub_proxy(path: str, request: Request):
+    import httpx
+    from fastapi import Response, HTTPException
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    body = await request.body()
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        try:
+            resp = await client.request(
+                request.method,
+                f"http://mcp:7070/api/collections/{path}",
+                headers=headers,
+                params=dict(request.query_params),
+                content=body
+            )
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+@app.api_route("/api/collections", methods=["GET", "POST"])
+async def api_collections_proxy(request: Request):
+    import httpx
+    from fastapi import Response, HTTPException
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    body = await request.body()
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        try:
+            resp = await client.request(
+                request.method,
+                f"http://mcp:7070/api/collections",
+                headers=headers,
+                params=dict(request.query_params),
+                content=body
+            )
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+
 
