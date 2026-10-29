@@ -75,6 +75,10 @@ This export includes atmospheric and soil temperature observations across statio
         print(f"[*] GET /vault/doc/raw/{doc_id} status: {raw_resp.status_code}")
         assert raw_resp.status_code == 200, f"Expected 200 from raw, got {raw_resp.status_code}"
         assert "air_temp" in raw_resp.text, "Saved content not found in raw markdown"
+        assert "### Files & Distributions" in raw_resp.text, "Files & Distributions table missing from raw markdown"
+        assert f"{doc_id}.md" in raw_resp.text, "Markdown document missing from distribution table"
+        assert "cdif_export.jsonld" in raw_resp.text, "CDIF export missing from distribution table"
+        assert "weather_data.csv" in raw_resp.text, "Source data file missing from distribution table"
 
         # 3. Test GET /vault/{doc_id}.jsonld
         jsonld_resp = client.get(f"{API_BASE}/vault/{doc_id}.jsonld")
@@ -82,6 +86,7 @@ This export includes atmospheric and soil temperature observations across statio
         assert jsonld_resp.status_code == 200, f"Expected 200 from jsonld, got {jsonld_resp.status_code}"
         jsonld_data = jsonld_resp.json()
         assert jsonld_data.get("@type") == ["Dataset", "cdif:DiscoveryProfile"], f"Unexpected type: {jsonld_data.get('@type')}"
+        assert len(jsonld_data.get("distribution", [])) >= 3, "Missing distributions in JSON-LD metadata"
 
         # 4. Test GET /vault/doc/{doc_id} with browser User-Agent
         html_resp = client.get(
@@ -91,6 +96,14 @@ This export includes atmospheric and soil temperature observations across statio
         print(f"[*] GET /vault/doc/{doc_id} status: {html_resp.status_code}")
         assert html_resp.status_code == 200, f"Expected 200 for HTML viewer, got {html_resp.status_code}"
         assert "doc_viewer" in html_resp.text or "Markdown Viewer" in html_resp.text
+
+        # 5. Test GET /vault/doc/{doc_id}.md with browser User-Agent
+        html_md_resp = client.get(
+            f"{API_BASE}/vault/doc/{doc_id}.md",
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"}
+        )
+        print(f"[*] GET /vault/doc/{doc_id}.md status: {html_md_resp.status_code}")
+        assert html_md_resp.status_code == 200, f"Expected 200 for .md viewer, got {html_md_resp.status_code}"
 
     print("[SUCCESS] All analysis save and document load tests passed!")
 

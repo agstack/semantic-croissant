@@ -12282,7 +12282,88 @@ CDIF EXPORT VARIABLES CONTEXT:
 
             # Create Croissant JSON-LD payload
             timestamp_iso = datetime.datetime.utcnow().isoformat() + "Z"
-            doc_id = hashlib.sha256((full_markdown + cdif_export_url).encode("utf-8")).hexdigest()[:16]
+            
+            # Temporary hash placeholder or deterministic id
+            content_hash_seed = (full_markdown + cdif_export_url).encode("utf-8")
+            doc_id = hashlib.sha256(content_hash_seed).hexdigest()[:16]
+
+            # Build distributions list for JSON-LD and Markdown table
+            distribution_list = [
+                {
+                    "@type": "DataDownload",
+                    "name": f"{doc_id}.md",
+                    "title": "Analysis & Scientific Explanation Markdown",
+                    "contentUrl": f"https://{MCP_DOMAIN}/vault/{doc_id}.md",
+                    "encodingFormat": "text/markdown"
+                },
+                {
+                    "@type": "DataDownload",
+                    "name": "cdif_export.jsonld",
+                    "title": "Complete CDIF 1.1 / DDI-CDI Export Payload",
+                    "contentUrl": cdif_export_url,
+                    "encodingFormat": "application/ld+json"
+                }
+            ]
+
+            # Collect source files from variables without duplicates
+            seen_source_files = set()
+            for v in variables:
+                f_name = v.get("file_name") or ""
+                f_url = v.get("file_url") or ""
+                f_title = v.get("dataset_title") or v.get("display_label") or f_name
+                ds_url = v.get("dataset_url") or ""
+                
+                key = (f_name, f_url)
+                if (f_name or f_url) and key not in seen_source_files:
+                    seen_source_files.add(key)
+                    dist_entry = {
+                        "@type": "DataDownload",
+                        "name": f_name or "Source Data File",
+                        "title": f_title,
+                        "encodingFormat": "text/csv" if (f_name.endswith('.csv') or f_url.endswith('.csv')) else "application/octet-stream"
+                    }
+                    if f_url:
+                        dist_entry["contentUrl"] = f_url
+                    if ds_url:
+                        dist_entry["isBasedOn"] = ds_url
+                    distribution_list.append(dist_entry)
+
+            # Build markdown table for Files & Distributions if not already in markdown
+            if "### Files & Distributions" not in full_markdown:
+                import urllib.parse
+                dist_md_rows = [
+                    "\n\n---\n### Files & Distributions\n",
+                    "| File | Title | Format | Size | Download | CDIF | Tools |",
+                    "|---|---|---|---|:---:|:---:|:---:|"
+                ]
+                for d in distribution_list:
+                    d_name = d.get("name") or "File"
+                    d_title = d.get("title") or "-"
+                    fmt = d.get("encodingFormat") or "-"
+                    size = d.get("contentSize") or "-"
+                    curl = d.get("contentUrl") or ""
+                    dl_str = f"[📥]({curl})" if curl else "-"
+                    tools_str = "[⚙️](#tools)" if curl else "-"
+                    cdif_str = "-"
+                    if curl:
+                        if d_name == "cdif_export.jsonld":
+                            cdif_str = f"[⚡]({curl})"
+                        else:
+                            ds_for_export = d.get("isBasedOn") or ""
+                            if ds_for_export:
+                                exp_href = f"/export?ds={urllib.parse.quote(ds_for_export, safe='')}&file={urllib.parse.quote(curl, safe='')}"
+                            else:
+                                exp_href = f"/export?file={urllib.parse.quote(curl, safe='')}"
+                            cdif_str = f"[⚡]({exp_href})"
+                    
+                    clean_name = str(d_name).replace('|', '\\|')
+                    clean_title = str(d_title).replace('|', '\\|').replace('\n', ' ')
+                    clean_fmt = str(fmt).replace('|', '\\|')
+                    clean_size = str(size).replace('|', '\\|')
+                    dist_md_rows.append(f"| **{clean_name}** | {clean_title} | {clean_fmt} | {clean_size} | {dl_str} | {cdif_str} | {tools_str} |")
+                
+                dist_md_rows.append("\n")
+                full_markdown += "\n".join(dist_md_rows)
 
             jsonld_metadata = {
                 "@context": {
@@ -12309,20 +12390,7 @@ CDIF EXPORT VARIABLES CONTEXT:
                         "url": cdif_export_url
                     }
                 ],
-                "distribution": [
-                    {
-                        "@type": "DataDownload",
-                        "name": f"{doc_id}.md",
-                        "contentUrl": f"https://{MCP_DOMAIN}/vault/{doc_id}.md",
-                        "encodingFormat": "text/markdown"
-                    },
-                    {
-                        "@type": "DataDownload",
-                        "name": "cdif_export.jsonld",
-                        "contentUrl": cdif_export_url,
-                        "encodingFormat": "application/ld+json"
-                    }
-                ]
+                "distribution": distribution_list
             }
 
             try:

@@ -1730,11 +1730,13 @@
                         }
                     }
                     if (!isCroissantRendered) {
-                        // Check if a companion Croissant dataset exists to show a linking banner
+                        // Check if a companion Croissant dataset exists to show a linking banner and Files & Distributions table
                         let croissantBanner = '';
+                        let companionCroissant = null;
                         try {
                             const checkCroissant = await fetch(`/vault/${docId}.jsonld`);
                             if (checkCroissant.ok) {
+                                companionCroissant = await checkCroissant.json();
                                 croissantBanner = `<div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 10px 16px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
                                     <div style="display: flex; align-items: center; gap: 8px; font-size: 0.95rem; color: #1e3a8a;">
                                         <span style="font-size: 1.2rem;">🥐</span>
@@ -1753,6 +1755,45 @@
                         markdown = markdown.replace(/\|\s*\*\*_(?:source_url|markdown_text|full_text)\*\*\s*\|[^\n]*\n?/g, '');
                         // Transform legacy Files & Distributions bullet list into a clean table
                         markdown = transformDistributionsToTable(markdown);
+
+                        // If markdown still doesn't have a Files & Distributions section, but companion Croissant has distributions, append table
+                        if (!markdown.includes('### Files & Distributions') && companionCroissant) {
+                            const dists = companionCroissant.distribution || companionCroissant.fileObject || companionCroissant.fileSet;
+                            if (dists && Array.isArray(dists) && dists.length > 0) {
+                                const distRows = [
+                                    '\n\n---\n### Files & Distributions\n',
+                                    '| File | Title | Format | Size | Download | CDIF | Tools |',
+                                    '|---|---|---|---|:---:|:---:|:---:|'
+                                ];
+                                const dsForExport = companionCroissant.url || companionCroissant.identifier || '';
+                                dists.forEach(d => {
+                                    const dName = d.name || d['@id'] || 'File';
+                                    const dTitle = d.title || d.description || d.headline || d.alternateName || '-';
+                                    const fmt = d.encodingFormat || '-';
+                                    const size = d.contentSize || '-';
+                                    const curl = d.contentUrl || '';
+                                    const dlStr = curl ? `[📥](${curl})` : '-';
+                                    const toolsStr = curl ? '[⚙️](#tools)' : '-';
+                                    let cdifStr = '-';
+                                    if (curl) {
+                                        if (dName === 'cdif_export.jsonld' || curl.includes('/export?')) {
+                                            cdifStr = `[⚡](${curl})`;
+                                        } else {
+                                            const expHref = dsForExport ? `/export?ds=${encodeURIComponent(dsForExport)}&file=${encodeURIComponent(curl)}` : `/export?file=${encodeURIComponent(curl)}`;
+                                            cdifStr = `[⚡](${expHref})`;
+                                        }
+                                    }
+                                    const cleanName = String(dName).replace(/\|/g, '\\|');
+                                    const cleanTitle = String(dTitle).replace(/\|/g, '\\|').replace(/\n/g, ' ');
+                                    const cleanFmt = String(fmt).replace(/\|/g, '\\|');
+                                    const cleanSize = String(size).replace(/\|/g, '\\|');
+                                    distRows.push(`| **${cleanName}** | ${cleanTitle} | ${cleanFmt} | ${cleanSize} | ${dlStr} | ${cdifStr} | ${toolsStr} |`);
+                                });
+                                distRows.push('\n');
+                                markdown += distRows.join('\n');
+                            }
+                        }
+
                         if (croissantBanner) {
                             markdown = croissantBanner + markdown;
                         }
