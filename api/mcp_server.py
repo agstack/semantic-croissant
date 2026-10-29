@@ -1533,10 +1533,12 @@ async def store_in_vault(content: str, prefix: str = "custom", jsonld_payload: s
                 payload_dict["distribution"] = [payload_dict["distribution"]]
                 
             if isinstance(payload_dict.get("distribution"), list):
+                doc_title = payload_dict.get("name") or payload_dict.get("headline") or f"{prefix} Content"
                 md_dist = {
                     "@type": "cr:FileObject",
                     "name": f"{prefix} Content",
-                    "description": "The unstructured or semi-structured content related to this semantic dataset.",
+                    "title": doc_title,
+                    "description": payload_dict.get("description") or "The unstructured or semi-structured content related to this semantic dataset.",
                     "contentUrl": md_url,
                     "encodingFormat": "text/csv" if file_ext == ".csv" else "text/markdown"
                 }
@@ -12292,14 +12294,16 @@ CDIF EXPORT VARIABLES CONTEXT:
                 {
                     "@type": "DataDownload",
                     "name": f"{doc_id}.md",
-                    "title": "Analysis & Scientific Explanation Markdown",
+                    "title": title,
+                    "description": f"Analysis & Scientific Explanation Markdown for {title}",
                     "contentUrl": f"https://{MCP_DOMAIN}/vault/{doc_id}.md",
                     "encodingFormat": "text/markdown"
                 },
                 {
                     "@type": "DataDownload",
                     "name": "cdif_export.jsonld",
-                    "title": "Complete CDIF 1.1 / DDI-CDI Export Payload",
+                    "title": f"Complete CDIF 1.1 Export: {title}",
+                    "description": f"Complete CDIF 1.1 / DDI-CDI Export Payload for {title}",
                     "contentUrl": cdif_export_url,
                     "encodingFormat": "application/ld+json"
                 }

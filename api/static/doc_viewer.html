@@ -1483,7 +1483,16 @@
                         
                         dists.forEach((d, idx) => {
                             const name = d.name || d['@id'] || 'File';
-                            const title = d.title || d.description || d.headline || d.alternateName || '-';
+                            let title = d.title || d.description || d.headline || d.alternateName || '';
+                            if (!title || title === '-') {
+                                if (name.endsWith('.md') || (d.contentUrl && d.contentUrl.endsWith('.md'))) {
+                                    title = data.name || data.headline || 'Document Content (Markdown)';
+                                } else if (name === 'cdif_export.jsonld' || (d.contentUrl && d.contentUrl.includes('/export?'))) {
+                                    title = `Complete CDIF 1.1 / DDI-CDI Export Payload (${data.name || 'Dataset'})`;
+                                } else {
+                                    title = '-';
+                                }
+                            }
                             const fmt = d.encodingFormat ? `<span class="dist-badge-format">${d.encodingFormat}</span>` : '-';
                             const size = d.contentSize ? `<span style="color: #666; font-size: 0.85rem;">${d.contentSize}</span>` : '-';
                             let actHtml = '-';
@@ -1768,7 +1777,16 @@
                                 const dsForExport = companionCroissant.url || companionCroissant.identifier || '';
                                 dists.forEach(d => {
                                     const dName = d.name || d['@id'] || 'File';
-                                    const dTitle = d.title || d.description || d.headline || d.alternateName || '-';
+                                    let dTitle = d.title || d.description || d.headline || d.alternateName || '';
+                                    if (!dTitle || dTitle === '-') {
+                                        if (dName.endsWith('.md') || (d.contentUrl && d.contentUrl.endsWith('.md'))) {
+                                            dTitle = companionCroissant.name || companionCroissant.headline || 'Document Content (Markdown)';
+                                        } else if (dName === 'cdif_export.jsonld' || (d.contentUrl && d.contentUrl.includes('/export?'))) {
+                                            dTitle = `Complete CDIF 1.1 / DDI-CDI Export Payload (${companionCroissant.name || 'Dataset'})`;
+                                        } else {
+                                            dTitle = '-';
+                                        }
+                                    }
                                     const fmt = d.encodingFormat || '-';
                                     const size = d.contentSize || '-';
                                     const curl = d.contentUrl || '';
