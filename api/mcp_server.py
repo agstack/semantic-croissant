@@ -12178,14 +12178,19 @@ Your task:
 3. Provide a structured **Reference Table of All Exported Variables**:
    - Link every variable, its physical data type, its unit of measure, its source file, and its parent dataset (with Markdown links).
 
-4. Outline **Harmonization, Interoperability & FAIR Implementation**:
-   - Provide concrete recommendations using CDIF 1.1, schema:variableMeasured, and FAIR principles for multi-domain cross-linkage.
+4. Provide an explicit, practical **FAIR Recommendations** section with concrete examples based directly on these variables:
+   - **Findable**: Actionable PID and metadata rules (e.g., Assign a persistent identifier (PID/DOI/ARK) to the harmonized longitudinal or merged version of these variables; register variables in a domain ontology catalog).
+   - **Accessible**: Machine-readable format and cross-format mapping (e.g., Ensure mapping between heterogeneous file formats like `.sav` (SPSS), `.dta` (Stata), NetCDF, and CSV is documented in machine-readable JSON-LD / Croissant metadata with open distribution endpoints).
+   - **Interoperable**:
+     * **Vocabularies**: Explicitly mandate ontologies and vocabularies like QUDT (Quantity, Unit, Dimension, Type, e.g. `unit:USD_per_Gallon`, `unit:DEG_C`), UCUM, or CF-conventions for physical/economic quantities.
+     * **Standardization**: Mandate international standards such as ISO 8601 (`YYYY-MM-DD` / `YYYY-MM-DDThh:mm:ssZ`) for temporal dates/survey waves to enable computational time-series analysis, WGS84 (EPSG:4326) for geospatial coordinates, and standard ISO country/currency codes.
+   - **Reusable**: Clear provenance and codebook definitions (e.g., Provide a machine-readable codebook / data dictionary explicitly defining categorical integer codes, e.g. 1 = Strongly Oppose, 5 = Strongly Support, or missing value flags like -999, along with clear ODRL/CC licensing).
 
 CDIF EXPORT VARIABLES CONTEXT:
 {vars_text}
 """
 
-            user_prompt = f"Please explain the filtered CDIF export results. Make it explicit which variables from which topics should be measured in the first place, and provide a comprehensive Executive Summary & Scientific Overview with full dataset/file references in markdown."
+            user_prompt = f"Please explain the filtered CDIF export results. Make it explicit which variables from which topics should be measured in the first place, update Executive Summary & Scientific Overview, and include a dedicated 'FAIR Recommendations' section (Findable, Accessible, Interoperable, Reusable) with concrete vocabulary and standardization examples in markdown."
 
             ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
             if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
