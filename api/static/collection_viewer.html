@@ -1112,10 +1112,41 @@
                         <!-- Variables AI Ask Response Panel -->
                         <div id="var-qa-result" style="display: none; margin-bottom: 20px; padding: 16px 20px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; font-size: 0.95rem; color: #1f2937; position: relative;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid #dcfce7; padding-bottom: 8px; gap: 10px; flex-wrap: wrap;">
-                                <strong style="color: #166534; display: flex; align-items: center; gap: 6px;">
-                                    <span>🤖 AI Variable Analysis</span>
-                                </strong>
+                                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                                    <strong style="color: #166534; display: flex; align-items: center; gap: 6px;">
+                                        <span>🤖 AI Variable Analysis</span>
+                                    </strong>
+                                    <!-- Model Selector and Run Button -->
+                                    <div style="display: inline-flex; align-items: center; gap: 4px; background: #ffffff; padding: 2px 6px; border-radius: 6px; border: 1px solid #86efac;">
+                                        <label for="var-qa-model-select" style="font-size: 0.75rem; font-weight: 600; color: #166534; text-transform: uppercase;">Model:</label>
+                                        <select id="var-qa-model-select" style="font-size: 0.78rem; padding: 2px 6px; border: 1px solid #bbf7d0; border-radius: 4px; background: #fff; color: #1f2937; outline: none; cursor: pointer;">
+                                            <option value="gemma4:31b-cloud" selected>gemma4:31b-cloud (Default)</option>
+                                            <option value="glm-5.2:cloud">glm-5.2:cloud</option>
+                                            <option value="gemma4:12b">gemma4:12b</option>
+                                            <option value="cdif-expert:latest">cdif-expert:latest</option>
+                                            <option value="odrl-expert:latest">odrl-expert:latest</option>
+                                            <option value="gemma4:e4b">gemma4:e4b</option>
+                                            <option value="gemma4:31b">gemma4:31b</option>
+                                            <option value="deepseek-r1:14b">deepseek-r1:14b</option>
+                                            <option value="mistral:latest">mistral:latest</option>
+                                            <option value="qwen:0.5b">qwen:0.5b</option>
+                                        </select>
+                                        <button id="var-qa-run-btn" onclick="rerunCollectionVarQaWithSelectedModel()" style="padding: 2px 8px; font-size: 0.75rem; background: #6366f1; color: white; border: none; border-radius: 4px; font-weight: 600; display: inline-flex; align-items: center; gap: 3px; cursor: pointer;" title="Run AI analysis on filtered variables using selected model">
+                                            <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 21"></polygon></svg>
+                                            <span>Run</span>
+                                        </button>
+                                    </div>
+                                </div>
                                 <div style="display: flex; align-items: center; gap: 6px;">
+                                    <!-- Save Button before Download .md / Export -->
+                                    <button id="var-qa-save-btn" onclick="saveCollectionVarQaToVault()" title="Save document to Vault and link CDIF export file" style="padding: 4px 10px; background: #059669; border: 1px solid #059669; border-radius: 5px; color: #ffffff; cursor: pointer; font-size: 0.8rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                                        <span id="var-qa-save-btn-text">Save</span>
+                                    </button>
+                                    <button id="var-qa-download-md-btn" onclick="exportVarQaMarkdown()" title="Download explanation as Markdown file" style="padding: 4px 10px; background: #ffffff; border: 1px solid #c7d2fe; border-radius: 5px; color: #4338ca; cursor: pointer; font-size: 0.8rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                        <span>Download .md</span>
+                                    </button>
                                     <button id="var-qa-copy-btn" onclick="copyVarQaResult()" title="Copy response to clipboard" style="padding: 4px 10px; background: #ffffff; border: 1px solid #86efac; border-radius: 5px; color: #166534; cursor: pointer; font-size: 0.8rem; font-weight: 600; display: inline-flex; align-items: center; gap: 4px;">
                                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                                         <span>Copy</span>
@@ -1141,6 +1172,7 @@
                                     <button onclick="document.getElementById('var-qa-result').style.display='none'" title="Close" style="background: transparent; border: none; font-size: 1.25rem; color: #4b5563; cursor: pointer; line-height: 1; padding: 0 4px; margin-left: 4px;">&times;</button>
                                 </div>
                             </div>
+                            <div id="var-qa-vault-alert" style="display: none; margin-bottom: 12px; padding: 8px 12px; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 6px; font-size: 0.84rem; color: #065f46;"></div>
                             <div id="var-qa-content" style="line-height: 1.6;"></div>
                         </div>
 
@@ -2139,13 +2171,90 @@
             }
         }
 
-        async function explainCollectionVariables() {
+        async function rerunCollectionVarQaWithSelectedModel() {
+            const modelSelect = document.getElementById('var-qa-model-select');
+            const selectedModel = modelSelect ? modelSelect.value : 'gemma4:31b-cloud';
+            await explainCollectionVariables(selectedModel);
+        }
+
+        async function saveCollectionVarQaToVault() {
+            if (!lastVarQaRawAnswer) {
+                alert('No explanation content to save yet. Run "Explain" or "Ask AI" first.');
+                return;
+            }
+
+            const saveBtn = document.getElementById('var-qa-save-btn');
+            const saveBtnText = document.getElementById('var-qa-save-btn-text');
+            const alertBox = document.getElementById('var-qa-vault-alert');
+            const searchInput = document.getElementById('var-quick-filter');
+            const queryStr = searchInput ? searchInput.value.trim() : '';
+            const modelSelect = document.getElementById('var-qa-model-select');
+            const selectedModel = modelSelect ? modelSelect.value : 'gemma4:31b-cloud';
+
+            const exportUrl = queryStr
+                ? `https://${window.location.host}/export?q=${encodeURIComponent(queryStr)}`
+                : (window.location.origin + `/api/collections/${colId}/variables`);
+
+            const vars = (filteredVariablesData || (cachedVariablesData ? cachedVariablesData.variables : []) || []).slice(0, 100);
+
+            if (saveBtn) saveBtn.disabled = true;
+            if (saveBtnText) saveBtnText.textContent = 'Saving...';
+            if (alertBox) alertBox.style.display = 'none';
+
+            try {
+                const colName = (currentCollectionData && currentCollectionData.name) ? currentCollectionData.name : colId;
+                const res = await fetch('/api/variables/explain/save', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        markdown: lastVarQaRawAnswer,
+                        filter: queryStr || `Collection: ${colName}`,
+                        model: selectedModel,
+                        cdif_export_url: exportUrl,
+                        variables: vars
+                    })
+                });
+
+                if (!res.ok) {
+                    throw new Error(`Server returned HTTP ${res.status}`);
+                }
+
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    if (alertBox) {
+                        alertBox.innerHTML = `
+                            <strong>Saved to Vault!</strong> Document ID: <code>${escapeHtml(data.doc_id)}</code>. 
+                            <a href="${data.vault_url}" target="_blank" style="color: #047857; text-decoration: underline; font-weight: 600; margin-left: 6px;">Open in Vault &rarr;</a>
+                            ${data.cdif_export_url ? `<span style="margin-left: 10px; color: #4b5563;">Linked CDIF: <a href="${data.cdif_export_url}" target="_blank" style="color: #4338ca; text-decoration: underline;">Export Link</a></span>` : ''}
+                        `;
+                        alertBox.style.display = 'block';
+                    }
+                } else {
+                    throw new Error(data.error || 'Failed to save to vault');
+                }
+            } catch (err) {
+                if (alertBox) {
+                    alertBox.innerHTML = `<span style="color: #b91c1c;">Error saving to Vault: ${escapeHtml(err.message)}</span>`;
+                    alertBox.style.display = 'block';
+                } else {
+                    alert('Error saving to Vault: ' + err.message);
+                }
+            } finally {
+                if (saveBtn) saveBtn.disabled = false;
+                if (saveBtnText) saveBtnText.textContent = 'Save';
+            }
+        }
+
+        async function explainCollectionVariables(modelOverride) {
             // Get currently active variables or filtered variables
             const vars = filteredVariablesData || (cachedVariablesData ? cachedVariablesData.variables : []) || [];
             if (!vars || vars.length === 0) {
                 alert('No variables in current filter/collection to explain.');
                 return;
             }
+
+            const modelSelect = document.getElementById('var-qa-model-select');
+            const chosenModel = modelOverride || (modelSelect ? modelSelect.value : 'gemma4:31b-cloud');
 
             const resultBox = document.getElementById('var-qa-result');
             const contentBox = document.getElementById('var-qa-content');
@@ -2158,8 +2267,8 @@
                     <div style="display: flex; align-items: center; gap: 10px; padding: 15px 0; color: #4338ca;">
                         <span class="var-spinner" style="border-top-color: #6366f1;"></span>
                         <div>
-                            <div style="font-weight: 600;">Generating CDIF Variables Overview with Ollama...</div>
-                            <div style="font-size: 0.8rem; color: #6b7280; margin-top: 3px;">Analyzing ${vars.length.toLocaleString()} exported variables, physical units of measure, and dataset provenance references</div>
+                            <div style="font-weight: 600;">Generating CDIF Variables Overview with ${escapeHtml(chosenModel)}...</div>
+                            <div style="font-size: 0.8rem; color: #6b7280; margin-top: 3px;">Analyzing ${vars.length.toLocaleString()} exported variables, physical units of measure, topic priorities, and dataset provenance references</div>
                         </div>
                     </div>
                 `;
@@ -2172,6 +2281,7 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         filter: filterText,
+                        model: chosenModel,
                         variables: sampleVars
                     })
                 });

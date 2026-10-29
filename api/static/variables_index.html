@@ -756,12 +756,41 @@
 
         <!-- AI Ask Assistant Panel (Accordion / Expandable) -->
         <div id="var-qa-result" style="display: none; margin-bottom: 20px; padding: 16px 20px; background: var(--surface-color); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: var(--radius-md); box-shadow: var(--card-hover-shadow);">
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-bottom: 12px;">
-                <div style="font-weight: 700; color: #047857; display: flex; align-items: center; gap: 8px; font-size: 0.92rem;">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                    <span>Variables AI Analysis</span>
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-bottom: 12px; gap: 12px; flex-wrap: wrap;">
+                <div style="font-weight: 700; color: #047857; display: flex; align-items: center; gap: 10px; font-size: 0.92rem; flex-wrap: wrap;">
+                    <div style="display: inline-flex; align-items: center; gap: 6px;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                        <span>Variables AI Analysis</span>
+                    </div>
+
+                    <!-- Model Selector & Run Button next to Variables AI Analysis -->
+                    <div style="display: inline-flex; align-items: center; gap: 6px; background: var(--panel-bg, #f3f4f6); padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border-color, #e5e7eb);">
+                        <label for="var-qa-model-select" style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase;">Model:</label>
+                        <select id="var-qa-model-select" style="font-size: 0.78rem; padding: 3px 6px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--surface-color, #fff); color: var(--text-color); outline: none; cursor: pointer;">
+                            <option value="gemma4:31b-cloud" selected>gemma4:31b-cloud (Default)</option>
+                            <option value="glm-5.2:cloud">glm-5.2:cloud</option>
+                            <option value="gemma4:12b">gemma4:12b</option>
+                            <option value="cdif-expert:latest">cdif-expert:latest</option>
+                            <option value="odrl-expert:latest">odrl-expert:latest</option>
+                            <option value="gemma4:e4b">gemma4:e4b</option>
+                            <option value="gemma4:31b">gemma4:31b</option>
+                            <option value="deepseek-r1:14b">deepseek-r1:14b</option>
+                            <option value="mistral:latest">mistral:latest</option>
+                            <option value="qwen:0.5b">qwen:0.5b</option>
+                        </select>
+                        <button id="var-qa-run-btn" onclick="rerunVarQaWithSelectedModel()" class="btn-modern" style="padding: 3px 9px; font-size: 0.75rem; background: #6366f1; color: white; border: none; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; cursor: pointer;" title="Run AI analysis on filtered variables using selected model">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                            <span>Run</span>
+                        </button>
+                    </div>
                 </div>
+
                 <div style="display: flex; align-items: center; gap: 8px;">
+                    <!-- Save button before Download .md -->
+                    <button id="var-qa-save-btn" onclick="saveVarQaToVault()" class="btn-modern" style="padding: 3px 10px; font-size: 0.75rem; display: inline-flex; align-items: center; gap: 4px; background: #059669; color: white; border: none; font-weight: 600;" title="Save document to Vault and link CDIF export file">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                        <span id="var-qa-save-btn-text">Save</span>
+                    </button>
                     <button id="var-qa-download-md-btn" onclick="downloadVarQaMarkdown()" class="btn-modern" style="padding: 3px 8px; font-size: 0.75rem; display: inline-flex; align-items: center; gap: 4px; color: #6366f1; border-color: #c7d2fe;" title="Download explanation and variable references as Markdown file">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                         <span>Download .md</span>
@@ -772,6 +801,7 @@
                     <button onclick="document.getElementById('var-qa-result').style.display='none'" style="background: transparent; border: none; font-size: 1.3rem; color: var(--text-muted); cursor: pointer; line-height: 1;">&times;</button>
                 </div>
             </div>
+            <div id="var-qa-vault-alert" style="display: none; margin-bottom: 12px; padding: 8px 12px; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 6px; font-size: 0.84rem; color: #065f46;"></div>
             <div id="var-qa-content" style="line-height: 1.6; font-size: 0.88rem;"></div>
         </div>
 
@@ -1476,7 +1506,82 @@
             URL.revokeObjectURL(url);
         }
 
-        async function explainFilteredVariables() {
+        async function rerunVarQaWithSelectedModel() {
+            const modelSelect = document.getElementById('var-qa-model-select');
+            const selectedModel = modelSelect ? modelSelect.value : 'gemma4:31b-cloud';
+            await explainFilteredVariables(selectedModel);
+        }
+
+        async function saveVarQaToVault() {
+            if (!lastVarQaRawAnswer) {
+                alert('No explanation content to save yet. Run "Explain" or "Ask AI" first.');
+                return;
+            }
+
+            const saveBtn = document.getElementById('var-qa-save-btn');
+            const saveBtnText = document.getElementById('var-qa-save-btn-text');
+            const alertBox = document.getElementById('var-qa-vault-alert');
+            const searchInput = document.getElementById('var-search-input');
+            const queryStr = searchInput ? searchInput.value.trim() : '';
+            const modelSelect = document.getElementById('var-qa-model-select');
+            const selectedModel = modelSelect ? modelSelect.value : 'gemma4:31b-cloud';
+
+            const exportUrl = queryStr
+                ? `https://${window.location.host}/export?q=${encodeURIComponent(queryStr)}`
+                : `https://${window.location.host}/export?variables=true`;
+
+            const vars = (filteredVariablesList || []).slice(0, 100);
+
+            if (saveBtn) saveBtn.disabled = true;
+            if (saveBtnText) saveBtnText.textContent = 'Saving...';
+
+            try {
+                const res = await fetch('/api/variables/explain/save', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        markdown: lastVarQaRawAnswer,
+                        filter: queryStr,
+                        model: selectedModel,
+                        cdif_export_url: exportUrl,
+                        variables: vars
+                    })
+                });
+
+                const data = await res.json();
+                if (!res.ok || data.status !== 'success') {
+                    throw new Error(data.message || 'Failed to save to Vault');
+                }
+
+                if (alertBox) {
+                    alertBox.style.display = 'block';
+                    alertBox.innerHTML = `
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
+                            <div>
+                                <strong>✓ Document saved to Vault!</strong>
+                                <span style="margin-left: 6px;">ID: <code>${escapeHtml(data.doc_id)}</code></span>
+                                <div style="font-size: 0.78rem; color: #047857; margin-top: 2px;">CDIF export linked: <a href="${escapeHtml(data.cdif_export_url)}" target="_blank" rel="noopener noreferrer" style="color: #047857; text-decoration: underline;">${escapeHtml(data.cdif_export_url)}</a></div>
+                            </div>
+                            <a href="${escapeHtml(data.vault_url)}" target="_blank" rel="noopener noreferrer" style="padding: 4px 10px; background: #059669; color: white; border-radius: 4px; text-decoration: none; font-weight: 600; font-size: 0.8rem; white-space: nowrap;">
+                                View in Vault &rarr;
+                            </a>
+                        </div>
+                    `;
+                }
+
+                if (saveBtnText) saveBtnText.textContent = 'Saved ✓';
+                setTimeout(() => {
+                    if (saveBtn) saveBtn.disabled = false;
+                    if (saveBtnText) saveBtnText.textContent = 'Save';
+                }, 3000);
+            } catch (err) {
+                alert('Error saving to Vault: ' + err.message);
+                if (saveBtn) saveBtn.disabled = false;
+                if (saveBtnText) saveBtnText.textContent = 'Save';
+            }
+        }
+
+        async function explainFilteredVariables(modelOverride) {
             const vars = filteredVariablesList || [];
             if (!vars || vars.length === 0) {
                 alert('No variables in current filter to explain. Please clear or adjust your filter.');
@@ -1485,17 +1590,22 @@
 
             const panel = document.getElementById('var-qa-result');
             const contentBox = document.getElementById('var-qa-content');
+            const alertBox = document.getElementById('var-qa-vault-alert');
             const searchInput = document.getElementById('var-search-input');
             const queryStr = searchInput ? searchInput.value.trim() : '';
             const explainBtn = document.getElementById('btn-var-explain');
+            const runBtn = document.getElementById('var-qa-run-btn');
+            const modelSelect = document.getElementById('var-qa-model-select');
+            const chosenModel = modelOverride || (modelSelect ? modelSelect.value : 'gemma4:31b-cloud');
 
+            if (alertBox) alertBox.style.display = 'none';
             if (panel) panel.style.display = 'block';
             if (contentBox) {
                 contentBox.innerHTML = `
                     <div style="display: flex; align-items: center; gap: 10px; padding: 15px 0; color: #4338ca;">
                         <span class="var-spinner" style="border-top-color: #6366f1;"></span>
                         <div>
-                            <div style="font-weight: 600;">Generating CDIF Variables Overview with Ollama...</div>
+                            <div style="font-weight: 600;">Generating CDIF Variables Overview with Ollama (${escapeHtml(chosenModel)})...</div>
                             <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 3px;">Analyzing ${vars.length.toLocaleString()} exported variables, physical units of measure, and dataset provenance references</div>
                         </div>
                     </div>
@@ -1506,6 +1616,10 @@
                 explainBtn.disabled = true;
                 explainBtn.innerHTML = '<span class="var-spinner" style="width: 12px; height: 12px; border-top-color: white;"></span> <span>Explaining...</span>';
             }
+            if (runBtn) {
+                runBtn.disabled = true;
+                runBtn.innerHTML = '<span class="var-spinner" style="width: 10px; height: 10px; border-top-color: white;"></span> <span>Running...</span>';
+            }
 
             try {
                 // Pass top 100 filtered variables to avoid token blowup while providing complete CDIF representation
@@ -1515,6 +1629,7 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         filter: queryStr,
+                        model: chosenModel,
                         variables: sampleVars
                     })
                 });
@@ -1550,6 +1665,10 @@
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z"></path><path d="M12 12L2.5 7.5"></path><path d="M12 12v9"></path></svg>
                         <span>Explain</span>
                     `;
+                }
+                if (runBtn) {
+                    runBtn.disabled = false;
+                    runBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg> <span>Run</span>';
                 }
             }
         }

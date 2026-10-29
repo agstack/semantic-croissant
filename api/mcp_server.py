@@ -12161,22 +12161,38 @@ Instructions:
 The user has executed an export of tabular variables from scientific research datasets and clicked 'Explain'.
 
 Your task:
-1. Provide an executive summary and scientific overview explaining the results from this CDIF export ({filter_context_str}, {len(variables)} variables total, top {min(len(variables), 100)} detailed below).
-2. Explicitly identify and list which variables with units of measure should be measured, why they are scientifically relevant, what physical or quantitative properties they represent, and how their units of measure (e.g., metric, concentrations, monetary, percentages, temporal) must be standardized.
-3. Group or categorize the variables logically (e.g. Environmental / Chemical / Geolocation / Socio-Economic / Temporal / Indicators).
-4. Provide a structured reference table linking every variable, its unit of measure, its source file, and its parent dataset (with Markdown links).
-5. Suggest best practices for harmonization and analysis using CDIF 1.1 and FAIR principles.
+1. Provide an updated **Executive Summary & Scientific Overview**:
+   - Synthesize the scope, scientific goals, and thematic coverage of this CDIF variable export ({filter_context_str}, {len(variables)} variables total, top {min(len(variables), 100)} detailed below).
+   - Detail the primary research questions, domain relevance (e.g. climate adaptation, socioeconomic vulnerability, biodiversity, geospatial observations), and overall interoperability readiness.
+
+2. Explicitly specify **Which Variables From Which Topics Should Be Measured in the First Place (Priority Measurement Matrix)**:
+   - Make it completely clear and unambiguous which core variables MUST be prioritized and measured first for each thematic topic/domain.
+   - Group them under distinct topic headings (e.g., 🌡️ Climate & Meteorological Variables, 💧 Hydrological & Water Quality, 🌾 Agricultural & Soil, 👥 Socio-Economic & Demographic, 📍 Geospatial & Administrative, ⚡ Energy & Infrastructure).
+   - Under each topic, provide a prioritized table or checklist with:
+     * **Priority Rank**: (High / Essential / Core Baseline vs. Secondary / Derived).
+     * **Variable Name & Label**: The exact variable name and label from the export.
+     * **Rationale (Why measure in the first place)**: The scientific, causal, or modeling need for measuring this variable first (e.g. baseline driver, primary impact indicator).
+     * **Unit of Measure & Physical Property**: Exact physical/quantitative property and standardized unit (e.g., °C, mm/day, kg/ha, µg/m³, USD/capita, %, W/m²).
+     * **Standardization & Harmonization Rules**: Reference standard vocabularies (e.g., QUDT, UCUM, CF-conventions) and normalization procedures.
+
+3. Provide a structured **Reference Table of All Exported Variables**:
+   - Link every variable, its physical data type, its unit of measure, its source file, and its parent dataset (with Markdown links).
+
+4. Outline **Harmonization, Interoperability & FAIR Implementation**:
+   - Provide concrete recommendations using CDIF 1.1, schema:variableMeasured, and FAIR principles for multi-domain cross-linkage.
 
 CDIF EXPORT VARIABLES CONTEXT:
 {vars_text}
 """
 
-            user_prompt = f"Please explain the filtered CDIF export results. Detail which variables with units of measure should be measured, how they relate to the research context ({filter_context_str}), and provide complete dataset/file references in markdown."
+            user_prompt = f"Please explain the filtered CDIF export results. Make it explicit which variables from which topics should be measured in the first place, and provide a comprehensive Executive Summary & Scientific Overview with full dataset/file references in markdown."
 
             ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
             if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
                 ollama_url = "http://10.147.18.82:11435"
-            model = os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or OLLAMA_DEFAULT_MODEL
+            # Allow user to specify model or default to gemma4:31b-cloud
+            req_model = body.get("model") or body.get("ai_model")
+            model = req_model or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:31b-cloud"
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
 
@@ -12194,6 +12210,7 @@ CDIF EXPORT VARIABLES CONTEXT:
                     explanation = resp_json.get("message", {}).get("content", "") or f"Unable to generate explanation. Status: {resp.status_code}"
                     return JSONResponse({
                         "status": "ok",
+                        "model": model,
                         "filter": filter_query,
                         "total_variables": len(variables),
                         "explanation": explanation,
@@ -12201,6 +12218,126 @@ CDIF EXPORT VARIABLES CONTEXT:
                     })
             except Exception as err:
                 return JSONResponse({"status": "error", "explanation": f"Error running explanation model: {str(err)}", "markdown": ""}, status_code=500)
+
+        async def api_variables_explain_save(request):
+            """
+            Saves an explanation of CDIF export variables to the MinIO/Elasticsearch Vault as a new document,
+            generating comprehensive Croissant JSON-LD metadata and embedding links to the source CDIF export.
+            """
+            import httpx, json, os, sys, datetime, hashlib
+            from starlette.responses import JSONResponse
+
+            body = await request.json()
+            markdown_content = body.get("markdown") or body.get("content") or ""
+            filter_query = body.get("filter", "") or body.get("query", "")
+            model_name = body.get("model") or "gemma4:31b-cloud"
+            variables = body.get("variables", [])
+            cdif_export_url = body.get("cdif_export_url") or ""
+
+            if not markdown_content:
+                return JSONResponse({"status": "error", "message": "No markdown content provided to save."}, status_code=400)
+
+            # Auto-construct CDIF link if not given
+            if not cdif_export_url:
+                if filter_query:
+                    import urllib.parse
+                    cdif_export_url = f"https://{MCP_DOMAIN}/export?q={urllib.parse.quote(filter_query)}"
+                else:
+                    cdif_export_url = f"https://{MCP_DOMAIN}/export?variables=true"
+
+            title = f"CDIF Variables Analysis: {filter_query}" if filter_query else "CDIF Variables Export Analysis & Scientific Explanation"
+            desc = f"AI-generated scientific explanation and unit-of-measure overview for {len(variables)} CDIF tabular variables ({filter_query if filter_query else 'Global'}). Linked to CDIF export: {cdif_export_url}."
+
+            # Ensure markdown content has header linking to CDIF export
+            header_block = f"""# 🥐 {title}
+
+> {desc}
+> **Generated with AI Model**: `{model_name}` | **CDIF Export Reference**: [{cdif_export_url}]({cdif_export_url})
+> **Date**: {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}
+
+---
+
+"""
+            if not markdown_content.startswith("# "):
+                full_markdown = header_block + markdown_content
+            else:
+                full_markdown = markdown_content
+
+            # Append reference link to CDIF export at end if not present
+            if cdif_export_url not in full_markdown:
+                full_markdown += f"\n\n---\n### Primary CDIF Export Reference\n- Complete CDIF 1.1 / DDI-CDI Export Payload: [{cdif_export_url}]({cdif_export_url})\n"
+
+            # Create Croissant JSON-LD payload
+            timestamp_iso = datetime.datetime.utcnow().isoformat() + "Z"
+            doc_id = hashlib.sha256((full_markdown + cdif_export_url).encode("utf-8")).hexdigest()[:16]
+
+            jsonld_metadata = {
+                "@context": {
+                    "@vocab": "https://schema.org/",
+                    "cdif": "https://w3id.org/cdif/",
+                    "cdi": "http://ddialliance.org/Specification/DDI-CDI/1.0/RDF/",
+                    "dcat": "http://www.w3.org/ns/dcat#",
+                    "cr": "http://mlcommons.org/croissant/"
+                },
+                "@type": ["Dataset", "cdif:DiscoveryProfile"],
+                "@id": f"https://{MCP_DOMAIN}/vault/doc/{doc_id}",
+                "name": title,
+                "description": desc,
+                "datePublished": timestamp_iso,
+                "dateCreated": timestamp_iso,
+                "creator": {
+                    "@type": "SoftwareApplication",
+                    "name": f"Semantic Croissant AI ({model_name})"
+                },
+                "isBasedOn": [
+                    {
+                        "@type": "Dataset",
+                        "name": "Filtered CDIF 1.1 Variables Export",
+                        "url": cdif_export_url
+                    }
+                ],
+                "distribution": [
+                    {
+                        "@type": "DataDownload",
+                        "name": f"{doc_id}.md",
+                        "contentUrl": f"https://{MCP_DOMAIN}/vault/{doc_id}.md",
+                        "encodingFormat": "text/markdown"
+                    },
+                    {
+                        "@type": "DataDownload",
+                        "name": "cdif_export.jsonld",
+                        "contentUrl": cdif_export_url,
+                        "encodingFormat": "application/ld+json"
+                    }
+                ]
+            }
+
+            try:
+                # Save into Vault using store_in_vault
+                vault_res = await store_in_vault(
+                    content=full_markdown,
+                    prefix="variables_analysis",
+                    jsonld_payload=json.dumps(jsonld_metadata),
+                    ai_model_override=f"Semantic Croissant AI ({model_name})",
+                    file_ext=".md",
+                    filename_override=doc_id
+                )
+
+                vault_text = vault_res[0].text if vault_res and len(vault_res) > 0 else ""
+                vault_url = f"https://{MCP_DOMAIN}/vault/doc/{doc_id}"
+
+                return JSONResponse({
+                    "status": "success",
+                    "doc_id": doc_id,
+                    "title": title,
+                    "vault_url": vault_url,
+                    "cdif_export_url": cdif_export_url,
+                    "message": f"Document successfully saved to Vault under ID {doc_id}."
+                })
+            except Exception as save_err:
+                import traceback
+                traceback.print_exc()
+                return JSONResponse({"status": "error", "message": f"Failed to save document to Vault: {str(save_err)}"}, status_code=500)
 
 
         async def api_collections_ask(request):
@@ -12952,6 +13089,7 @@ Output a JSON object with:
                 Route("/api/variableindex/refresh", endpoint=api_variable_index_refresh, methods=["POST", "GET"]),
                 Route("/api/variableindex/ask", endpoint=api_variable_index_ask, methods=["POST"]),
                 Route("/api/variables/explain", endpoint=api_variables_explain, methods=["POST"]),
+                Route("/api/variables/explain/save", endpoint=api_variables_explain_save, methods=["POST"]),
                 Route("/api/text/process", endpoint=process_text, methods=["POST"]),
                 Route("/logo.png", endpoint=serve_logo),
                 Route("/", endpoint=index),
