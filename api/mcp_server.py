@@ -12178,7 +12178,7 @@ Your task:
 3. Provide a structured **Reference Table of All Exported Variables**:
    - Link every variable, its physical data type, its unit of measure, its source file, and its parent dataset (with Markdown links).
 
-4. Provide an explicit, practical **FAIR Recommendations** section with concrete examples based directly on these variables:
+4. Always include a dedicated **FAIR Recommendations** section with concrete examples based directly on these variables:
    - **Findable**: Actionable PID and metadata rules (e.g., Assign a persistent identifier (PID/DOI/ARK) to the harmonized longitudinal or merged version of these variables; register variables in a domain ontology catalog).
    - **Accessible**: Machine-readable format and cross-format mapping (e.g., Ensure mapping between heterogeneous file formats like `.sav` (SPSS), `.dta` (Stata), NetCDF, and CSV is documented in machine-readable JSON-LD / Croissant metadata with open distribution endpoints).
    - **Interoperable**:
@@ -12186,11 +12186,19 @@ Your task:
      * **Standardization**: Mandate international standards such as ISO 8601 (`YYYY-MM-DD` / `YYYY-MM-DDThh:mm:ssZ`) for temporal dates/survey waves to enable computational time-series analysis, WGS84 (EPSG:4326) for geospatial coordinates, and standard ISO country/currency codes.
    - **Reusable**: Clear provenance and codebook definitions (e.g., Provide a machine-readable codebook / data dictionary explicitly defining categorical integer codes, e.g. 1 = Strongly Oppose, 5 = Strongly Support, or missing value flags like -999, along with clear ODRL/CC licensing).
 
+5. Always include a dedicated **CDIF 1.1 Integration** section detailing schema mapping and cross-domain linkage:
+   - **`schema:variableMeasured` Harmonization**:
+     * Explain how granular or wave-specific survey variables (e.g. repeated waves or series like `ISSUESC9Sxx`) should be harmonized and mapped to a single conceptual variable (e.g. `climate_policy_perception` or standard conceptual definition).
+     * Move wave/time-specific suffixes (e.g. `Sxx`) to a distinct metadata attribute (e.g. `observation_date` or `temporalCoverage`).
+   - **Cross-Linkage & Multi-Domain Interoperability**:
+     * Provide concrete cross-linkage patterns across different domains (e.g. linking economic variables like `gas` price with socio-political/attitudinal variables like `ISSUESC9` via a Temporal Join / Time-Series linkage to analyze how energy price spikes correlate with policy perception shifts).
+     * Provide RDF / JSON-LD snippet examples demonstrating `schema:variableMeasured` and DDI-CDI variable mappings.
+
 CDIF EXPORT VARIABLES CONTEXT:
 {vars_text}
 """
 
-            user_prompt = f"Please explain the filtered CDIF export results. Make it explicit which variables from which topics should be measured in the first place, update Executive Summary & Scientific Overview, and include a dedicated 'FAIR Recommendations' section (Findable, Accessible, Interoperable, Reusable) with concrete vocabulary and standardization examples in markdown."
+            user_prompt = f"Please explain the filtered CDIF export results. Make it explicit which variables from which topics should be measured in the first place, update Executive Summary & Scientific Overview, and ALWAYS include both a dedicated 'FAIR Recommendations' section and a 'CDIF 1.1 Integration' section (with schema:variableMeasured conceptual mapping and Cross-Linkage / Temporal Join recommendations) in markdown."
 
             ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
             if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
