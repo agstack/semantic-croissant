@@ -9758,7 +9758,8 @@ Please answer the question based ONLY on the context provided above (including t
                         },
                         "size": 1000,
                         "_source": [
-                            "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url",
+                            "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url", "title",
+                            "cdif_jsonld.DDICDIModels.@id",
                             "cdif_jsonld.DDICDIModels.@type",
                             "cdif_jsonld.DDICDIModels.name",
                             "cdif_jsonld.DDICDIModels.displayLabel",
@@ -9767,14 +9768,31 @@ Please answer the question based ONLY on the context provided above (including t
                             "cdif_jsonld.DDICDIModels.definition",
                             "cdif_jsonld.DDICDIModels.schema:unitText",
                             "cdif_jsonld.schema:variableMeasured",
-                            "cdif_jsonld.variableMeasured"
+                            "cdif_jsonld.variableMeasured",
+                            "cdif_jsonld.schema:distribution",
+                            "cdif_jsonld.distribution"
                         ]
                     }
                     resp = await client.post(f"{es_url}/cdif/_search", json=payload)
                     if resp.status_code != 200:
                         return
 
-                    hits = resp.json().get("hits", {}).get("hits", [])
+                    raw_hits = resp.json().get("hits", {}).get("hits", [])
+                    # Deduplicate hits by (file_url or file_name or doc_id), preferring entries with populated file_name
+                    deduped_hits = {}
+                    for h in raw_hits:
+                        src = h.get("_source", {})
+                        furl = src.get("file_url") or ""
+                        fname = src.get("file_name") or ""
+                        key = furl or fname or h.get("_id", "")
+                        if key not in deduped_hits:
+                            deduped_hits[key] = h
+                        else:
+                            existing_fname = deduped_hits[key].get("_source", {}).get("file_name")
+                            if not existing_fname and fname:
+                                deduped_hits[key] = h
+
+                    hits = list(deduped_hits.values())
                     all_variables = []
                     files_summary = []
                     tot_num = 0
@@ -9794,12 +9812,48 @@ Please answer the question based ONLY on the context provided above (including t
                             cdif_url = f"{base_host}/export?{qs_part}"
 
                         cdif_json = src.get("cdif_jsonld", {})
+                        dists = cdif_json.get("schema:distribution") or cdif_json.get("distribution") or []
+                        matched_var_ids = None
+                        has_distribution_mappings = False
+
+                        if isinstance(dists, list) and dists:
+                            for d in dists:
+                                if d.get("cdif:hasPhysicalMapping") or d.get("hasPhysicalMapping"):
+                                    has_distribution_mappings = True
+                                    break
+
+                            if has_distribution_mappings:
+                                matched_var_ids = set()
+                                for d in dists:
+                                    d_url = d.get("schema:contentUrl") or d.get("contentUrl") or ""
+                                    d_name = d.get("schema:name") or d.get("name") or ""
+                                    is_match = False
+                                    if furl and d_url and (furl == d_url or furl.rstrip("/") == d_url.rstrip("/")):
+                                        is_match = True
+                                    elif fname and d_name and (fname.lower() == d_name.lower()):
+                                        is_match = True
+
+                                    if is_match:
+                                        if not fname and d_name:
+                                            fname = d_name
+                                        pms = d.get("cdif:hasPhysicalMapping") or d.get("hasPhysicalMapping") or []
+                                        if isinstance(pms, list):
+                                            for pm in pms:
+                                                v_ref = pm.get("cdif:formats_InstanceVariable", {})
+                                                v_id = v_ref.get("@id") if isinstance(v_ref, dict) else str(v_ref)
+                                                if v_id:
+                                                    matched_var_ids.add(v_id)
+                                                    matched_var_ids.add(v_id.lstrip("#"))
+
                         models = cdif_json.get("DDICDIModels", [])
                         var_meas = cdif_json.get("schema:variableMeasured") or cdif_json.get("variableMeasured") or []
                         f_var_count = 0
 
                         for m in models:
                             if isinstance(m, dict) and m.get("@type") == "InstanceVariable":
+                                m_id = m.get("@id", "")
+                                if matched_var_ids is not None and m_id not in matched_var_ids and m_id.lstrip("#") not in matched_var_ids:
+                                    continue
                                 f_var_count += 1
                                 raw_name = m.get("name", {})
                                 var_name = raw_name.get("name", "") if isinstance(raw_name, dict) else str(raw_name or "")
@@ -9841,6 +9895,9 @@ Please answer the question based ONLY on the context provided above (including t
                         if isinstance(var_meas, list):
                             for vm in var_meas:
                                 if not isinstance(vm, dict):
+                                    continue
+                                vm_id = vm.get("@id", "")
+                                if matched_var_ids is not None and vm_id not in matched_var_ids and vm_id.lstrip("#") not in matched_var_ids:
                                     continue
                                 vm_type = vm.get("@type")
                                 is_iv = False
@@ -9996,7 +10053,8 @@ Please answer the question based ONLY on the context provided above (including t
                         },
                         "size": 1000,
                         "_source": [
-                            "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url",
+                            "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url", "title",
+                            "cdif_jsonld.DDICDIModels.@id",
                             "cdif_jsonld.DDICDIModels.@type",
                             "cdif_jsonld.DDICDIModels.name",
                             "cdif_jsonld.DDICDIModels.displayLabel",
@@ -10005,14 +10063,31 @@ Please answer the question based ONLY on the context provided above (including t
                             "cdif_jsonld.DDICDIModels.definition",
                             "cdif_jsonld.DDICDIModels.schema:unitText",
                             "cdif_jsonld.schema:variableMeasured",
-                            "cdif_jsonld.variableMeasured"
+                            "cdif_jsonld.variableMeasured",
+                            "cdif_jsonld.schema:distribution",
+                            "cdif_jsonld.distribution"
                         ]
                     }
                     resp = await client.post(f"{es_url}/cdif/_search", json=payload)
                     if resp.status_code != 200:
                         return JSONResponse({"collection_id": cid, "total_files": 0, "total_variables": 0, "variables": [], "files": []})
 
-                    hits = resp.json().get("hits", {}).get("hits", [])
+                    raw_hits = resp.json().get("hits", {}).get("hits", [])
+                    # Deduplicate hits by (file_url or file_name or doc_id), preferring entries with populated file_name
+                    deduped_hits = {}
+                    for h in raw_hits:
+                        src = h.get("_source", {})
+                        furl = src.get("file_url") or ""
+                        fname = src.get("file_name") or ""
+                        key = furl or fname or h.get("_id", "")
+                        if key not in deduped_hits:
+                            deduped_hits[key] = h
+                        else:
+                            existing_fname = deduped_hits[key].get("_source", {}).get("file_name")
+                            if not existing_fname and fname:
+                                deduped_hits[key] = h
+
+                    hits = list(deduped_hits.values())
                     all_variables = []
                     files_summary = []
 
@@ -10117,6 +10192,39 @@ Please answer the question based ONLY on the context provided above (including t
                             base_host = f"https://{MCP_DOMAIN}"
                             cdif_url = f"{base_host}/export?{qs_part}"
                         cdif_json = src.get("cdif_jsonld", {})
+                        dists = cdif_json.get("schema:distribution") or cdif_json.get("distribution") or []
+                        matched_var_ids = None
+                        has_distribution_mappings = False
+
+                        if isinstance(dists, list) and dists:
+                            for d in dists:
+                                if d.get("cdif:hasPhysicalMapping") or d.get("hasPhysicalMapping"):
+                                    has_distribution_mappings = True
+                                    break
+
+                            if has_distribution_mappings:
+                                matched_var_ids = set()
+                                for d in dists:
+                                    d_url = d.get("schema:contentUrl") or d.get("contentUrl") or ""
+                                    d_name = d.get("schema:name") or d.get("name") or ""
+                                    is_match = False
+                                    if furl and d_url and (furl == d_url or furl.rstrip("/") == d_url.rstrip("/")):
+                                        is_match = True
+                                    elif fname and d_name and (fname.lower() == d_name.lower()):
+                                        is_match = True
+
+                                    if is_match:
+                                        if not fname and d_name:
+                                            fname = d_name
+                                        pms = d.get("cdif:hasPhysicalMapping") or d.get("hasPhysicalMapping") or []
+                                        if isinstance(pms, list):
+                                            for pm in pms:
+                                                v_ref = pm.get("cdif:formats_InstanceVariable", {})
+                                                v_id = v_ref.get("@id") if isinstance(v_ref, dict) else str(v_ref)
+                                                if v_id:
+                                                    matched_var_ids.add(v_id)
+                                                    matched_var_ids.add(v_id.lstrip("#"))
+
                         models = cdif_json.get("DDICDIModels", [])
                         var_meas = cdif_json.get("schema:variableMeasured") or cdif_json.get("variableMeasured") or []
                         
@@ -10124,6 +10232,9 @@ Please answer the question based ONLY on the context provided above (including t
                         # 1. Extract from DDICDIModels
                         for m in models:
                             if isinstance(m, dict) and m.get("@type") == "InstanceVariable":
+                                m_id = m.get("@id", "")
+                                if matched_var_ids is not None and m_id not in matched_var_ids and m_id.lstrip("#") not in matched_var_ids:
+                                    continue
                                 file_var_count += 1
                                 raw_name = m.get("name", {})
                                 var_name = raw_name.get("name", "") if isinstance(raw_name, dict) else str(raw_name or "")
@@ -10163,6 +10274,9 @@ Please answer the question based ONLY on the context provided above (including t
                         if isinstance(var_meas, list):
                             for vm in var_meas:
                                 if not isinstance(vm, dict):
+                                    continue
+                                vm_id = vm.get("@id", "")
+                                if matched_var_ids is not None and vm_id not in matched_var_ids and vm_id.lstrip("#") not in matched_var_ids:
                                     continue
                                 vm_type = vm.get("@type")
                                 is_iv = False
