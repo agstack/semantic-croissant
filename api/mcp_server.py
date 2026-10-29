@@ -12042,15 +12042,125 @@ Output a JSON object with:
                 return JSONResponse({"answer": answer})
 
         async def api_collections_index_ask(request):
-            import httpx
+            import httpx, re
             from starlette.responses import JSONResponse
             data = await request.json()
             query = data.get("query", "")
             
-            docs_content = await elasticsearch_fulltext_search(query, limit=20, format="markdown")
-            context = docs_content[0].text
+            # 1. Search collections first so queries like "list climate collections" or "what collections exist for..."
+            # search specifically within Collections and their items.
+            es_nodes = get_elasticsearch_lookup_urls()
+            HOST_VAL = os.environ.get("HOST", HOST).rstrip("/")
             
-            system_prompt = f"You are an AI assistant. Use the following context about datasets across all collections to answer the user's question:\n\n{context}\n\nIMPORTANT: When listing or referencing datasets, you MUST format them as Markdown links using their exact URLs as provided in the context."
+            all_cols = []
+            for es_url in es_nodes:
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as client:
+                        resp = await client.post(f"{es_url}/collections/_search", json={"size": 500, "query": {"match_all": {}}})
+                        if resp.status_code == 200:
+                            all_cols = [h.get("_source", {}) for h in resp.json().get("hits", {}).get("hits", [])]
+                            if all_cols:
+                                break
+                except Exception:
+                    continue
+
+            # Fallback to MinIO if ES has no collections indexed
+            if not all_cols:
+                try:
+                    m_client = get_minio_client()
+                    if m_client.bucket_exists("collections"):
+                        objs = list(m_client.list_objects("collections"))
+                        for o in objs:
+                            try:
+                                obj = m_client.get_object("collections", o.object_name)
+                                col_json = json.loads(obj.read().decode("utf-8"))
+                                obj.close()
+                                obj.release_conn()
+                                all_cols.append(col_json)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+            # Filter collections matching query keywords
+            cleaned = re.sub(r"\b(list|show|find|get|all|collections|collection|datasets|dataset|in|of|what|are|the|about)\b", "", query, flags=re.I).strip()
+            keywords = [k.lower() for k in cleaned.split() if len(k) > 1]
+            
+            matching_cols = []
+            if keywords:
+                for c in all_cols:
+                    col_text = f"{c.get('name', '')} {c.get('description', '')} {c.get('expert_index', '')}".lower()
+                    if any(k in col_text for k in keywords):
+                        matching_cols.append(c)
+            else:
+                matching_cols = all_cols[:15]
+
+            # Collect items belonging to matching collections
+            col_item_ids = []
+            for c in matching_cols:
+                raw_items = c.get("items", [])
+                for itm in raw_items:
+                    if isinstance(itm, str):
+                        col_item_ids.append(itm)
+                    elif isinstance(itm, dict):
+                        doc_id_val = itm.get("id") or itm.get("_id") or itm.get("doc_id") or itm.get("url")
+                        if doc_id_val:
+                            col_item_ids.append(str(doc_id_val))
+            unique_item_ids = list(dict.fromkeys(col_item_ids))
+
+            # Fetch dataset summaries for items inside matching collections
+            doc_summaries = {}
+            if unique_item_ids:
+                for es_url in es_nodes:
+                    try:
+                        async with httpx.AsyncClient(timeout=15.0) as client:
+                            docs_resp = await client.post(
+                                f"{es_url}/croissant,dataverse,trump,openml,sshoc/_search?ignore_unavailable=true",
+                                json={
+                                    "query": {"terms": {"_id": unique_item_ids[:40]}},
+                                    "size": 40,
+                                    "_source": ["name", "title", "description", "schema:name"]
+                                }
+                            )
+                            if docs_resp.status_code == 200:
+                                for h in docs_resp.json().get("hits", {}).get("hits", []):
+                                    doc_summaries[h.get("_id")] = h.get("_source", {})
+                                if doc_summaries:
+                                    break
+                    except Exception:
+                        continue
+
+            context_parts = []
+            if matching_cols:
+                context_parts.append("### Relevant Collections:")
+                for c in matching_cols[:25]:
+                    cid = c.get("id")
+                    cname = c.get("name", "Untitled Collection")
+                    cdesc = c.get("description", "")
+                    count = len(c.get("items", []))
+                    curl = f"{HOST_VAL}/collections/{cid}"
+                    context_parts.append(f"- **[{cname}]({curl})**: {cdesc} (Contains {count} datasets)")
+
+            if doc_summaries:
+                context_parts.append("\n### Datasets Contained in These Collections:")
+                for doc_id, doc_src in list(doc_summaries.items())[:25]:
+                    dname = doc_src.get("name") or doc_src.get("title") or doc_src.get("schema:name") or doc_id
+                    ddesc = (doc_src.get("description") or "")[:250]
+                    durl = f"{HOST_VAL}/vault/doc/{doc_id}"
+                    context_parts.append(f"- **[{dname}]({durl})**: {ddesc}")
+
+            # If no collections matched or items are sparse, also include standard ES search across datasets
+            if not matching_cols or len(doc_summaries) < 3:
+                try:
+                    docs_content = await elasticsearch_fulltext_search(query, limit=10, format="markdown")
+                    if docs_content and docs_content[0].text:
+                        context_parts.append(f"\n### Additional Datasets:\n{docs_content[0].text}")
+                except Exception:
+                    pass
+
+            context = "\n".join(context_parts) if context_parts else "No collections or datasets found matching the query."
+            
+            system_prompt = f"You are an AI assistant helping users explore user collections and datasets in Semantic Croissant.\nUse the following context about collections and their datasets to answer the user's question:\n\n{context}\n\nIMPORTANT: When listing or referencing collections, format them as Markdown links using their exact URLs (e.g. [Collection Name](URL)). When listing individual datasets, link them using their exact Vault URLs as provided in the context."
             
             ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
             if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:

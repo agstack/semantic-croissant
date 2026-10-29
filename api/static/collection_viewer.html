@@ -1223,7 +1223,13 @@
             }
 
             html += `
-                <h3 style="border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-top: 30px;">Data Cards in Collection</h3>
+                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; margin-top: 30px; margin-bottom: 15px; flex-wrap: wrap; gap: 15px;">
+                    <h3 style="margin: 0;">Data Cards in Collection</h3>
+                    <form id="ask-col-form" onsubmit="handleAskSubmit(event)" style="display: flex; gap: 10px; align-items: center;">
+                        <input type="text" id="col-ask-input" placeholder="Ask question about datasets in this collection..." style="padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); width: 350px; font-size: 14px;">
+                        <button type="submit" id="col-ask-btn" style="padding: 8px 15px; background: #008855; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">Ask</button>
+                    </form>
+                </div>
 
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; background: var(--header-bg); padding: 10px; border-radius: 6px; border: 1px solid var(--border-color); flex-wrap: wrap; gap: 10px;">
                     <div id="alpha-filter-container" style="display: flex; gap: 4px; flex-wrap: wrap; font-size: 0.9rem;">

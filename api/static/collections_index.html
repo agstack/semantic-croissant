@@ -153,9 +153,9 @@
                             <button onclick="window.location.href='/variableindex'" style="padding: 6px 12px; background: #008855; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; display: inline-flex; align-items: center; gap: 5px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/><circle cx="18" cy="17" r="2"/></svg> Variables</button>
                         </div>
                     </div>
-                    <form id="ask-index-form" onsubmit="event.preventDefault(); const btn = this.querySelector('button'); btn.disabled=true; btn.innerText='Thinking...'; document.getElementById('qa-index-result').innerHTML='<span class=\'var-spinner\' style=\'width:12px; height:12px; vertical-align:middle; margin-right:6px;\'></span> Thinking...'; document.getElementById('qa-index-result').style.display='block'; fetch('/api/collectionsindex/ask', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({query: this.querySelector('input').value})}).then(async res => { const text = await res.text(); let data; try { data = JSON.parse(text); } catch (e) { throw new Error(!res.ok ? 'Server returned HTTP ' + res.status : 'Non-JSON response: ' + text.substring(0, 100)); } if (!res.ok) throw new Error(data && (data.error || data.detail) ? (data.error || data.detail) : 'Server error ' + res.status); return data; }).then(res => { if(typeof marked !== 'undefined') { document.getElementById('qa-index-result').innerHTML = marked.parse(res.answer || ''); } else { document.getElementById('qa-index-result').innerText = res.answer || ''; } btn.disabled=false; btn.innerText='Ask'; }).catch(e => { document.getElementById('qa-index-result').innerText = 'Error: ' + (e.message || e); btn.disabled=false; btn.innerText='Ask'; });" style="display: flex; gap: 10px; align-items: center;">
-                        <input type="text" placeholder="Ask question about datasets in the collection..." style="padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); width: 350px; font-size: 14px;">
-                        <button type="submit" style="padding: 8px 15px; background: #008855; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">Ask</button>
+                    <form id="ask-index-form" onsubmit="handleCollectionsIndexAsk(event)" style="display: flex; gap: 10px; align-items: center;">
+                        <input type="text" id="ask-index-input" placeholder="Ask question about collections..." style="padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); width: 350px; font-size: 14px;">
+                        <button type="submit" id="ask-index-submit" style="padding: 8px 15px; background: #008855; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500;">Ask</button>
                     </form>
                 </div>
                 <div id="qa-index-result" style="display: none; margin-bottom: 20px; padding: 15px; background: var(--user-msg-bg); border: 1px solid var(--border-color); border-radius: 6px; font-size: 1rem; color: var(--text-color); white-space: pre-wrap;"></div>
@@ -387,6 +387,64 @@
                     card.style.display = 'none';
                 }
             });
+        }
+
+        async function handleCollectionsIndexAsk(event) {
+            if (event) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            const input = document.getElementById('ask-index-input');
+            const btn = document.getElementById('ask-index-submit');
+            const resultBox = document.getElementById('qa-index-result');
+            const query = (input ? input.value : '').trim();
+            if (!query) return false;
+
+            if (btn) {
+                btn.disabled = true;
+                btn.innerText = 'Thinking...';
+            }
+            if (resultBox) {
+                resultBox.innerHTML = '<span class="var-spinner" style="width:12px; height:12px; vertical-align:middle; margin-right:6px;"></span> Thinking...';
+                resultBox.style.display = 'block';
+            }
+
+            try {
+                const res = await fetch('/api/collectionsindex/ask', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({query: query})
+                });
+                const text = await res.text();
+                let data;
+                try {
+                    data = JSON.parse(text);
+                } catch (e) {
+                    throw new Error(!res.ok ? 'Server returned HTTP ' + res.status : 'Non-JSON response: ' + text.substring(0, 100));
+                }
+                if (!res.ok) {
+                    throw new Error(data && (data.error || data.detail) ? (data.error || data.detail) : 'Server error ' + res.status);
+                }
+
+                const answer = (data && data.answer) || '';
+                if (resultBox) {
+                    if (typeof marked !== 'undefined') {
+                        resultBox.innerHTML = marked.parse(answer);
+                    } else {
+                        resultBox.innerText = answer;
+                    }
+                }
+            } catch (err) {
+                if (resultBox) {
+                    resultBox.innerText = 'Error: ' + (err.message || err);
+                }
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerText = 'Ask';
+                }
+            }
+            return false;
         }
 
         document.addEventListener('DOMContentLoaded', () => {
