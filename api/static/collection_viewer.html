@@ -1870,7 +1870,7 @@
             function getExportBtnHtml(targetPrefix) {
                 return `
                     <div style="position: relative; display: inline-block; margin-left: 6px;">
-                        <button type="button" class="var-page-btn" onclick="toggleVariablesExportMenu(event, '${targetPrefix}')" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 500; background: #ffffff; color: #0f766e; border-color: #99f6e4;" title="Export variables in CSV or JSON format">
+                        <button type="button" class="var-page-btn" onclick="toggleVariablesExportMenu(event, '${targetPrefix}')" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 500; background: #ffffff; color: #0f766e; border-color: #99f6e4;" title="Export variables in CSV, JSON or Croissant format">
                             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                             <span>Export</span>
                             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
@@ -1890,6 +1890,10 @@
                             </a>
                         </div>
                     </div>
+                    <button type="button" class="var-page-btn" onclick="explainCollectionVariables()" style="display: inline-flex; align-items: center; gap: 5px; font-weight: 600; background: #6366f1; color: #ffffff; border-color: #6366f1; margin-left: 6px;" title="Use Ollama to read exported variables, explain variables with units of measure, and download report">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z"></path><path d="M12 12L2.5 7.5"></path><path d="M12 12v9"></path></svg>
+                        <span>Explain</span>
+                    </button>
                 `;
             }
 
@@ -2131,6 +2135,69 @@
                 if (btn) {
                     btn.disabled = false;
                     btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> <span>Ask</span>';
+                }
+            }
+        }
+
+        async function explainCollectionVariables() {
+            // Get currently active variables or filtered variables
+            const vars = filteredVariablesData || (cachedVariablesData ? cachedVariablesData.variables : []) || [];
+            if (!vars || vars.length === 0) {
+                alert('No variables in current filter/collection to explain.');
+                return;
+            }
+
+            const resultBox = document.getElementById('var-qa-result');
+            const contentBox = document.getElementById('var-qa-content');
+            const searchInput = document.getElementById('var-quick-filter');
+            const filterText = searchInput ? searchInput.value.trim() : '';
+
+            if (resultBox) resultBox.style.display = 'block';
+            if (contentBox) {
+                contentBox.innerHTML = `
+                    <div style="display: flex; align-items: center; gap: 10px; padding: 15px 0; color: #4338ca;">
+                        <span class="var-spinner" style="border-top-color: #6366f1;"></span>
+                        <div>
+                            <div style="font-weight: 600;">Generating CDIF Variables Overview with Ollama...</div>
+                            <div style="font-size: 0.8rem; color: #6b7280; margin-top: 3px;">Analyzing ${vars.length.toLocaleString()} exported variables, physical units of measure, and dataset provenance references</div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            try {
+                const sampleVars = vars.slice(0, 100);
+                const res = await fetch('/api/variables/explain', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        filter: filterText,
+                        variables: sampleVars
+                    })
+                });
+
+                if (!res.ok) {
+                    throw new Error(`Server returned HTTP ${res.status}`);
+                }
+
+                const data = await res.json();
+                const explanation = data.explanation || data.answer || 'No explanation returned from model.';
+                lastVarQaRawAnswer = explanation;
+
+                if (contentBox) {
+                    if (typeof marked !== 'undefined') {
+                        contentBox.innerHTML = marked.parse(explanation);
+                    } else {
+                        contentBox.innerText = explanation;
+                    }
+                }
+
+                if (resultBox) {
+                    resultBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            } catch (err) {
+                if (contentBox) {
+                    contentBox.innerHTML = `<span style="color: #dc3545;">Error generating explanation: ${escapeHtml(err.message)}</span>`;
                 }
             }
         }

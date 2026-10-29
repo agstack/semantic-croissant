@@ -762,6 +762,10 @@
                     <span>Variables AI Analysis</span>
                 </div>
                 <div style="display: flex; align-items: center; gap: 8px;">
+                    <button id="var-qa-download-md-btn" onclick="downloadVarQaMarkdown()" class="btn-modern" style="padding: 3px 8px; font-size: 0.75rem; display: inline-flex; align-items: center; gap: 4px; color: #6366f1; border-color: #c7d2fe;" title="Download explanation and variable references as Markdown file">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        <span>Download .md</span>
+                    </button>
                     <button id="var-qa-copy-btn" onclick="copyVarQaResult()" class="btn-modern" style="padding: 3px 8px; font-size: 0.75rem;">
                         <span>Copy</span>
                     </button>
@@ -815,6 +819,12 @@
                         </a>
                     </div>
                 </div>
+
+                <!-- Explain Button directly after Export -->
+                <button id="btn-var-explain" onclick="explainFilteredVariables()" title="Use Ollama to read CDIF export results, explain variables with units of measure, and download report" style="padding: 8px 14px; background: #6366f1; color: white; border: none; border-radius: var(--radius-sm); font-size: 0.84rem; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; box-shadow: 0 1px 3px rgba(99, 102, 241, 0.3); transition: all 0.2s ease;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z"></path><path d="M12 12L2.5 7.5"></path><path d="M12 12v9"></path></svg>
+                    <span>Explain</span>
+                </button>
             </div>
 
             <!-- Ask AI Query Form -->
@@ -1435,6 +1445,113 @@
                     setTimeout(() => btn.innerHTML = orig, 2000);
                 }
             });
+        }
+
+        function downloadVarQaMarkdown() {
+            if (!lastVarQaRawAnswer) {
+                alert('No explanation content to download yet.');
+                return;
+            }
+            const searchInput = document.getElementById('var-search-input');
+            const queryStr = searchInput ? searchInput.value.trim() : '';
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const filename = queryStr
+                ? `variables-explanation-${queryStr.replace(/[^a-zA-Z0-9_-]/g, '_')}-${timestamp.slice(0, 10)}.md`
+                : `variables-cdif-explanation-${timestamp.slice(0, 10)}.md`;
+
+            // Append structured variable references header if not already present
+            let fileContent = lastVarQaRawAnswer;
+            if (!fileContent.startsWith('# ')) {
+                fileContent = `# CDIF Variables Export Explanation & Analysis\n\n**Generated**: ${new Date().toUTCString()}\n${queryStr ? `**Filter Query**: \`${queryStr}\`\n` : ''}\n---\n\n` + fileContent;
+            }
+
+            const blob = new Blob([fileContent], { type: 'text/markdown;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        async function explainFilteredVariables() {
+            const vars = filteredVariablesList || [];
+            if (!vars || vars.length === 0) {
+                alert('No variables in current filter to explain. Please clear or adjust your filter.');
+                return;
+            }
+
+            const panel = document.getElementById('var-qa-result');
+            const contentBox = document.getElementById('var-qa-content');
+            const searchInput = document.getElementById('var-search-input');
+            const queryStr = searchInput ? searchInput.value.trim() : '';
+            const explainBtn = document.getElementById('btn-var-explain');
+
+            if (panel) panel.style.display = 'block';
+            if (contentBox) {
+                contentBox.innerHTML = `
+                    <div style="display: flex; align-items: center; gap: 10px; padding: 15px 0; color: #4338ca;">
+                        <span class="var-spinner" style="border-top-color: #6366f1;"></span>
+                        <div>
+                            <div style="font-weight: 600;">Generating CDIF Variables Overview with Ollama...</div>
+                            <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 3px;">Analyzing ${vars.length.toLocaleString()} exported variables, physical units of measure, and dataset provenance references</div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (explainBtn) {
+                explainBtn.disabled = true;
+                explainBtn.innerHTML = '<span class="var-spinner" style="width: 12px; height: 12px; border-top-color: white;"></span> <span>Explaining...</span>';
+            }
+
+            try {
+                // Pass top 100 filtered variables to avoid token blowup while providing complete CDIF representation
+                const sampleVars = vars.slice(0, 100);
+                const res = await fetch('/api/variables/explain', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        filter: queryStr,
+                        variables: sampleVars
+                    })
+                });
+
+                if (!res.ok) {
+                    throw new Error(`Server returned HTTP ${res.status}`);
+                }
+
+                const data = await res.json();
+                const explanation = data.explanation || data.answer || 'No explanation returned from model.';
+                lastVarQaRawAnswer = explanation;
+
+                if (contentBox) {
+                    if (typeof marked !== 'undefined') {
+                        contentBox.innerHTML = marked.parse(explanation);
+                    } else {
+                        contentBox.innerText = explanation;
+                    }
+                }
+
+                // Scroll smoothly to explanation result
+                if (panel) {
+                    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            } catch (err) {
+                if (contentBox) {
+                    contentBox.innerHTML = `<span style="color: #dc3545;">Error generating explanation: ${escapeHtml(err.message)}</span>`;
+                }
+            } finally {
+                if (explainBtn) {
+                    explainBtn.disabled = false;
+                    explainBtn.innerHTML = `
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z"></path><path d="M12 12L2.5 7.5"></path><path d="M12 12v9"></path></svg>
+                        <span>Explain</span>
+                    `;
+                }
+            }
         }
 
         function toggleMainExportMenu(event) {
