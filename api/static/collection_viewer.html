@@ -1463,6 +1463,9 @@
         async function checkCollectionVariablesPresence() {
             if (!colId) return;
             try {
+                // Trigger background refresh so variables cache is always rebuilt/kept fresh
+                fetch(`/api/collections/${colId}/variables/refresh`).catch(() => {});
+
                 const res = await fetch(`/api/collections/${colId}/variables`);
                 if (!res.ok) return;
                 const data = await res.json();

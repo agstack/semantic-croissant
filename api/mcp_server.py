@@ -8999,6 +8999,15 @@ Please answer the question based ONLY on the context provided above (including t
                             resolved_items.append({"id": doc_id, "name": name, "description": desc, "date": item_date, "keywords": item_keywords})
                             
                 col_data["resolved_items"] = resolved_items
+
+                # Automatically trigger asynchronous background rebuild of variable statistics & CDIF cache
+                try:
+                    es_url_bg = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+                    import asyncio
+                    asyncio.create_task(update_collection_variables_cache(cid, es_url_bg))
+                except Exception as bg_cache_err:
+                    print(f"Warning: could not trigger background cache rebuild for collection {cid}: {bg_cache_err}", file=sys.stderr)
+
                 return JSONResponse(col_data)
             except Exception as e:
                 return JSONResponse({"error": str(e)}, status_code=500)
@@ -10008,8 +10017,8 @@ Please answer the question based ONLY on the context provided above (including t
                             num_val = c_data.get("numeric_variables", c_data.get("total_numeric", 0))
                             other_val = c_data.get("text_other_variables", c_data.get("total_other", 0))
                             
-                            # Trigger background refresh if stale or requested
-                            if time.time() - c_data.get("updated_at", 0) > 3600:
+                            # Trigger background refresh if stale (> 5 minutes) or requested
+                            if time.time() - c_data.get("updated_at", 0) > 300:
                                 asyncio.create_task(update_collection_variables_cache(cid, es_url))
 
                             return JSONResponse({
