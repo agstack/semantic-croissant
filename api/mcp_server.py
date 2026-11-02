@@ -6186,134 +6186,53 @@ Please answer the question based ONLY on the context provided above (including t
 
             if not raw_file_param and not raw_url_param and (q_param or cid_param or request.query_params.get("variables") == "true"):
                 # Handle filtered variable index export as full CDIF 1.1 Dataset conforming to schema
-                es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
-
-                # Fetch variables matching query
-                tokens = [t.lower() for t in re.split(r"\s+", q_param) if t and t.lower() not in ["and", "or", "&"]]
+                # Directly reuse the variables retrieved and normalized by api_variable_index_data for 100% parity
                 all_variables = []
                 unique_files = set()
-                try:
-                    async with httpx.AsyncClient(timeout=25.0) as es_var_client:
-                        # 1. Search cdif index
-                        cdif_must = []
-                        if tokens:
-                            for t in tokens:
-                                cdif_must.append({
-                                    "bool": {
-                                        "should": [
-                                            {"match": {"cdif_jsonld.DDICDIModels.name": {"query": t, "boost": 3}}},
-                                            {"match": {"cdif_jsonld.DDICDIModels.displayLabel": {"query": t, "boost": 2}}},
-                                            {"match": {"cdif_jsonld.DDICDIModels.dct:description": {"query": t, "boost": 1}}},
-                                            {"match": {"file_name": {"query": t, "boost": 1}}}
-                                        ]
-                                    }
-                                })
-                        cdif_q = {"bool": {"must": cdif_must}} if cdif_must else {"match_all": {}}
-                        r_cdif = await es_var_client.post(
-                            f"{es_url}/cdif/_search",
-                            json={
-                                "query": cdif_q,
-                                "size": 1000,
-                                "_source": ["file_name", "file_url", "dataset_url", "dataset_id", "title", "cdif_export_url", "cdif_jsonld"]
-                            }
-                        )
-                        if r_cdif.status_code == 200:
-                            for hit in r_cdif.json().get("hits", {}).get("hits", []):
-                                src = hit.get("_source", {})
-                                fn = src.get("file_name", "")
-                                fu = src.get("file_url", "")
-                                du = src.get("dataset_url", "")
-                                dt = src.get("title", "")
-                                c_export = src.get("cdif_export_url", "")
-                                c_json = src.get("cdif_jsonld", {})
-                                for m in c_json.get("DDICDIModels", []):
-                                    if isinstance(m, dict) and ("InstanceVariable" in str(m.get("@type", "")) or "PropertyValue" in str(m.get("@type", ""))):
-                                        vname = m.get("schema:name") or m.get("name") or m.get("@id", "")
-                                        vname = str(vname).lstrip("#").strip()
-                                        if not vname: continue
-                                        all_variables.append({
-                                            "name": vname,
-                                            "label": m.get("schema:description") or m.get("displayLabel") or vname,
-                                            "type": str(m.get("cdif:physicalDataType") or m.get("physicalDataType") or "string").replace("xsd:", ""),
-                                            "desc": m.get("schema:description") or m.get("dct:description") or "",
-                                            "unit": m.get("schema:unitText") or m.get("unitText") or "",
-                                            "file_name": fn,
-                                            "file_url": fu,
-                                            "dataset_title": dt,
-                                            "dataset_url": du,
-                                            "cdif_url": c_export
-                                        })
-                                        if fn: unique_files.add(fn)
 
-                        # 2. Search dataverse / croissant dataset recordSet fields
-                        if tokens:
-                            ds_must = []
-                            for t in tokens:
-                                ds_must.append({
-                                    "bool": {
-                                        "should": [
-                                            {"match": {"recordSet.field.name": {"query": t, "boost": 3}}},
-                                            {"match": {"recordSet.field.description": {"query": t, "boost": 2}}},
-                                            {"match": {"title": {"query": t, "boost": 1}}},
-                                            {"match": {"name": {"query": t, "boost": 1}}}
-                                        ]
-                                    }
-                                })
-                            r_ds = await es_var_client.post(
-                                f"{es_url}/*,-.*,-collections,-history,-groups,-cdif/_search",
-                                json={
-                                    "query": {"bool": {"must": ds_must}},
-                                    "size": 50,
-                                    "_source": ["name", "title", "url", "_source_url", "distribution", "recordSet"]
-                                }
-                            )
-                            if r_ds.status_code == 200:
-                                for dh in r_ds.json().get("hits", {}).get("hits", []):
-                                    dsrc = dh.get("_source", {})
-                                    d_name = dsrc.get("name") or dsrc.get("title") or ""
-                                    d_url = dsrc.get("url") or dsrc.get("_source_url") or ""
-                                    rs_list = dsrc.get("recordSet", [])
-                                    for rs in (rs_list if isinstance(rs_list, list) else [rs_list]):
-                                        if not isinstance(rs, dict): continue
-                                        for fld in rs.get("field", []):
-                                            if not isinstance(fld, dict): continue
-                                            fname = str(fld.get("name") or "")
-                                            fdesc = str(fld.get("description") or fname)
-                                            ftype = str(fld.get("dataType") or "sc:Float")
-                                            all_variables.append({
-                                                "name": fname,
-                                                "label": fname,
-                                                "type": ftype,
-                                                "desc": fdesc,
-                                                "unit": "",
-                                                "file_name": rs.get("name", "Dataset RecordSet"),
-                                                "file_url": "",
-                                                "dataset_title": d_name,
-                                                "dataset_url": d_url,
-                                                "cdif_url": f"{base_host}/export?ds={urllib.parse.quote(d_url, safe='')}" if d_url else ""
-                                            })
-                                            if rs.get("name"): unique_files.add(rs.get("name"))
+                try:
+                    var_resp = await api_variable_index_data(request)
+                    if hasattr(var_resp, "body"):
+                        var_data = json.loads(var_resp.body.decode("utf-8"))
+                        raw_vars = var_data.get("variables", [])
+                        raw_files = var_data.get("files", [])
+                        for f in raw_files:
+                            fname = f.get("file_name") or f.get("file_url") or f.get("dataset_title")
+                            if fname:
+                                unique_files.add(fname)
+                        for rv in raw_vars:
+                            v_name = rv.get("variable_name") or rv.get("name") or ""
+                            v_label = rv.get("display_label") or rv.get("label") or v_name
+                            v_desc = rv.get("description") or rv.get("desc") or v_label
+                            v_type = rv.get("data_type") or rv.get("type") or "unspecified"
+                            v_unit = rv.get("unit") or ""
+                            v_fname = rv.get("file_name") or ""
+                            v_furl = rv.get("file_url") or ""
+                            v_dtitle = rv.get("dataset_title") or ""
+                            v_durl = rv.get("dataset_url") or ""
+                            v_cdif = rv.get("cdif_export_url") or ""
+
+                            fn_key = v_fname or v_furl or v_dtitle
+                            if fn_key:
+                                unique_files.add(fn_key)
+
+                            all_variables.append({
+                                "name": v_name,
+                                "label": v_label,
+                                "type": v_type,
+                                "desc": v_desc,
+                                "unit": v_unit,
+                                "file_name": v_fname,
+                                "file_url": v_furl,
+                                "dataset_title": v_dtitle,
+                                "dataset_url": v_durl,
+                                "cdif_url": v_cdif
+                            })
                 except Exception as var_fetch_err:
                     print(f"Error fetching variables for export: {var_fetch_err}", file=sys.stderr)
 
-                # Filter tokens
-                if tokens:
-                    filtered = []
-                    for v in all_variables:
-                        hay = f"{v.get('name', '')} {v.get('label', '')} {v.get('desc', '')} {v.get('dataset_title', '')}".lower()
-                        if all(t in hay for t in tokens):
-                            filtered.append(v)
-                    all_variables = filtered
-
-                # Deduplicate by (name, file_name, dataset_title)
-                seen_vars = set()
-                deduped_vars = []
-                for v in all_variables:
-                    vk = (v.get("name"), v.get("file_name"), v.get("dataset_title"))
-                    if vk not in seen_vars:
-                        seen_vars.add(vk)
-                        deduped_vars.append(v)
-                all_variables = deduped_vars
+                # Keep all variables matching api_variable_index_data results (307 variables)
+                # without over-deduplicating across multiple tables or sub-measurements
 
                 # Build CDIF 1.1 structure matching the standard format
                 context = {
