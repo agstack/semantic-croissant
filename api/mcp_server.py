@@ -11540,22 +11540,34 @@ Instructions:
                 else:
                     es_query = {"match_all": {}}
 
+                clean_re = re.compile(r"[()/\-_]+") if q_param else None
+                # Optimize source fields to avoid transmitting megabytes of redundant metadata
+                source_fields = [
+                    "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url", "collection_id",
+                    "title", "description",
+                    "cdif_jsonld.DDICDIModels.@type",
+                    "cdif_jsonld.DDICDIModels.name",
+                    "cdif_jsonld.DDICDIModels.displayLabel.locationVariant.entryValue",
+                    "cdif_jsonld.DDICDIModels.physicalDataType.entryValue",
+                    "cdif_jsonld.DDICDIModels.dct:description",
+                    "cdif_jsonld.DDICDIModels.definition.content",
+                    "cdif_jsonld.DDICDIModels.schema:unitText",
+                    "cdif_jsonld.schema:variableMeasured.@id",
+                    "cdif_jsonld.schema:variableMeasured.@type",
+                    "cdif_jsonld.schema:variableMeasured.schema:name",
+                    "cdif_jsonld.schema:variableMeasured.name",
+                    "cdif_jsonld.schema:variableMeasured.schema:description",
+                    "cdif_jsonld.schema:variableMeasured.description",
+                    "cdif_jsonld.schema:variableMeasured.cdif:physicalDataType",
+                    "cdif_jsonld.schema:variableMeasured.physicalDataType",
+                    "cdif_jsonld.schema:variableMeasured.schema:unitText",
+                    "cdif_jsonld.variableMeasured"
+                ]
+
                 payload = {
                     "query": es_query,
                     "size": 10000,
-                    "_source": [
-                        "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url", "collection_id",
-                        "title", "description",
-                        "cdif_jsonld.DDICDIModels.@type",
-                        "cdif_jsonld.DDICDIModels.name",
-                        "cdif_jsonld.DDICDIModels.displayLabel",
-                        "cdif_jsonld.DDICDIModels.physicalDataType",
-                        "cdif_jsonld.DDICDIModels.dct:description",
-                        "cdif_jsonld.DDICDIModels.definition",
-                        "cdif_jsonld.DDICDIModels.schema:unitText",
-                        "cdif_jsonld.schema:variableMeasured",
-                        "cdif_jsonld.variableMeasured"
-                    ]
+                    "_source": source_fields
                 }
                 async with httpx.AsyncClient(timeout=60.0) as client:
                     resp = await client.post(f"{es_url}/cdif/_search", json=payload)
@@ -11651,6 +11663,13 @@ Instructions:
                                                     matched_var_ids.add(v_id)
                                                     matched_var_ids.add(v_id.lstrip("#"))
 
+                        # Compute missing tokens for this document header if query specified
+                        missing_tokens = None
+                        if q_param and tokens:
+                            doc_header = f"{dtitle} {fname}".lower()
+                            doc_header_norm = clean_re.sub(" ", doc_header) if clean_re else doc_header
+                            missing_tokens = [t for t in tokens if t not in doc_header_norm and t not in doc_header]
+
                         models = cdif_json.get("DDICDIModels", [])
                         var_meas = cdif_json.get("schema:variableMeasured") or cdif_json.get("variableMeasured") or []
 
@@ -11664,6 +11683,9 @@ Instructions:
                                 file_var_count += 1
                                 raw_name = m.get("name", {})
                                 var_name = raw_name.get("name", "") if isinstance(raw_name, dict) else str(raw_name or "")
+                                var_name = var_name.lstrip("#").strip()
+                                if not var_name:
+                                    continue
 
                                 raw_disp = m.get("displayLabel", {})
                                 loc_var = raw_disp.get("locationVariant", {}) if isinstance(raw_disp, dict) else {}
@@ -11678,6 +11700,20 @@ Instructions:
                                 if not desc:
                                     raw_def = m.get("definition", {})
                                     desc = raw_def.get("content", "") if isinstance(raw_def, dict) else str(raw_def or "")
+
+                                # Fast pre-filter against missing tokens
+                                if missing_tokens:
+                                    name_l = var_name.lower()
+                                    desc_l = str(desc).lower()
+                                    label_l = str(disp_label).lower()
+                                    matched_all = True
+                                    for t in missing_tokens:
+                                        if t not in name_l and t not in desc_l and t not in label_l:
+                                            if clean_re and (t not in clean_re.sub(" ", name_l) and t not in clean_re.sub(" ", desc_l) and t not in clean_re.sub(" ", label_l)):
+                                                matched_all = False
+                                                break
+                                    if not matched_all:
+                                        continue
 
                                 unit = m.get("schema:unitText") or ""
 
@@ -11719,9 +11755,26 @@ Instructions:
                                     file_var_count += 1
                                     raw_name = vm.get("schema:name") or vm.get("name") or vm.get("@id", "")
                                     var_name = str(raw_name).lstrip("#").strip()
+                                    if not var_name:
+                                        continue
                                     disp_label = str(vm.get("schema:description") or vm.get("description") or var_name).strip()
                                     data_type = str(vm.get("cdif:physicalDataType") or vm.get("physicalDataType") or "unspecified").replace("xsd:", "")
                                     desc = str(vm.get("schema:description") or vm.get("description") or "")
+
+                                    # Fast pre-filter against missing tokens
+                                    if missing_tokens:
+                                        name_l = var_name.lower()
+                                        desc_l = desc.lower()
+                                        label_l = disp_label.lower()
+                                        matched_all = True
+                                        for t in missing_tokens:
+                                            if t not in name_l and t not in desc_l and t not in label_l:
+                                                if clean_re and (t not in clean_re.sub(" ", name_l) and t not in clean_re.sub(" ", desc_l) and t not in clean_re.sub(" ", label_l)):
+                                                    matched_all = False
+                                                    break
+                                        if not matched_all:
+                                            continue
+
                                     unit = str(vm.get("schema:unitText") or vm.get("unitText") or "")
 
                                     var_key = (did, fname, var_name)
@@ -11775,7 +11828,8 @@ Instructions:
                                     "query": ds_query,
                                     "size": 50,
                                     "_source": [
-                                        "name", "title", "url", "_source_url", "distribution",
+                                        "name", "title", "url", "_source_url",
+                                        "distribution.name", "distribution.@id", "distribution.contentUrl",
                                         "recordSet.name", "recordSet.field.name",
                                         "recordSet.field.description", "recordSet.field.dataType",
                                         "recordSet.field.source"
