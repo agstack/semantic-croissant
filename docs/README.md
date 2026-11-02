@@ -32,3 +32,9 @@ The infrastructure supports the "Minority Report" arbitrage system described in 
 
 ## Summary
 The `semantic-croissant` repository isn't just a database; it is the physical realization of the **Navigation + Semantic** layers. By structuring massive amounts of Croissant metadata into a high-performance semantic graph, we are providing the exact infrastructure needed for Agentic AI to operate with trust, transparency, and blistering speed.
+
+---
+
+## Technical Documentation
+- [CDIF Variable Search & Extraction Specification](cdif_variable_search.md): Details the multi-field Elasticsearch queries and Python variable extraction rules across `cdif` and Croissant indices.
+
