@@ -11544,7 +11544,8 @@ Instructions:
             """
             import asyncio, os
             from starlette.responses import JSONResponse
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_url = os.environ.get("ES_GLOBAL_HOST") or os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200")
+            es_url = es_url.rstrip("/")
             asyncio.create_task(update_variables_index_cache(es_url))
             return JSONResponse({"status": "ok", "message": "Variables cache update initiated in background"})
 
@@ -11562,7 +11563,8 @@ Instructions:
             offset = int(offset_param) if offset_param and offset_param.isdigit() else 0
             q_param = (request.query_params.get("q") or request.query_params.get("query") or "").strip()
 
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_url = os.environ.get("ES_GLOBAL_HOST") or os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200")
+            es_url = es_url.rstrip("/")
 
             # Check if cache hit is available for instant response (fast statistical values + first 100 records)
             if not q_param and offset == 0:
@@ -12048,7 +12050,8 @@ Instructions:
             if not query:
                 return JSONResponse({"answer": "Please provide a question about the variables."})
 
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_url = os.environ.get("ES_GLOBAL_HOST") or os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200")
+            es_url = es_url.rstrip("/")
             payload = {
                 "query": {"match_all": {}},
                 "size": 10000,
