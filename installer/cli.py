@@ -426,22 +426,58 @@ def step_4_build_docker_images(repo_dir: str, profile_name: str):
         sys.exit(res_api.returncode)
     log_success(f"Built '{api_image_name}' successfully.")
 
-    # 2. Build converters service if present
+    # 2. Build or download converters service image
+    converters_image = f"{profile_name}-converters"
     converters_dir = os.path.join(repo_dir, "tools", "converters")
     converters_dockerfile = os.path.join(converters_dir, "Dockerfile")
+
     if not os.path.exists(converters_dockerfile):
         log_info("Initializing git submodules to fetch converters...")
         subprocess.run(["git", "-C", repo_dir, "submodule", "update", "--init", "--recursive"])
 
+    built_converters = False
     if os.path.isdir(converters_dir) and os.path.exists(converters_dockerfile):
-        log_info(f"Building converters Docker image '{profile_name}-converters'...")
+        log_info(f"Building converters Docker image '{converters_image}'...")
         build_conv_cmd = [
             "docker", "build",
             "-f", "tools/converters/Dockerfile",
-            "-t", f"{profile_name}-converters",
+            "-t", converters_image,
             "tools/converters"
         ]
-        subprocess.run(build_conv_cmd)
+        res_conv = subprocess.run(build_conv_cmd)
+        if res_conv.returncode == 0:
+            built_converters = True
+            log_success(f"Built '{converters_image}' successfully.")
+
+    if not built_converters:
+        # Check if image already exists locally
+        res_inspect = subprocess.run(
+            ["docker", "image", "inspect", converters_image],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        if res_inspect.returncode != 0:
+            log_info(f"No Dockerfile for converters found. Downloading pre-built image from repository...")
+            conv_url = "https://ai.now.museum/dumps/converters.tar.gz"
+            auth_str = "admin:croissant2026"
+            encoded_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
+            req = urllib.request.Request(conv_url)
+            req.add_header("Authorization", f"Basic {encoded_auth}")
+            temp_conv_archive = os.path.join(repo_dir, "converters.tar.gz")
+            try:
+                with urllib.request.urlopen(req, timeout=300) as resp:
+                    with open(temp_conv_archive, "wb") as f_out:
+                        shutil.copyfileobj(resp, f_out)
+                subprocess.run(["docker", "load", "-i", temp_conv_archive])
+                # Tag to expected name
+                subprocess.run(["docker", "tag", "asknowmuseum-converters:latest", converters_image])
+                try:
+                    os.remove(temp_conv_archive)
+                except OSError:
+                    pass
+                log_success(f"Loaded and tagged '{converters_image}' successfully.")
+            except Exception as e:
+                log_warn(f"Could not download pre-built converters image: {e}")
 
     # 3. Pull required base images
     log_info("Pulling standard base images (Qlever, Elasticsearch, MinIO)...")
