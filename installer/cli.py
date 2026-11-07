@@ -245,8 +245,110 @@ def step_2_download_dump(repo_dir: str):
             pass
 
 
+def create_custom_profile_from_template(repo_dir: str) -> str:
+    """Interactively creates a new profile .env file using profiles/codata.env as a template."""
+    print(f"\n{Colors.BOLD}--- Create Custom Profile (based on codata.env template) ---{Colors.RESET}")
+    profiles_dir = os.path.join(repo_dir, "profiles")
+    template_path = os.path.join(profiles_dir, "codata.env")
+
+    # Prompt for new profile name
+    while True:
+        custom_name = ask_prompt("Enter name for your new profile (e.g. my-project)").strip()
+        custom_name = re.sub(r"[^a-zA-Z0-9_\-]", "", custom_name).lower()
+        if not custom_name:
+            log_error("Profile name cannot be empty. Please enter a valid name.")
+            continue
+        env_file_path = os.path.join(profiles_dir, f"{custom_name}.env")
+        if os.path.exists(env_file_path):
+            overwrite = ask_prompt(f"Profile '{custom_name}.env' already exists. Overwrite? (y/n)", default="n").lower()
+            if overwrite in ["y", "yes"]:
+                break
+        else:
+            break
+
+    # Read template lines if available
+    template_content = ""
+    if os.path.exists(template_path):
+        with open(template_path, "r", encoding="utf-8") as f:
+            template_content = f.read()
+    else:
+        # Fallback minimal template if codata.env not found
+        template_content = (
+            "PROFILE_NAME=codata\n"
+            "QLEVER_SERVER_HOST_NAME=codata-server\n"
+            "OLLAMA_HOST=http://10.147.18.24:11444\n"
+            "OPENAI_API_KEY=test-api-key-12345\n"
+            "OLLAMA_API_KEY=test-api-key-12345\n"
+            "HOST=https://ai.codata.org\n"
+            "MCP_DOMAIN=ai.codata.org\n"
+            "QLEVER_UI_PORT=7042\n"
+            "ES_HOST=http://localhost:9200\n"
+            "API_PORT=7043\n"
+            "MCP_PORT=7110\n"
+            "MINIO_API_PORT=9025\n"
+            "MINIO_CONSOLE_PORT=9027\n"
+            "VOLUME_DIR=./qlever-tests/volumes\n"
+            "VAULT_LOGO_URL=/logo.png\n"
+        )
+
+    # Ask user key configuration questions
+    print("\nPlease answer configuration questions for your new profile (press Enter for defaults):")
+    host_url = ask_prompt("Public Host URL (e.g. https://ai.example.org)", default=f"https://ai.{custom_name}.org")
+    parsed_host = urllib.parse.urlparse(host_url).netloc or f"ai.{custom_name}.org"
+    mcp_domain = ask_prompt("MCP Domain", default=parsed_host)
+    ollama_host = ask_prompt("Ollama Host URL", default="http://10.147.18.24:11444")
+    openai_api_key = ask_prompt("OpenAI API Key (or test placeholder)", default="test-api-key-12345")
+    api_port = ask_prompt("API Port", default="7043")
+    mcp_port = ask_prompt("MCP Port", default="7110")
+    qlever_ui_port = ask_prompt("QLever UI Port", default="7042")
+    es_host = ask_prompt("Elasticsearch URL", default="http://localhost:9200")
+    vault_logo_url = ask_prompt("Vault Logo URL or path", default="/logo.png")
+
+    config_updates = {
+        "PROFILE_NAME": custom_name,
+        "QLEVER_SERVER_HOST_NAME": f"{custom_name}-server",
+        "OLLAMA_HOST": ollama_host,
+        "OPENAI_API_KEY": openai_api_key,
+        "OLLAMA_API_KEY": openai_api_key,
+        "HOST": host_url,
+        "MCP_DOMAIN": mcp_domain,
+        "API_PORT": api_port,
+        "MCP_PORT": mcp_port,
+        "QLEVER_UI_PORT": qlever_ui_port,
+        "ES_HOST": es_host,
+        "VAULT_LOGO_URL": vault_logo_url,
+    }
+
+    # Replace or append in template content
+    lines = template_content.splitlines()
+    new_lines = []
+    seen_keys = set()
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key, _ = stripped.split("=", 1)
+            key = key.strip()
+            if key in config_updates:
+                new_lines.append(f"{key}={config_updates[key]}")
+                seen_keys.add(key)
+                continue
+        new_lines.append(line)
+
+    for key, val in config_updates.items():
+        if key not in seen_keys:
+            new_lines.append(f"{key}={val}")
+
+    env_file_path = os.path.join(profiles_dir, f"{custom_name}.env")
+    with open(env_file_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(new_lines) + "\n")
+
+    log_success(f"Custom profile created at: {env_file_path}")
+    return custom_name
+
+
 def step_3_select_profile(repo_dir: str) -> str:
-    """Lists available environment profiles and prompts the user to select one."""
+    """Lists available environment profiles and prompts the user to select or create one."""
     print(f"\n{Colors.BOLD}--- Step 3: Deployment Profile Selection ---{Colors.RESET}")
     profiles_dir = os.path.join(repo_dir, "profiles")
     available_profiles = []
@@ -262,14 +364,32 @@ def step_3_select_profile(repo_dir: str) -> str:
     print("Available profiles found in repository:")
     for idx, p in enumerate(available_profiles, 1):
         print(f"  {Colors.CYAN}[{idx}]{Colors.RESET} {p}")
+    create_idx = len(available_profiles) + 1
+    print(f"  {Colors.GREEN}[{create_idx}]{Colors.RESET} Create own profile (from codata.env template)")
 
-    default_profile = "croissant-live" if "croissant-live" in available_profiles else available_profiles[0]
-    choice = ask_prompt(f"Select profile number or enter profile name", default=default_profile)
+    default_profile = "codata" if "codata" in available_profiles else available_profiles[0]
+    choice = ask_prompt(
+        f"Select profile number or enter profile name",
+        default=default_profile
+    )
 
-    if choice.isdigit() and 1 <= int(choice) <= len(available_profiles):
-        selected_profile = available_profiles[int(choice) - 1]
-    else:
+    if choice.isdigit():
+        choice_num = int(choice)
+        if 1 <= choice_num <= len(available_profiles):
+            selected_profile = available_profiles[choice_num - 1]
+        elif choice_num == create_idx:
+            selected_profile = create_custom_profile_from_template(repo_dir)
+        else:
+            log_warn(f"Option [{choice}] not recognized. Creating new profile.")
+            selected_profile = create_custom_profile_from_template(repo_dir)
+    elif choice.strip().lower() in ["create", "new", "create own profile"]:
+        selected_profile = create_custom_profile_from_template(repo_dir)
+    elif choice.strip() in available_profiles:
         selected_profile = choice.strip()
+    else:
+        # User typed a profile name not in the list
+        log_info(f"Profile '{choice.strip()}' does not exist yet. Creating it from codata.env template...")
+        selected_profile = create_custom_profile_from_template(repo_dir)
 
     log_success(f"Selected profile: '{selected_profile}'")
     return selected_profile
