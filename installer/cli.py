@@ -400,7 +400,72 @@ def step_3_select_profile(repo_dir: str) -> str:
         selected_profile = create_custom_profile_from_template(repo_dir)
 
     log_success(f"Selected profile: '{selected_profile}'")
+
+    # Offer to restore Elasticsearch & QLever indexes from archive if available or desired
+    step_3b_restore_indexes(repo_dir=repo_dir, profile_name=selected_profile)
+
     return selected_profile
+
+
+def step_3b_restore_indexes(repo_dir: str, profile_name: str):
+    """
+    Checks if Elasticsearch and QLever archives exist or prompts user to restore them.
+    Can restore directly from dumps/ directory using installer/restore.sh or custom location.
+    """
+    dumps_dir = os.path.join(repo_dir, "dumps")
+    es_archive = os.path.join(dumps_dir, "elasticsearch-indexes.tar.gz")
+    qlever_archive = os.path.join(dumps_dir, "qlever-cdif-indexes.tar.gz")
+
+    found_archives = []
+    if os.path.isfile(es_archive):
+        found_archives.append("Elasticsearch indexes (elasticsearch-indexes.tar.gz)")
+    if os.path.isfile(qlever_archive):
+        found_archives.append("QLever SPARQL indexes (qlever-cdif-indexes.tar.gz)")
+
+    print(f"\n{Colors.BOLD}--- Step 3b: Restore Elasticsearch & QLever Indexes ---{Colors.RESET}")
+    if found_archives:
+        log_info(f"Found archive(s) in {dumps_dir}:")
+        for arc in found_archives:
+            print(f"  • {arc}")
+        prompt_msg = f"Restore Elasticsearch and/or QLever indexes from archive for profile '{profile_name}'? (y/n)"
+    else:
+        prompt_msg = f"Do you want to restore Elasticsearch and QLever indexes from an archive? (y/n)"
+
+    do_restore = ask_prompt(prompt_msg, default="y" if found_archives else "n").lower()
+    if do_restore not in ["y", "yes"]:
+        log_info("Skipping database index restore. Proceeding with standard setup.")
+        return
+
+    # Check for custom dumps directory
+    custom_dumps = ask_prompt("Path to dumps directory containing archives", default=dumps_dir)
+    custom_dumps = os.path.abspath(custom_dumps)
+
+    restore_script = os.path.join(repo_dir, "installer", "restore.sh")
+    if os.path.isfile(restore_script):
+        log_info(f"Running restore script '{restore_script}' for profile '{profile_name}'...")
+        res = subprocess.run(["bash", restore_script, profile_name, custom_dumps])
+        if res.returncode == 0:
+            log_success(f"Indexes restored successfully for profile '{profile_name}'.")
+        else:
+            log_warn(f"Restore script exited with status code {res.returncode}.")
+    else:
+        # Fallback inline restoration if restore.sh is absent
+        target_es = os.path.join(repo_dir, "qlever-tests", "volumes", profile_name, "es")
+        target_qlever = os.path.join(repo_dir, "qlever-tests", "volumes", profile_name, "server")
+
+        es_arc = os.path.join(custom_dumps, "elasticsearch-indexes.tar.gz")
+        if os.path.isfile(es_arc):
+            log_info(f"Unpacking Elasticsearch archive to {target_es}...")
+            os.makedirs(target_es, exist_ok=True)
+            subprocess.run(["tar", "-xzf", es_arc, "-C", target_es])
+            log_success("Elasticsearch indexes unpacked.")
+
+        ql_arc = os.path.join(custom_dumps, "qlever-cdif-indexes.tar.gz")
+        if os.path.isfile(ql_arc):
+            log_info(f"Unpacking QLever archive to {target_qlever}...")
+            os.makedirs(target_qlever, exist_ok=True)
+            subprocess.run(["tar", "-xzf", ql_arc, "-C", target_qlever])
+            log_success("QLever indexes unpacked.")
 
 
 def step_4_build_docker_images(repo_dir: str, profile_name: str):
