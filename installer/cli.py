@@ -204,30 +204,21 @@ def step_2_download_dump(repo_dir: str, profile_config: dict = None):
     dest_folder = os.path.abspath(dest_folder)
     os.makedirs(dest_folder, exist_ok=True)
 
-    # Local temporary download file
-    parsed_path = urllib.parse.urlparse(download_url).path
-    filename = os.path.basename(parsed_path) or "data_dump.tar.gz"
-    local_archive_path = os.path.join(dest_folder, filename)
+    # Helper function to download a file with progress bar
+    def download_file(url: str, out_path: str):
+        req = urllib.request.Request(url)
+        if username:
+            auth_str = f"{username}:{password}"
+            encoded_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
+            req.add_header("Authorization", f"Basic {encoded_auth}")
 
-    log_info(f"Downloading data dump to '{local_archive_path}'...")
-
-    # Build request with optional HTTP Basic Auth
-    req = urllib.request.Request(download_url)
-    if username:
-        auth_str = f"{username}:{password}"
-        encoded_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
-        req.add_header("Authorization", f"Basic {encoded_auth}")
-
-    # Streaming download with progress bar
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=300) as resp:
             total_size = resp.headers.get("Content-Length")
             total_bytes = int(total_size) if total_size and total_size.isdigit() else 0
             downloaded = 0
-            block_size = 65536
+            block_size = 1048576  # 1MB
             t0 = time.time()
-
-            with open(local_archive_path, "wb") as out_fp:
+            with open(out_path, "wb") as out_fp:
                 while True:
                     chunk = resp.read(block_size)
                     if not chunk:
@@ -243,31 +234,92 @@ def step_2_download_dump(repo_dir: str, profile_config: dict = None):
                         mb_down = downloaded / (1024 * 1024)
                         sys.stdout.write(f"\r  Downloading: {mb_down:.1f}MB")
                     sys.stdout.flush()
-
             elapsed = time.time() - t0
             print(f"\n[+] Download completed in {elapsed:.1f}s.")
+
+    # Check if download_url is a directory listing (e.g. ends with / or /dumps)
+    is_directory = False
+    parsed_path = urllib.parse.urlparse(download_url).path
+    if not any(download_url.lower().endswith(ext) for ext in [".tar.gz", ".tgz", ".zip", ".tar"]):
+        is_directory = True
+
+    if is_directory:
+        log_info(f"Connecting to protected dumps directory index at '{download_url}'...")
+        req = urllib.request.Request(download_url)
+        if username:
+            auth_str = f"{username}:{password}"
+            encoded_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
+            req.add_header("Authorization", f"Basic {encoded_auth}")
+
+        found_archives = []
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                html = resp.read().decode("utf-8", errors="ignore")
+                found_archives = sorted(list(set(re.findall(r"href=['\"](?:/dumps/)?([^/'\"]+\.(?:tar\.gz|tgz|tar|zip))['\"]", html))))
+        except Exception as e:
+            log_error(f"Failed to fetch directory index from {download_url}: {e}")
+
+        if found_archives:
+            log_info("Available archives discovered on dump server:")
+            for idx, arc in enumerate(found_archives, 1):
+                print(f"  [{idx}] {arc}")
+
+            fetch_all = ask_prompt("Download all database and storage archives to dumps/? (y/n)", default="y").lower()
+            to_download = found_archives if fetch_all in ["y", "yes"] else []
+            if not to_download:
+                sel = ask_prompt("Enter archive numbers or filenames to download (comma-separated)", default="all")
+                if sel.lower() == "all":
+                    to_download = found_archives
+                else:
+                    for part in sel.split(","):
+                        part = part.strip()
+                        if part.isdigit() and 1 <= int(part) <= len(found_archives):
+                            to_download.append(found_archives[int(part) - 1])
+                        elif part in found_archives:
+                            to_download.append(part)
+
+            base_dl = download_url.rstrip("/")
+            for arc_name in to_download:
+                target_file = os.path.join(dest_folder, arc_name)
+                arc_url = f"{base_dl}/{arc_name}"
+                log_info(f"Downloading '{arc_name}' from {arc_url}...")
+                try:
+                    download_file(arc_url, target_file)
+                    log_success(f"Saved '{arc_name}' into {dest_folder}")
+                except Exception as dl_err:
+                    log_error(f"Failed to download {arc_name}: {dl_err}")
+            return
+        else:
+            log_warn("No archive files matched in directory index. Prompting for direct file URL...")
+
+    # Single file archive download
+    filename = os.path.basename(parsed_path) or "data_dump.tar.gz"
+    local_archive_path = os.path.join(dest_folder, filename)
+
+    log_info(f"Downloading data dump to '{local_archive_path}'...")
+    try:
+        download_file(download_url, local_archive_path)
     except Exception as e:
         log_error(f"Download failed: {e}")
         retry = ask_prompt("Would you like to retry or skip? (retry/skip)", default="skip").lower()
         if retry == "retry":
-            return step_2_download_dump(repo_dir)
+            return step_2_download_dump(repo_dir, profile_config)
         return
 
-    # Extract the archive
-    log_info(f"Extracting '{local_archive_path}' into '{dest_folder}'...")
-    try:
-        if tarfile.is_tarfile(local_archive_path):
-            with tarfile.open(local_archive_path, "r:*") as tar:
-                tar.extractall(path=dest_folder)
-            log_success("Tar archive extracted successfully.")
-        elif zipfile.is_zipfile(local_archive_path):
-            with zipfile.ZipFile(local_archive_path, "r") as zf:
-                zf.extractall(path=dest_folder)
-            log_success("Zip archive extracted successfully.")
-        else:
-            log_warn(f"File '{filename}' does not appear to be a standard tar/zip archive. Left in place.")
-    except Exception as e:
-        log_error(f"Extraction error: {e}")
+    # Extract single archive if not dumped directly into dumps/
+    if not filename.endswith("-indexes.tar.gz") and not filename.startswith("minio-"):
+        log_info(f"Extracting '{local_archive_path}' into '{dest_folder}'...")
+        try:
+            if tarfile.is_tarfile(local_archive_path):
+                with tarfile.open(local_archive_path, "r:*") as tar:
+                    tar.extractall(path=dest_folder)
+                log_success("Tar archive extracted successfully.")
+            elif zipfile.is_zipfile(local_archive_path):
+                with zipfile.ZipFile(local_archive_path, "r") as zf:
+                    zf.extractall(path=dest_folder)
+                log_success("Zip archive extracted successfully.")
+        except Exception as e:
+            log_error(f"Extraction error: {e}")
 
     # Ask if temporary downloaded archive should be kept
     keep = ask_prompt(f"Keep downloaded archive file '{filename}'? (y/n)", default="n").lower()
