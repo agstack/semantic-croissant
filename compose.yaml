@@ -11,8 +11,8 @@ services:
     volumes:
       - ${VOLUME_DIR:-./qlever-tests/volumes}/${PROFILE_NAME:-croissant-live}/server:/data/server
       - ${VOLUME_DIR:-./qlever-tests/volumes}/${PROFILE_NAME:-croissant-live}/ui:/data/ui
-      - ${VOLUME_DIR:-./volumes}/${PROFILE_NAME:-croissant-live}/es:/data/es
-      - ${VOLUME_DIR:-./volumes}/${PROFILE_NAME:-croissant-live}/minio:/data/minio
+      - ./volumes/${PROFILE_NAME:-croissant-live}/es:/data/es
+      - ./volumes/${PROFILE_NAME:-croissant-live}/minio:/data/minio
 
   server:
     container_name: ${PROFILE_NAME:-croissant-live}-server
@@ -66,7 +66,7 @@ services:
     ports:
       - "${ES_PORT:-9200}:9200"
     volumes:
-      - ${VOLUME_DIR:-./volumes}/${PROFILE_NAME:-croissant-live}/es:/usr/share/elasticsearch/data
+      - ./volumes/${PROFILE_NAME:-croissant-live}/es:/usr/share/elasticsearch/data
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -qv '\"status\":\"red\"'"]
       interval: 15s
@@ -170,7 +170,7 @@ services:
       - MINIO_ROOT_PASSWORD=minioadmin
     command: server /data --console-address ":9001"
     volumes:
-      - ${VOLUME_DIR:-./volumes}/${PROFILE_NAME:-croissant-live}/minio:/data
+      - ./volumes/${PROFILE_NAME:-croissant-live}/minio:/data
 
   converters:
     container_name: ${PROFILE_NAME:-croissant-live}-converters
