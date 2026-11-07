@@ -321,6 +321,10 @@ def create_custom_profile_from_template(repo_dir: str) -> str:
         "QLEVER_UI_PORT": qlever_ui_port,
         "ES_HOST": es_host,
         "VAULT_LOGO_URL": vault_logo_url,
+        "QLEVER_INDEX_INPUT_FILES": "croissant.nt",
+        "QLEVER_INDEX_CAT_INPUT_FILES": "cat croissant.nt",
+        "QLEVER_DATA_GET_DATA_CMD": "echo 'Empty index initialized' > /dev/null",
+        "QLEVER_INDEX_SETTINGS_JSON": '{ "ascii-prefixes-only": false, "num-triples-per-batch": 500000 }',
     }
 
     # Replace or append in template content
@@ -446,6 +450,43 @@ def step_4_build_docker_images(repo_dir: str, profile_name: str):
     for img in base_images:
         subprocess.run(["docker", "pull", img])
 
+    # 4. Ensure ddicdi-studio:latest is available locally
+    res_inspect = subprocess.run(
+        ["docker", "image", "inspect", "ddicdi-studio:latest"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    )
+    if res_inspect.returncode != 0:
+        log_info("Image 'ddicdi-studio:latest' not found locally.")
+        ddicdi_url = "https://ai.now.museum/dumps/ddicdi-studio.tar.gz"
+        fetch_ddicdi = ask_prompt(
+            f"Download and load 'ddicdi-studio:latest' from protected repository? (y/n)",
+            default="y"
+        ).lower()
+        if fetch_ddicdi in ["y", "yes"]:
+            auth_str = "admin:croissant2026"
+            encoded_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
+            req = urllib.request.Request(ddicdi_url)
+            req.add_header("Authorization", f"Basic {encoded_auth}")
+            log_info("Streaming 'ddicdi-studio.tar.gz' directly into 'docker load'...")
+            try:
+                proc = subprocess.Popen(["docker", "load"], stdin=subprocess.PIPE)
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    block_size = 65536
+                    while True:
+                        chunk = resp.read(block_size)
+                        if not chunk:
+                            break
+                        proc.stdin.write(chunk)
+                proc.stdin.close()
+                proc.wait()
+                if proc.returncode == 0:
+                    log_success("'ddicdi-studio:latest' loaded successfully.")
+                else:
+                    log_warn("Failed to load ddicdi-studio image.")
+            except Exception as e:
+                log_error(f"Error downloading ddicdi-studio: {e}")
+
     log_success("All Docker images built and pulled successfully.")
 
 
@@ -463,9 +504,16 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
     env_vars = os.environ.copy()
     env_vars["PROFILE_NAME"] = profile_name
 
+    # 0. Pre-run init container to ensure correct volume permissions
+    log_info("Ensuring volume permissions via init service...")
+    subprocess.run(
+        ["docker", "compose", "--env-file", f"profiles/{profile_name}.env", "--profile", profile_name, "up", "init"],
+        env=env_vars
+    )
+
     log_info(f"Starting services with 'docker compose --profile {profile_name} up -d'...")
     res = subprocess.run(
-        ["docker", "compose", "--profile", profile_name, "up", "-d"],
+        ["docker", "compose", "--env-file", f"profiles/{profile_name}.env", "--profile", profile_name, "up", "-d"],
         env=env_vars
     )
     if res.returncode != 0:
@@ -499,47 +547,55 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
 
     print("\nRunning automated health checks:")
 
+    # Check services
+    def check_http_endpoint(url: str, name: str, expected_statuses: tuple = (200, 301, 302, 405)):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "sc-installer-check"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                log_success(f"{name} is responding on {url} (HTTP {r.status})")
+                return True
+        except urllib.error.HTTPError as he:
+            if he.code in expected_statuses:
+                log_success(f"{name} is responding on {url} (HTTP {he.code})")
+                return True
+            log_warn(f"{name} check on {url} returned HTTP {he.code}")
+            return False
+        except Exception as e:
+            log_warn(f"{name} check on {url} failed: {e}")
+            return False
+
     # 1. Check API endpoint
     api_url = f"http://localhost:{ports['API']}/"
-    try:
-        req = urllib.request.Request(api_url)
-        with urllib.request.urlopen(req, timeout=5) as r:
-            log_success(f"API service is responding on port {ports['API']} (HTTP {r.status})")
-    except Exception as e:
-        log_warn(f"API service check on port {ports['API']} failed: {e}")
+    check_http_endpoint(api_url, f"API service (port {ports['API']})")
 
     # 2. Check MCP endpoint
     mcp_url = f"http://localhost:{ports['MCP']}/"
-    try:
-        req = urllib.request.Request(mcp_url)
-        with urllib.request.urlopen(req, timeout=5) as r:
-            log_success(f"MCP service is responding on port {ports['MCP']} (HTTP {r.status})")
-    except Exception as e:
-        log_warn(f"MCP service check on port {ports['MCP']} failed: {e}")
+    check_http_endpoint(mcp_url, f"MCP service (port {ports['MCP']})")
 
     # 3. Check QLever endpoint
     qlever_url = f"http://localhost:{ports['QLEVER']}/"
-    try:
-        req = urllib.request.Request(f"{qlever_url}?query=SELECT%20*%20WHERE%20%7B%20%3Fs%20%3Fp%20%3Fo%20%7D%20LIMIT%201")
-        with urllib.request.urlopen(req, timeout=5) as r:
-            log_success(f"QLever SPARQL service is responding on port {ports['QLEVER']} (HTTP {r.status})")
-    except Exception as e:
-        log_warn(f"QLever SPARQL service check on port {ports['QLEVER']} failed: {e}")
+    check_http_endpoint(f"{qlever_url}?query=SELECT%20*%20WHERE%20%7B%20%3Fs%20%3Fp%20%3Fo%20%7D%20LIMIT%201", f"QLever SPARQL service (port {ports['QLEVER']})")
 
     # 4. Check Elasticsearch endpoint
     es_url = f"http://localhost:{ports['ES']}/"
-    try:
-        req = urllib.request.Request(es_url)
-        with urllib.request.urlopen(req, timeout=5) as r:
-            log_success(f"Elasticsearch service is responding on port {ports['ES']} (HTTP {r.status})")
-    except Exception as e:
-        log_warn(f"Elasticsearch service check on port {ports['ES']} failed: {e}")
+    check_http_endpoint(es_url, f"Elasticsearch service (port {ports['ES']})")
 
     # 5. Run test suite if requested
-    run_tests = ask_prompt("\nRun unit test suite (tests/test_ping.py)? (y/n)", default="y").lower()
+    run_tests = ask_prompt("\nRun unit test suite (test_read_records) inside API container? (y/n)", default="y").lower()
     if run_tests in ["y", "yes"]:
-        log_info("Running test_ping.py...")
-        subprocess.run([sys.executable, "tests/test_ping.py"])
+        log_info("Running test_read_records inside API container...")
+        test_cmd = [
+            "docker", "compose",
+            "--env-file", f"profiles/{profile_name}.env",
+            "--profile", profile_name,
+            "exec", "-T", "api",
+            "python", "tests/test_read_records.py"
+        ]
+        res = subprocess.run(test_cmd)
+        if res.returncode == 0:
+            log_success("Unit test suite executed successfully.")
+        else:
+            log_warn("Test exited with non-zero status.")
 
     print(f"\n{Colors.GREEN}{Colors.BOLD}========================================================================{Colors.RESET}")
     print(f"{Colors.GREEN}{Colors.BOLD}       SEMANTIC CROISSANT INSTALLATION COMPLETED SUCCESSFULLY!         {Colors.RESET}")
