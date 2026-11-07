@@ -71,14 +71,22 @@ def get_nodes_config() -> dict:
 def get_elasticsearch_lookup_urls() -> list[str]:
     """
     Returns an ordered list of Elasticsearch base URLs to query.
-    If PROFILE_NAME is set, prioritizes the elasticsearch settings for that profile from nodes.conf.
+    Supports ES_GLOBAL_HOST, profile-specific settings, and fallback nodes.
     """
     urls = []
     nodes = get_nodes_config()
     profile_name = os.environ.get("PROFILE_NAME", "").strip().lower()
+    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+
+    # 0. ES_GLOBAL_HOST takes priority if provided
+    es_global = os.environ.get("ES_GLOBAL_HOST", "").strip().rstrip("/")
+    if es_global:
+        if not (es_global.startswith("http://") or es_global.startswith("https://")):
+            es_global = f"http://{es_global}"
+        if es_global not in urls:
+            urls.append(es_global)
 
     # 1. Profile-specific elastic settings from nodes.conf
-    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
     container_es = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
     if in_docker and container_es not in urls:
         urls.append(container_es)
