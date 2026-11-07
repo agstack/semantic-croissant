@@ -84,6 +84,22 @@ def ask_prompt(question: str, default: str = "", secret: bool = False) -> str:
     return val if val else default
 
 
+def ensure_directory_writable(directory: str):
+    """Ensures a directory exists and is writable by the current user; fixes permissions using Docker if needed."""
+    os.makedirs(directory, exist_ok=True)
+    if not os.access(directory, os.W_OK):
+        # Attempt to grant write permissions using docker busybox if root created the volume/folder
+        uid = os.getuid()
+        gid = os.getgid()
+        abs_dir = os.path.abspath(directory)
+        log_info(f"Directory '{abs_dir}' is not writable by user ({uid}:{gid}). Fixing permissions via Docker...")
+        subprocess.run(
+            ["docker", "run", "--rm", "-v", f"{abs_dir}:/target", "busybox", "sh", "-c", f"chown -R {uid}:{gid} /target && chmod -R 775 /target"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+
 def check_prerequisites():
     """Verifies that Git, Docker, and Docker Compose are installed and accessible."""
     log_info("Checking system prerequisites...")
@@ -202,7 +218,7 @@ def step_2_download_dump(repo_dir: str, profile_config: dict = None):
         default=os.path.join(repo_dir, "dumps")
     )
     dest_folder = os.path.abspath(dest_folder)
-    os.makedirs(dest_folder, exist_ok=True)
+    ensure_directory_writable(dest_folder)
 
     # Helper function to download a file with progress bar
     def download_file(url: str, out_path: str):
