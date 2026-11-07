@@ -435,31 +435,34 @@ def step_3_select_profile(repo_dir: str, profile_arg: str = None) -> str:
 
 def step_3b_restore_indexes(repo_dir: str, profile_name: str):
     """
-    Checks if Elasticsearch and QLever archives exist or prompts user to restore them.
+    Checks if Elasticsearch, QLever, and MinIO archives exist or prompts user to restore them.
     Can restore directly from dumps/ directory using installer/restore.sh or custom location.
     """
     dumps_dir = os.path.join(repo_dir, "dumps")
     es_archive = os.path.join(dumps_dir, "elasticsearch-indexes.tar.gz")
     qlever_archive = os.path.join(dumps_dir, "qlever-cdif-indexes.tar.gz")
+    minio_archive = os.path.join(dumps_dir, "minio-data.tar.gz")
 
     found_archives = []
     if os.path.isfile(es_archive):
         found_archives.append("Elasticsearch indexes (elasticsearch-indexes.tar.gz)")
     if os.path.isfile(qlever_archive):
         found_archives.append("QLever SPARQL indexes (qlever-cdif-indexes.tar.gz)")
+    if os.path.isfile(minio_archive):
+        found_archives.append("MinIO Vault & Data (minio-data.tar.gz)")
 
-    print(f"\n{Colors.BOLD}--- Step 3b: Restore Elasticsearch & QLever Indexes ---{Colors.RESET}")
+    print(f"\n{Colors.BOLD}--- Step 3b: Restore Elasticsearch, QLever & MinIO Data ---{Colors.RESET}")
     if found_archives:
         log_info(f"Found archive(s) in {dumps_dir}:")
         for arc in found_archives:
             print(f"  • {arc}")
-        prompt_msg = f"Restore Elasticsearch and/or QLever indexes from archive for profile '{profile_name}'? (y/n)"
+        prompt_msg = f"Restore Elasticsearch, QLever, and/or MinIO data from archive for profile '{profile_name}'? (y/n)"
     else:
-        prompt_msg = f"Do you want to restore Elasticsearch and QLever indexes from an archive? (y/n)"
+        prompt_msg = f"Do you want to restore Elasticsearch, QLever, and/or MinIO data from an archive? (y/n)"
 
     do_restore = ask_prompt(prompt_msg, default="y" if found_archives else "n").lower()
     if do_restore not in ["y", "yes"]:
-        log_info("Skipping database index restore. Proceeding with standard setup.")
+        log_info("Skipping database and storage restore. Proceeding with standard setup.")
         return
 
     # Check for custom dumps directory

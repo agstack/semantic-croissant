@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Semantic Croissant - Restore Script for Elasticsearch and QLever Indexes
+# Semantic Croissant - Restore Script for Elasticsearch, QLever and MinIO
 #
 # Usage:
 #   ./installer/restore.sh [profile_name] [dumps_dir]
@@ -43,8 +43,8 @@ log_info "Source dumps directory: ${DUMPS_DIR}"
 
 ES_TARGET="${ROOT_DIR}/qlever-tests/volumes/${PROFILE_NAME}/es"
 QLEVER_TARGET="${ROOT_DIR}/qlever-tests/volumes/${PROFILE_NAME}/server"
+MINIO_TARGET="${ROOT_DIR}/volumes/${PROFILE_NAME}/minio"
 ES_VOLUMES_LINK="${ROOT_DIR}/volumes/${PROFILE_NAME}/es"
-MINIO_VOLUMES_LINK="${ROOT_DIR}/volumes/${PROFILE_NAME}/minio"
 
 mkdir -p "${ROOT_DIR}/volumes/${PROFILE_NAME}"
 mkdir -p "${ROOT_DIR}/qlever-tests/volumes/${PROFILE_NAME}"
@@ -81,13 +81,28 @@ else
     log_warn "QLever archive not found at ${QLEVER_ARCHIVE} (skipping QLever restore)."
 fi
 
+# ------------------------------------------------------------------------------
+# 3. Restore MinIO
+# ------------------------------------------------------------------------------
+MINIO_ARCHIVE="${DUMPS_DIR}/minio-data.tar.gz"
+if [ -f "${MINIO_ARCHIVE}" ]; then
+    log_info "Restoring MinIO data from ${MINIO_ARCHIVE} to ${MINIO_TARGET}..."
+    mkdir -p "${MINIO_TARGET}"
+    tar --use-compress-program="${DECOMPRESS_CMD}" -xf "${MINIO_ARCHIVE}" -C "${MINIO_TARGET}"
+    log_success "MinIO data restored to ${MINIO_TARGET}."
+else
+    log_warn "MinIO archive not found at ${MINIO_ARCHIVE} (skipping MinIO restore)."
+fi
+
 # Ensure permissions
 if docker info >/dev/null 2>&1; then
     log_info "Ensuring correct volume file permissions via docker busybox..."
+    mkdir -p "${ES_TARGET}" "${QLEVER_TARGET}" "${MINIO_TARGET}"
     docker run --rm \
         -v "${ES_TARGET}:/data/es" \
         -v "${QLEVER_TARGET}:/data/server" \
-        busybox sh -c "chown -R 1000:0 /data/es && chown -R 65534:0 /data/server" 2>/dev/null || true
+        -v "${MINIO_TARGET}:/data/minio" \
+        busybox sh -c "chown -R 1000:0 /data/es && chown -R 65534:0 /data/server && chown -R 65532:65532 /data/minio" 2>/dev/null || true
 fi
 
 echo "=================================================================="

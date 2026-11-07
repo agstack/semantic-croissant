@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Semantic Croissant - Backup Script for Elasticsearch and QLever Indexes
+# Semantic Croissant - Backup Script for Elasticsearch, QLever and MinIO
 #
 # Creates .tar.gz archives:
-#   1. Elasticsearch indexes from http://10.147.18.24:9205 -> dumps/elasticsearch-indexes.tar.gz
-#   2. QLever indexes from http://10.147.18.24:7051 -> dumps/qlever-cdif-indexes.tar.gz
+#   1. Elasticsearch indexes -> dumps/elasticsearch-indexes.tar.gz
+#   2. QLever indexes        -> dumps/qlever-cdif-indexes.tar.gz
+#   3. MinIO Vault & Data    -> dumps/minio-data.tar.gz
 #
 # Archives are placed in dumps/ and ready for restoration.
 # ==============================================================================
@@ -138,11 +139,51 @@ log_success "QLever backup complete: ${QLEVER_ARCHIVE} (${QLEVER_SIZE})"
 echo ""
 
 # ------------------------------------------------------------------------------
+# 3. Backup MinIO Data (Vault, Collections, Groups)
+# ------------------------------------------------------------------------------
+log_info "Step 3: Backing up MinIO data..."
+
+MINIO_DIR=""
+POSSIBLE_MINIO_DIRS=(
+    "${ROOT_DIR}/volumes/asknowmuseum/minio"
+    "${ROOT_DIR}/qlever-tests/volumes/asknowmuseum/minio"
+    "${ROOT_DIR}/volumes/codata/minio"
+    "${ROOT_DIR}/qlever-tests/volumes/codata/minio"
+    "${ROOT_DIR}/volumes/ciat/minio"
+    "${ROOT_DIR}/qlever-tests/volumes/croissant-live/minio"
+)
+
+for dir in "${POSSIBLE_MINIO_DIRS[@]}"; do
+    if [ -d "${dir}/vault" ] || [ -d "${dir}/collections" ] || [ -d "${dir}/.minio.sys" ]; then
+        MINIO_DIR="$(readlink -f "${dir}")"
+        break
+    fi
+done
+
+MINIO_ARCHIVE="${DUMPS_DIR}/minio-data.tar.gz"
+if [ -n "${MINIO_DIR}" ] && [ -d "${MINIO_DIR}" ]; then
+    log_info "Source directory: ${MINIO_DIR}"
+    log_info "Writing archive: ${MINIO_ARCHIVE}..."
+
+    tar -C "${MINIO_DIR}" \
+        --exclude="*.tmp" \
+        --warning=no-file-changed \
+        --use-compress-program="${COMPRESS_CMD}" \
+        -cf "${MINIO_ARCHIVE}" . || [ $? -eq 1 ]
+
+    MINIO_SIZE="$(du -h "${MINIO_ARCHIVE}" | awk '{print $1}')"
+    log_success "MinIO backup complete: ${MINIO_ARCHIVE} (${MINIO_SIZE})"
+else
+    log_warn "No MinIO data directory found to back up (skipping)."
+fi
+echo ""
+
+# ------------------------------------------------------------------------------
 # Summary & Status
 # ------------------------------------------------------------------------------
 echo "=================================================================="
 log_success "Backup process finished successfully!"
 echo "Archives created in ${DUMPS_DIR}:"
-ls -lh "${ES_ARCHIVE}" "${QLEVER_ARCHIVE}"
+ls -lh "${ES_ARCHIVE}" "${QLEVER_ARCHIVE}" "${MINIO_ARCHIVE}" 2>/dev/null || true
 echo "=================================================================="
 
