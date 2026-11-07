@@ -129,6 +129,38 @@ def get_elasticsearch_lookup_urls() -> list[str]:
 
     return urls or (["http://elasticsearch:9200"] if in_docker else ["http://localhost:9200"])
 
+def get_vault_elasticsearch_url() -> str:
+    """
+    Returns the designated Elasticsearch base URL for vault operations.
+    Prioritizes ES_HOST as specified by system configuration.
+    Handles container networking: if running inside Docker and 'localhost' or '127.0.0.1' is specified,
+    rewrites to 'elasticsearch:9200'.
+    """
+    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+    raw_url = os.environ.get("ES_HOST") or os.environ.get("ELASTICSEARCH_URL") or os.environ.get("ES_GLOBAL_HOST") or "http://elasticsearch:9200"
+    raw_url = raw_url.strip().rstrip("/")
+    if in_docker and any(h in raw_url for h in ["http://localhost:", "http://127.0.0.1:", "http://0.0.0.0:"]):
+        import re
+        raw_url = re.sub(r"http://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?", "http://elasticsearch:9200", raw_url)
+    return raw_url
+
+def get_variable_elasticsearch_url() -> str:
+    """
+    Returns the appropriate Elasticsearch base URL for variableindex operations.
+    Handles container networking: if 'localhost' or '127.0.0.1' is specified while
+    running inside Docker, rewrites to 'elasticsearch' (or host docker alias).
+    """
+    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+    raw_url = os.environ.get("ES_GLOBAL_HOST") or os.environ.get("ELASTICSEARCH_URL") or "http://elasticsearch:9200"
+    raw_url = raw_url.strip().rstrip("/")
+    if in_docker and any(h in raw_url for h in ["http://localhost:", "http://127.0.0.1:", "http://0.0.0.0:"]):
+        import re
+        raw_url = re.sub(r"http://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?", "http://elasticsearch:9200", raw_url)
+    return raw_url
+
+_GLOBAL_COLLECTION_CACHE_UPDATING = set()
+_GLOBAL_VARIABLES_CACHE_UPDATING = False
+
 def get_minio_lookup_urls() -> list[str]:
     """
     Returns an ordered list of MinIO base endpoints to query across all known nodes.
@@ -591,7 +623,7 @@ async def search_collections(q: str, limit: int = 10) -> list[types.TextContent]
             HOST_VAL = os.environ.get("HOST", HOST)
             for h in hits:
                 s = h.get("_source", {})
-                md.append(f"- [**{s.get('name', 'Unknown')}**]({HOST_VAL}/groups/{h.get('_id')}) (ID: {h.get('_id')}): {s.get('description', '')}")
+                md.append(f"- [**{s.get('name', 'Unknown')}**]({HOST_VAL}/collections/{h.get('_id')}) (ID: {h.get('_id')}): {s.get('description', '')}")
             return [types.TextContent(type="text", text="\n".join(md))]
     except Exception as e:
         return [types.TextContent(type="text", text=f"Failed to search collections: {str(e)}")]
@@ -1076,32 +1108,31 @@ async def read_vault_article(url_or_filename: str) -> list[types.TextContent]:
         if re.match(r'^[a-f0-9]{16}$', clean_cand) or "/" not in clean_cand:
             raw_doc_id = clean_cand
 
-    # Step 1: Check across all Elasticsearch nodes from nodes.conf if we have a document ID
+    # Step 1: Check Elasticsearch using ES_HOST if we have a document ID
     if raw_doc_id:
         clean_id = raw_doc_id.replace(".md", "").replace(".jsonld", "").replace(".csv", "")
-        es_nodes = get_elasticsearch_lookup_urls()
-        candidate_indices = ["dataverse", "croissant", "trump", "openml", "sshoc", "cdif"]
+        vault_es_url = get_vault_elasticsearch_url()
+        candidate_indices = ["croissant", "dataverse", "openml", "sshoc", "trump", "cdif"]
         
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as es_client:
-            for es_url in es_nodes:
-                doc_source = None
-                for idx_name in candidate_indices:
-                    try:
-                        r = await es_client.get(f"{es_url}/{idx_name}/_doc/{clean_id}")
-                        if r.status_code == 200:
-                            doc_source = r.json().get("_source", {})
-                            break
-                    except Exception:
-                        pass
-                if not doc_source:
-                    try:
-                        r = await es_client.post(f"{es_url}/_all/_search", json={"query": {"term": {"_id": clean_id}}, "size": 1})
-                        if r.status_code == 200:
-                            hits = r.json().get("hits", {}).get("hits", [])
-                            if hits:
-                                doc_source = hits[0].get("_source", {})
-                    except Exception:
-                        pass
+        async with httpx.AsyncClient(timeout=4.0, follow_redirects=True) as es_client:
+            doc_source = None
+            for idx_name in candidate_indices:
+                try:
+                    r = await es_client.get(f"{vault_es_url}/{idx_name}/_doc/{clean_id}", timeout=2.0)
+                    if r.status_code == 200:
+                        doc_source = r.json().get("_source", {})
+                        break
+                except Exception:
+                    pass
+            if not doc_source:
+                try:
+                    r = await es_client.post(f"{vault_es_url}/_all/_search", json={"query": {"term": {"_id": clean_id}}, "size": 1}, timeout=2.0)
+                    if r.status_code == 200:
+                        hits = r.json().get("hits", {}).get("hits", [])
+                        if hits:
+                            doc_source = hits[0].get("_source", {})
+                except Exception:
+                    pass
 
                 if doc_source:
                     md_text = doc_source.get("_markdown_text", None)
@@ -3887,8 +3918,9 @@ async def url_to_croissant(url: str, slice: bool = False, traverse: bool = False
                 
         env = os.environ.copy()
         env["OLLAMA_HOST"] = env.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-        if "ELASTICSEARCH_URL" not in env:
-            env["ELASTICSEARCH_URL"] = "http://localhost:9200"
+        vault_es = get_vault_elasticsearch_url()
+        env["ES_HOST"] = vault_es
+        env["ELASTICSEARCH_URL"] = vault_es
         
         # In Docker, __file__ is /app/mcp_server.py and we mount convertors to /app/convertors
         # Locally, __file__ is api/mcp_server.py and convertors is in ..
@@ -5051,6 +5083,7 @@ async def check_authentication() -> str | None:
     help="Transport type. Always defaults to stdio; pass --transport sse to start the HTTP/SSE server.",
 )
 def main(port: int, transport: str) -> int:
+    global _GLOBAL_COLLECTION_CACHE_UPDATING, _GLOBAL_VARIABLES_CACHE_UPDATING
     if not get_odrl_token():
         print("WARNING: ~/.odrl/authorize not found. Please create it using odrl-cli or authenticate on the front page.", flush=True, file=sys.stderr)
     if transport == "sse":
@@ -5221,7 +5254,7 @@ def main(port: int, transport: str) -> int:
             
         async def vault_get_history(request):
             import httpx
-            es_url = "http://elasticsearch:9200"
+            es_url = get_vault_elasticsearch_url()
             query = {
                 "size": 50,
                 "sort": [{"timestamp": {"order": "desc"}}]
@@ -5251,7 +5284,7 @@ def main(port: int, transport: str) -> int:
             if not new_markdown:
                 return JSONResponse({"status": "error", "message": "No markdown provided"}, status_code=400)
             
-            es_url = "http://elasticsearch:9200"
+            es_url = get_vault_elasticsearch_url()
             success = False
             async with httpx.AsyncClient() as client:
                 try:
@@ -5748,36 +5781,34 @@ Please answer the question based ONLY on the context provided above (including t
                                             item["annotationText"] = s_text.strip()
                                         except Exception as e:
                                             item["annotationTextError"] = str(e)
-                        # If the vault JSON-LD lacks distributions or conformsTo, enrich from Elasticsearch
+                        # If the vault JSON-LD lacks distributions or conformsTo, enrich from Elasticsearch using ES_HOST
                         if not jdata.get("distribution") or jdata.get("conformsTo") != "http://mlcommons.org/croissant/1.1":
                             try:
                                 es_id = filename[:-7]
-                                es_nodes = get_elasticsearch_lookup_urls()
-                                candidate_indices = ["sshoc", "dataverse", "croissant", "trump", "openml", "cdif"]
+                                vault_es_url = get_vault_elasticsearch_url()
+                                candidate_indices = ["croissant", "dataverse", "openml", "sshoc", "trump", "cdif"]
                                 import httpx
-                                async with httpx.AsyncClient(timeout=5.0) as es_merge_client:
+                                async with httpx.AsyncClient(timeout=4.0) as es_merge_client:
                                     es_src = None
-                                    for es_url in es_nodes:
-                                        for idx_name in candidate_indices:
-                                            try:
-                                                r_es = await es_merge_client.get(f"{es_url}/{idx_name}/_doc/{es_id}")
-                                                if r_es.status_code == 200:
-                                                    es_src = r_es.json().get("_source", {})
-                                                    break
-                                            except Exception:
-                                                pass
-                                        if es_src:
-                                            break
+                                    for idx_name in candidate_indices:
+                                        try:
+                                            r_es = await es_merge_client.get(f"{vault_es_url}/{idx_name}/_doc/{es_id}", timeout=2.0)
+                                            if r_es.status_code == 200:
+                                                es_src = r_es.json().get("_source", {})
+                                                break
+                                        except Exception:
+                                            pass
+                                    if not es_src:
                                         try:
                                             r_search = await es_merge_client.post(
-                                                f"{es_url}/_search",
-                                                json={"query": {"bool": {"should": [{"term": {"_id": es_id}}, {"term": {"persistentId.keyword": es_id}}, {"term": {"id": es_id}}]}}, "size": 1}
+                                                f"{vault_es_url}/_search",
+                                                json={"query": {"bool": {"should": [{"term": {"_id": es_id}}, {"term": {"persistentId.keyword": es_id}}, {"term": {"id": es_id}}]}}, "size": 1},
+                                                timeout=2.0
                                             )
                                             if r_search.status_code == 200:
                                                 hits = r_search.json().get("hits", {}).get("hits", [])
                                                 if hits:
                                                     es_src = hits[0].get("_source", {})
-                                                    break
                                         except Exception:
                                             pass
 
@@ -7840,31 +7871,27 @@ Please answer the question based ONLY on the context provided above (including t
             es_id = request.path_params["es_id"]
             md_text = None
             media_type = "text/markdown"
-            es_nodes = get_elasticsearch_lookup_urls()
-            candidate_indices = ["dataverse", "croissant", "trump", "openml", "sshoc", "cdif"]
+            vault_es_url = get_vault_elasticsearch_url()
+            candidate_indices = ["croissant", "dataverse", "openml", "sshoc", "trump", "cdif"]
             
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=4.0) as client:
                 try:
                     doc_source = None
-                    for es_url in es_nodes:
-                        for idx_name in candidate_indices:
-                            try:
-                                r = await client.get(f"{es_url}/{idx_name}/_doc/{es_id}")
-                                if r.status_code == 200:
-                                    doc_source = r.json().get("_source", {})
-                                    break
-                            except Exception:
-                                pass
-                        if doc_source:
-                            break
-                        # Try generic search by _id across all indices on this node
+                    for idx_name in candidate_indices:
                         try:
-                            r = await client.post(f"{es_url}/_all/_search", json={"query": {"term": {"_id": es_id}}, "size": 1})
+                            r = await client.get(f"{vault_es_url}/{idx_name}/_doc/{es_id}", timeout=2.0)
+                            if r.status_code == 200:
+                                doc_source = r.json().get("_source", {})
+                                break
+                        except Exception:
+                            pass
+                    if not doc_source:
+                        try:
+                            r = await client.post(f"{vault_es_url}/_all/_search", json={"query": {"term": {"_id": es_id}}, "size": 1}, timeout=2.0)
                             if r.status_code == 200:
                                 hits = r.json().get("hits", {}).get("hits", [])
                                 if hits:
                                     doc_source = hits[0].get("_source", {})
-                                    break
                         except Exception:
                             pass
 
@@ -8307,7 +8334,7 @@ Please answer the question based ONLY on the context provided above (including t
                             if SERVER_USER_INFO:
                                 username = SERVER_USER_INFO.get("preferred_username", SERVER_USER_INFO.get("name", "anonymous"))
                             
-                            es_url = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200").rstrip("/")
+                            es_url = get_vault_elasticsearch_url()
                             es_index = "history"
                             
                             try:
@@ -9009,7 +9036,7 @@ Please answer the question based ONLY on the context provided above (including t
 
                 # Automatically trigger asynchronous background rebuild of variable statistics & CDIF cache
                 try:
-                    es_url_bg = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+                    es_url_bg = get_variable_elasticsearch_url()
                     import asyncio
                     asyncio.create_task(update_collection_variables_cache(cid, es_url_bg))
                 except Exception as bg_cache_err:
@@ -9739,7 +9766,12 @@ Please answer the question based ONLY on the context provided above (including t
             population-wide variable totals (numeric, text/other, files), extracts the first 100
             variables, and stores the summary in the Elasticsearch 'cache' index under
             'collection_variables_{cid}'.
+            Protected against duplicate concurrent runs for the same collection.
             """
+            global _GLOBAL_COLLECTION_CACHE_UPDATING
+            if cid in _GLOBAL_COLLECTION_CACHE_UPDATING:
+                return
+            _GLOBAL_COLLECTION_CACHE_UPDATING.add(cid)
             import httpx, json, sys, time
             try:
                 # Mark updating status in cache doc if it exists
@@ -9982,6 +10014,8 @@ Please answer the question based ONLY on the context provided above (including t
                     await client.put(f"{es_url}/cache/_doc/collection_variables_{cid}", json=cache_doc)
             except Exception as e:
                 print(f"[CollectionVariablesCache] Error updating collection {cid} variables cache: {e}", file=sys.stderr)
+            finally:
+                _GLOBAL_COLLECTION_CACHE_UPDATING.discard(cid)
 
         async def api_collections_variables_refresh(request):
             """
@@ -9990,7 +10024,7 @@ Please answer the question based ONLY on the context provided above (including t
             import asyncio, os
             from starlette.responses import JSONResponse
             cid = request.path_params["id"]
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_url = get_variable_elasticsearch_url()
             asyncio.create_task(update_collection_variables_cache(cid, es_url))
             return JSONResponse({"status": "ok", "message": f"Collection {cid} variables cache update initiated in background"})
 
@@ -10004,7 +10038,7 @@ Please answer the question based ONLY on the context provided above (including t
             import json, httpx, os, asyncio, time
 
             cid = request.path_params["id"]
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_url = get_variable_elasticsearch_url()
             
             limit_param = request.query_params.get("limit")
             limit = int(limit_param) if limit_param and limit_param.isdigit() else None
@@ -10769,7 +10803,9 @@ Instructions:
                         site_url_param = "https://dataverse.harvard.edu"
                     dataset_url = f"{site_url_param}/dataset.xhtml?persistentId={dataset_pid}"
                 elif direct_url:
-                    dataset_url = direct_url
+                    # Extract pure URL if natural language prefix was passed (e.g. "Test ingest for new documents https://...")
+                    url_match = re.search(r'https?://[^\s<>"]+', direct_url)
+                    dataset_url = url_match.group(0) if url_match else direct_url
                 elif callback:
                     decoded_callback = base64.b64decode(callback).decode('utf-8')
                     response = requests.get(decoded_callback, timeout=15)
@@ -11292,7 +11328,12 @@ Instructions:
             Background task that scans CDIF records in Elasticsearch and updates the 'cache' index
             with fresh totals (total_files, total_variables, total_numeric, total_other)
             and the first 100 variables.
+            Protected by an in-memory lock to avoid redundant concurrent background jobs.
             """
+            global _GLOBAL_VARIABLES_CACHE_UPDATING
+            if _GLOBAL_VARIABLES_CACHE_UPDATING:
+                return
+            _GLOBAL_VARIABLES_CACHE_UPDATING = True
             import httpx, json, sys, time
             try:
                 print("[VariablesCache] Background cache refresh started...", file=sys.stderr)
@@ -11309,7 +11350,7 @@ Instructions:
                     cnt_resp = await client.post(f"{es_url}/cdif/_count")
                     total_docs = cnt_resp.json().get("count", 0) if cnt_resp.status_code == 200 else 0
 
-                    sample_size = min(total_docs, 300) if total_docs > 0 else 300
+                    sample_size = min(total_docs, 1000) if total_docs > 0 else 1000
                     payload = {
                         "query": {"match_all": {}},
                         "size": sample_size,
@@ -11537,6 +11578,8 @@ Instructions:
                     print(f"[VariablesCache] Cache refreshed successfully: status={save_res.status_code}, files={total_files}, vars={sample_vars}", file=sys.stderr)
             except Exception as e:
                 print(f"[VariablesCache] Error updating variables cache: {e}", file=sys.stderr)
+            finally:
+                _GLOBAL_VARIABLES_CACHE_UPDATING = False
 
         async def api_variable_index_refresh(request):
             """
@@ -11544,8 +11587,7 @@ Instructions:
             """
             import asyncio, os
             from starlette.responses import JSONResponse
-            es_url = os.environ.get("ES_GLOBAL_HOST") or os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200")
-            es_url = es_url.rstrip("/")
+            es_url = get_variable_elasticsearch_url()
             asyncio.create_task(update_variables_index_cache(es_url))
             return JSONResponse({"status": "ok", "message": "Variables cache update initiated in background"})
 
@@ -11563,8 +11605,7 @@ Instructions:
             offset = int(offset_param) if offset_param and offset_param.isdigit() else 0
             q_param = (request.query_params.get("q") or request.query_params.get("query") or "").strip()
 
-            es_url = os.environ.get("ES_GLOBAL_HOST") or os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200")
-            es_url = es_url.rstrip("/")
+            es_url = get_variable_elasticsearch_url()
 
             # Check if cache hit is available for instant response (fast statistical values + first 100 records)
             if not q_param and offset == 0:
@@ -11658,14 +11699,26 @@ Instructions:
                     "cdif_jsonld.variableMeasured"
                 ]
 
-                query_size = 1000 if q_param else (min(limit, 300) if limit else 300)
+                query_size = 1000 if q_param else (min(limit, 500) if limit else 500)
                 payload = {
                     "query": es_query,
                     "size": query_size,
                     "_source": source_fields
                 }
                 async with httpx.AsyncClient(timeout=60.0) as client:
-                    resp = await client.post(f"{es_url}/cdif/_search", json=payload)
+                    try:
+                        resp = await client.post(f"{es_url}/cdif/_search", json=payload)
+                    except Exception as es_req_err:
+                        # Fallback to local ES if primary ES failed
+                        local_es = get_vault_elasticsearch_url()
+                        if local_es != es_url:
+                            try:
+                                resp = await client.post(f"{local_es}/cdif/_search", json=payload)
+                            except Exception:
+                                return JSONResponse({"total_files": 0, "total_variables": 0, "variables": [], "files": []})
+                        else:
+                            return JSONResponse({"total_files": 0, "total_variables": 0, "variables": [], "files": []})
+
                     if resp.status_code != 200:
                         return JSONResponse({"total_files": 0, "total_variables": 0, "variables": [], "files": []})
 
@@ -11917,11 +11970,12 @@ Instructions:
                                     }
                                 })
                             ds_query = {"bool": {"must": ds_must}} if ds_must else {"match_all": {}}
+                            target_ds_size = min(limit, 20) if limit is not None else 20
                             ds_search_resp = await client.post(
-                                f"{es_url}/*,-.*,-collections,-history,-groups,-cdif/_search",
+                                f"{es_url}/croissant,dataverse/_search",
                                 json={
                                     "query": ds_query,
-                                    "size": 50,
+                                    "size": target_ds_size,
                                     "_source": [
                                         "name", "title", "url", "_source_url",
                                         "distribution.name", "distribution.@id", "distribution.contentUrl",
@@ -11930,7 +11984,7 @@ Instructions:
                                         "recordSet.field.source"
                                     ]
                                 },
-                                timeout=20.0
+                                timeout=15.0
                             )
 
                             if ds_search_resp.status_code == 200:
@@ -12050,8 +12104,7 @@ Instructions:
             if not query:
                 return JSONResponse({"answer": "Please provide a question about the variables."})
 
-            es_url = os.environ.get("ES_GLOBAL_HOST") or os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200")
-            es_url = es_url.rstrip("/")
+            es_url = get_variable_elasticsearch_url()
             payload = {
                 "query": {"match_all": {}},
                 "size": 10000,

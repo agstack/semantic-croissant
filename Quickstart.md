@@ -19,7 +19,7 @@ This guide provides step-by-step instructions for installing and running **Seman
 - **Node.js** (v20+ / v22+) & **npm** *(optional, only if modifying frontends locally)*
 - **Python 3.12+** & **uv** / **pip** *(optional, for running offline pipeline scripts outside Docker)*
 
----
+
 
 ## 2. Server Environment Preparation
 

@@ -536,7 +536,8 @@ async def process_dataverse(callback: str = None, url: str = None, siteUrl: str 
                 siteUrl = "https://dataverse.harvard.edu"
             dataset_url = f"{siteUrl}/dataset.xhtml?persistentId={datasetPid}"
         elif url:
-            dataset_url = url
+            url_match = re.search(r'https?://[^\s<>"]+', url)
+            dataset_url = url_match.group(0) if url_match else url
         elif callback:
             decoded_callback = base64.b64decode(callback).decode('utf-8')
             response = requests.get(decoded_callback, timeout=15)

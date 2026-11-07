@@ -946,7 +946,11 @@
 
         // Reusable Q&A Modal
         function showQAModal(question, answer, errorMsg, originalContext, historyQA = [], modelUsed = 'llama3.1', isGlobalDocAsk = false) {
+            // Remove any existing QA modal before creating a new one
+            document.querySelectorAll('.qa-response-modal').forEach(m => m.remove());
+
             const modal = document.createElement('div');
+            modal.className = 'qa-response-modal';
             modal.style.cssText = "position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 9999;";
             
             const modalContent = document.createElement('div');
@@ -3106,9 +3110,8 @@
                 const result = await response.json();
 
                 
-                // Remove previous loading modal
-                const oldModal = document.querySelector('div[style*="z-index: 9999"]');
-                if (oldModal) oldModal.remove();
+                // Remove previous loading modal safely
+                document.querySelectorAll('.qa-response-modal').forEach(m => m.remove());
 
                 if (result.success) {
                     showQAModal(question, result.answer, null, promptContext, [], selectedModel, true);
@@ -3116,8 +3119,7 @@
                     showQAModal(question, null, result.error || 'Operation failed', promptContext, [], selectedModel, true);
                 }
             } catch (err) {
-                const oldModal = document.querySelector('div[style*="z-index: 9999"]');
-                if (oldModal) oldModal.remove();
+                document.querySelectorAll('.qa-response-modal').forEach(m => m.remove());
                 showQAModal(question, null, err.message, promptContext, [], selectedModel, true);
             }
         }

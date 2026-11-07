@@ -26,7 +26,16 @@ from playwright.sync_api import sync_playwright
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
 OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "")
 OLLAMA_HEADERS = {"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {}
-ELASTICSEARCH_URL = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200")
+
+def _get_default_es_url():
+    raw = os.environ.get("ES_HOST") or os.environ.get("ELASTICSEARCH_URL") or "http://localhost:9200"
+    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+    if in_docker and any(h in raw for h in ["http://localhost:", "http://127.0.0.1:", "http://0.0.0.0:"]):
+        import re
+        raw = re.sub(r"http://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?", "http://elasticsearch:9200", raw)
+    return raw.strip().rstrip("/")
+
+ELASTICSEARCH_URL = _get_default_es_url()
 MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "localhost")
 OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:31b-cloud")
 MODEL_NAME = os.environ.get("MODEL_NAME") or os.environ.get("MODEL") or OLLAMA_DEFAULT_MODEL
@@ -2122,4 +2131,9 @@ if __name__ == "__main__":
     elif "docs.google.com/spreadsheets" in args.url:
         process_spreadsheet(args.url, args.slice, args.traverse, args.reingest, args.user_name, args.user_email, args.index_ollama, args.elastic, args.expert, getattr(args, "upload_gdrive", False), getattr(args, "upload_gdrive_folder", None), getattr(args, "translate", False))
     else:
-        convert_to_croissant(args.url, args.slice, args.traverse, args.reingest, args.user_name, args.user_email, args.index_ollama, args.elastic, args.expert, getattr(args, "upload_gdrive", False), getattr(args, "upload_gdrive_folder", None), getattr(args, "translate", False))
+        # Clean URL if natural language or surrounding text was provided
+        clean_url = args.url.strip()
+        url_match = re.search(r'https?://[^\s<>"]+', clean_url)
+        if url_match:
+            clean_url = url_match.group(0)
+        convert_to_croissant(clean_url, args.slice, args.traverse, args.reingest, args.user_name, args.user_email, args.index_ollama, args.elastic, args.expert, getattr(args, "upload_gdrive", False), getattr(args, "upload_gdrive_folder", None), getattr(args, "translate", False))

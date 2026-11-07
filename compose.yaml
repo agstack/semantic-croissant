@@ -120,6 +120,7 @@ services:
       - ${PROFILE_NAME:-croissant-live}
     image: api-${PROFILE_NAME:-croissant-live}
     pull_policy: never
+    restart: unless-stopped
     command: ["python", "/app/mcp_server.py", "--transport", "sse"]
     ports:
       - "${MCP_PORT:-7070}:7070"
