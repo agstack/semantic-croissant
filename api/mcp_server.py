@@ -8543,28 +8543,60 @@ Please answer the question based ONLY on the context provided above (including t
             
         async def api_collections_get(request):
             from starlette.responses import JSONResponse
-            import json
+            import json, httpx
             try:
-                m_client = get_minio_client()
-                if not m_client.bucket_exists("collections"):
-                    m_client.make_bucket("collections")
-                objects = m_client.list_objects("collections")
                 cols = []
                 user = get_user_info_from_odrl(request)
                 user_did = user.get("did") if user else None
-                for obj in objects:
-                    if obj.object_name.endswith(".json"):
-                        resp = m_client.get_object("collections", obj.object_name)
-                        col = json.loads(resp.read().decode("utf-8"))
-                        resp.close()
-                        resp.release_conn()
-                        
-                        is_private = col.get("is_private", False)
-                        owner = col.get("owner", None)
-                        if is_private and not check_user_access(owner, user):
-                            continue
-                            
-                        cols.append(col)
+                seen_ids = set()
+
+                # 1. Read from MinIO
+                try:
+                    m_client = get_minio_client()
+                    if not m_client.bucket_exists("collections"):
+                        m_client.make_bucket("collections")
+                    objects = m_client.list_objects("collections")
+                    for obj in objects:
+                        if obj.object_name.endswith(".json"):
+                            try:
+                                resp = m_client.get_object("collections", obj.object_name)
+                                col = json.loads(resp.read().decode("utf-8"))
+                                resp.close()
+                                resp.release_conn()
+                                is_private = col.get("is_private", False)
+                                owner = col.get("owner", None)
+                                if is_private and not check_user_access(owner, user):
+                                    continue
+                                cid = col.get("id") or obj.object_name.replace(".json", "")
+                                if cid not in seen_ids:
+                                    seen_ids.add(cid)
+                                    cols.append(col)
+                            except Exception:
+                                pass
+                except Exception as me:
+                    print(f"Warning: MinIO list_objects('collections') error: {me}", file=sys.stderr)
+
+                # 2. Also read from Elasticsearch so collections in ES (e.g. from ES_GLOBAL_HOST) are discovered
+                es_nodes = get_elasticsearch_lookup_urls()
+                for es_url in es_nodes:
+                    try:
+                        async with httpx.AsyncClient(timeout=10.0) as client:
+                            resp = await client.post(f"{es_url}/collections/_search", json={"query": {"match_all": {}}, "size": 1000})
+                            if resp.status_code == 200:
+                                hits = resp.json().get("hits", {}).get("hits", [])
+                                for h in hits:
+                                    col = h.get("_source", {})
+                                    cid = col.get("id") or h.get("_id")
+                                    if cid and cid not in seen_ids:
+                                        is_private = col.get("is_private", False)
+                                        owner = col.get("owner", None)
+                                        if is_private and not check_user_access(owner, user):
+                                            continue
+                                        seen_ids.add(cid)
+                                        cols.append(col)
+                    except Exception:
+                        pass
+
                 return JSONResponse({"collections": cols})
             except Exception as e:
                 import traceback
@@ -8820,49 +8852,99 @@ Please answer the question based ONLY on the context provided above (including t
 
         async def api_collections_get_single(request):
             from starlette.responses import JSONResponse
-            import json
+            import json, httpx
             try:
                 cid = request.path_params["id"]
-                m_client = get_minio_client()
+                col_data = None
+
+                # 1. Try MinIO
                 try:
+                    m_client = get_minio_client()
                     resp = m_client.get_object("collections", f"{cid}.json")
                     col_data = json.loads(resp.read().decode("utf-8"))
                     resp.close()
                     resp.release_conn()
-                    
-                    is_private = col_data.get("is_private", False)
-                    if is_private:
-                        user = get_user_info_from_odrl(request)
-                        user_did = user.get("did") if user else None
-                        if not check_user_access(col_data.get("owner"), user):
-                            return JSONResponse({"error": "Forbidden: You do not have access to this private collection"}, status_code=403)
-                            
-                    return JSONResponse(col_data)
                 except Exception:
+                    col_data = None
+
+                # 2. Fallback to Elasticsearch (including ES_GLOBAL_HOST)
+                if not col_data:
+                    es_nodes = get_elasticsearch_lookup_urls()
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        for es_url in es_nodes:
+                            try:
+                                r = await client.get(f"{es_url}/collections/_doc/{cid}")
+                                if r.status_code == 200:
+                                    col_data = r.json().get("_source", {})
+                                    if col_data:
+                                        # Also sync back into local MinIO for fast subsequent reads
+                                        try:
+                                            m_client = get_minio_client()
+                                            if not m_client.bucket_exists("collections"):
+                                                m_client.make_bucket("collections")
+                                            b_data = json.dumps(col_data).encode("utf-8")
+                                            import io
+                                            m_client.put_object("collections", f"{cid}.json", io.BytesIO(b_data), len(b_data), content_type="application/json")
+                                        except Exception:
+                                            pass
+                                        break
+                            except Exception:
+                                pass
+
+                if not col_data:
                     return JSONResponse({"error": "Collection not found"}, status_code=404)
+
+                is_private = col_data.get("is_private", False)
+                if is_private:
+                    user = get_user_info_from_odrl(request)
+                    user_did = user.get("did") if user else None
+                    if not check_user_access(col_data.get("owner"), user):
+                        return JSONResponse({"error": "Forbidden: You do not have access to this private collection"}, status_code=403)
+
+                return JSONResponse(col_data)
             except Exception as e:
                 return JSONResponse({"error": str(e)}, status_code=500)
-                
+
         async def api_collections_get_resolved(request):
             from starlette.responses import JSONResponse
             import json, httpx, re
             try:
                 cid = request.path_params["id"]
-                m_client = get_minio_client()
+                col_data = None
+
+                # 1. Try MinIO
                 try:
+                    m_client = get_minio_client()
                     resp = m_client.get_object("collections", f"{cid}.json")
                     col_data = json.loads(resp.read().decode("utf-8"))
                     resp.close()
                     resp.release_conn()
-                    
-                    is_private = col_data.get("is_private", False)
-                    if is_private:
-                        user = get_user_info_from_odrl(request)
-                        user_did = user.get("did") if user else None
-                        if not check_user_access(col_data.get("owner"), user):
-                            return JSONResponse({"error": "Forbidden: You do not have access to this private collection"}, status_code=403)
                 except Exception:
+                    col_data = None
+
+                # 2. Fallback to Elasticsearch (including ES_GLOBAL_HOST)
+                if not col_data:
+                    es_nodes = get_elasticsearch_lookup_urls()
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        for es_url in es_nodes:
+                            try:
+                                r = await client.get(f"{es_url}/collections/_doc/{cid}")
+                                if r.status_code == 200:
+                                    col_data = r.json().get("_source", {})
+                                    if col_data:
+                                        break
+                            except Exception:
+                                pass
+
+                if not col_data:
                     return JSONResponse({"error": "Collection not found"}, status_code=404)
+
+                is_private = col_data.get("is_private", False)
+                if is_private:
+                    user = get_user_info_from_odrl(request)
+                    user_did = user.get("did") if user else None
+                    if not check_user_access(col_data.get("owner"), user):
+                        return JSONResponse({"error": "Forbidden: You do not have access to this private collection"}, status_code=403)
                 
                 items = list(col_data.get("items", []))
                 
