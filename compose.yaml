@@ -5,7 +5,7 @@ services:
       - ${PROFILE_NAME:-croissant-live}
     image: docker.io/library/busybox
     command:
-      ["sh", "-c", "chown -R 65534:0 /data/server && chown -R 65534:0 /data/ui && chown -R 1000:0 /data/es && chown -R 1000:0 /data/minio"]
+      ["sh", "-c", "chown -R 65534:0 /data/server && chown -R 65534:0 /data/ui && chown -R 1000:0 /data/es && chown -R 65532:65532 /data/minio"]
     stop_grace_period: 0s
     restart: "no"
     volumes:
@@ -62,7 +62,7 @@ services:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - xpack.security.http.ssl.enabled=false
-      - ES_JAVA_OPTS=${ES_JAVA_OPTS:--Xms32g -Xmx48g}
+      - ES_JAVA_OPTS=${ES_JAVA_OPTS:--Xms2g -Xmx4g}
     ports:
       - "${ES_PORT:-9200}:9200"
     volumes:
