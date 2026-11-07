@@ -176,6 +176,8 @@ services:
     container_name: ${PROFILE_NAME:-croissant-live}-converters
     profiles:
       - ${PROFILE_NAME:-croissant-live}
+    image: ${PROFILE_NAME:-croissant-live}-converters
+    pull_policy: never
     build:
       context: ./tools/converters
       dockerfile: Dockerfile

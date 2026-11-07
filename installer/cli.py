@@ -428,8 +428,13 @@ def step_4_build_docker_images(repo_dir: str, profile_name: str):
 
     # 2. Build converters service if present
     converters_dir = os.path.join(repo_dir, "tools", "converters")
-    if os.path.isdir(converters_dir):
-        log_info("Building converters Docker image...")
+    converters_dockerfile = os.path.join(converters_dir, "Dockerfile")
+    if not os.path.exists(converters_dockerfile):
+        log_info("Initializing git submodules to fetch converters...")
+        subprocess.run(["git", "-C", repo_dir, "submodule", "update", "--init", "--recursive"])
+
+    if os.path.isdir(converters_dir) and os.path.exists(converters_dockerfile):
+        log_info(f"Building converters Docker image '{profile_name}-converters'...")
         build_conv_cmd = [
             "docker", "build",
             "-f", "tools/converters/Dockerfile",
