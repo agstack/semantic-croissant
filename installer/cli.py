@@ -404,11 +404,14 @@ def step_4_build_docker_images(repo_dir: str, profile_name: str):
     # 1. Build the API / MCP image for the profile
     api_image_name = f"api-{profile_name}"
     log_info(f"Building Docker image '{api_image_name}' from ./api/Dockerfile...")
+    # api/Dockerfile expects the build context to be the api/ directory
+    # where requirements.txt and app source files reside.
+    api_context = "api" if os.path.exists(os.path.join(repo_dir, "api", "requirements.txt")) else "."
     build_api_cmd = [
         "docker", "build",
         "-f", "api/Dockerfile",
         "-t", api_image_name,
-        "."
+        api_context
     ]
     res_api = subprocess.run(build_api_cmd)
     if res_api.returncode != 0:
