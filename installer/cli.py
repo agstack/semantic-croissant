@@ -468,24 +468,41 @@ def step_4_build_docker_images(repo_dir: str, profile_name: str):
             encoded_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
             req = urllib.request.Request(ddicdi_url)
             req.add_header("Authorization", f"Basic {encoded_auth}")
-            log_info("Streaming 'ddicdi-studio.tar.gz' directly into 'docker load'...")
+            temp_archive = os.path.join(repo_dir, "ddicdi-studio.tar.gz")
+            log_info(f"Downloading 'ddicdi-studio.tar.gz' to '{temp_archive}'...")
             try:
-                proc = subprocess.Popen(["docker", "load"], stdin=subprocess.PIPE)
-                with urllib.request.urlopen(req, timeout=120) as resp:
-                    block_size = 65536
-                    while True:
-                        chunk = resp.read(block_size)
-                        if not chunk:
-                            break
-                        proc.stdin.write(chunk)
-                proc.stdin.close()
-                proc.wait()
-                if proc.returncode == 0:
+                with urllib.request.urlopen(req, timeout=300) as resp:
+                    total_size = resp.headers.get("Content-Length")
+                    total_bytes = int(total_size) if total_size and total_size.isdigit() else 0
+                    downloaded = 0
+                    block_size = 1048576  # 1MB
+                    with open(temp_archive, "wb") as f_out:
+                        while True:
+                            chunk = resp.read(block_size)
+                            if not chunk:
+                                break
+                            f_out.write(chunk)
+                            downloaded += len(chunk)
+                            if total_bytes > 0:
+                                pct = (downloaded / total_bytes) * 100.0
+                                sys.stdout.write(f"\r  Downloaded: {downloaded / (1024*1024):.1f}MB / {total_bytes / (1024*1024):.1f}MB ({pct:.1f}%)")
+                            else:
+                                sys.stdout.write(f"\r  Downloaded: {downloaded / (1024*1024):.1f}MB")
+                            sys.stdout.flush()
+                print("\n[+] Download complete. Loading into Docker...")
+                load_res = subprocess.run(
+                    ["docker", "load", "-i", temp_archive]
+                )
+                if load_res.returncode == 0:
                     log_success("'ddicdi-studio:latest' loaded successfully.")
+                    try:
+                        os.remove(temp_archive)
+                    except OSError:
+                        pass
                 else:
-                    log_warn("Failed to load ddicdi-studio image.")
+                    log_warn(f"docker load failed with return code {load_res.returncode}")
             except Exception as e:
-                log_error(f"Error downloading ddicdi-studio: {e}")
+                log_error(f"Error downloading or loading ddicdi-studio: {e}")
 
     log_success("All Docker images built and pulled successfully.")
 
