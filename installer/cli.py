@@ -131,11 +131,14 @@ def step_1_clone_repo(target_dir: str, repo_url: str = "https://github.com/codat
 
     log_info(f"Cloning {repo_url} into '{abs_target}'...")
     os.makedirs(abs_target, exist_ok=True)
-    cmd = ["git", "clone", repo_url, abs_target]
+    cmd = ["git", "clone", "--recurse-submodules", repo_url, abs_target]
     res = subprocess.run(cmd)
     if res.returncode != 0:
         log_error(f"Failed to clone repository from {repo_url}")
         sys.exit(res.returncode)
+
+    # In case submodules were not populated or repository already existed without submodules initialized:
+    subprocess.run(["git", "-C", abs_target, "submodule", "update", "--init", "--recursive"])
 
     log_success(f"Repository successfully cloned to {abs_target}")
     return abs_target
