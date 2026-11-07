@@ -68,6 +68,36 @@ def get_nodes_config() -> dict:
         }
     return nodes
 
+def get_qlever_lookup_urls() -> list[str]:
+    """
+    Returns an ordered list of QLever SPARQL base URLs to query.
+    Supports QLEVER_GLOBAL_HOST, QLEVER_URL, and fallback nodes.
+    """
+    urls = []
+    # 0. QLEVER_GLOBAL_HOST takes priority if provided
+    q_global = os.environ.get("QLEVER_GLOBAL_HOST", "").strip().rstrip("/")
+    if q_global:
+        if not (q_global.startswith("http://") or q_global.startswith("https://")):
+            q_global = f"http://{q_global}"
+        if q_global not in urls:
+            urls.append(q_global)
+
+    # 1. Local or configured QLEVER_URL
+    q_url = os.environ.get("QLEVER_URL", "").strip().rstrip("/")
+    if q_url:
+        if not (q_url.startswith("http://") or q_url.startswith("https://")):
+            q_url = f"http://{q_url}"
+        if q_url not in urls:
+            urls.append(q_url)
+
+    # 2. In docker default to http://server:7011
+    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+    default_q = "http://server:7011" if in_docker else "http://localhost:7011"
+    if default_q not in urls:
+        urls.append(default_q)
+
+    return urls
+
 def get_elasticsearch_lookup_urls() -> list[str]:
     """
     Returns an ordered list of Elasticsearch base URLs to query.
@@ -11377,7 +11407,7 @@ Instructions:
                 return JSONResponse({"error": f"Evaluation error: {str(e)}"}, status_code=500)
 
 
-        async def update_variables_index_cache(es_url: str):
+        async def update_variables_index_cache(es_url: str = None):
             """
             Background task that scans CDIF records in Elasticsearch and updates the 'cache' index
             with fresh totals (total_files, total_variables, total_numeric, total_other)
@@ -11385,7 +11415,19 @@ Instructions:
             """
             import httpx, json, sys, time
             try:
-                print("[VariablesCache] Background cache refresh started...", file=sys.stderr)
+                if not es_url:
+                    for cand in get_elasticsearch_lookup_urls():
+                        try:
+                            async with httpx.AsyncClient(timeout=3.0) as chk:
+                                r = await chk.get(f"{cand}/cdif/_count")
+                                if r.status_code == 200:
+                                    es_url = cand
+                                    break
+                        except Exception:
+                            continue
+                if not es_url:
+                    es_url = get_elasticsearch_lookup_urls()[0]
+                print(f"[VariablesCache] Background cache refresh started with {es_url}...", file=sys.stderr)
                 async with httpx.AsyncClient(timeout=180.0) as client:
                     try:
                         await client.post(
@@ -11634,8 +11676,7 @@ Instructions:
             """
             import asyncio, os
             from starlette.responses import JSONResponse
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
-            asyncio.create_task(update_variables_index_cache(es_url))
+            asyncio.create_task(update_variables_index_cache())
             return JSONResponse({"status": "ok", "message": "Variables cache update initiated in background"})
 
         async def api_variable_index_data(request):
@@ -11652,10 +11693,21 @@ Instructions:
             offset = int(offset_param) if offset_param and offset_param.isdigit() else 0
             q_param = (request.query_params.get("q") or request.query_params.get("query") or "").strip()
 
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_candidates = get_elasticsearch_lookup_urls()
+            active_es = None
+            for cand in es_candidates:
+                try:
+                    async with httpx.AsyncClient(timeout=3.0) as chk:
+                        r = await chk.get(f"{cand}/cdif/_count")
+                        if r.status_code == 200:
+                            active_es = cand
+                            break
+                except Exception:
+                    continue
+            es_url = active_es or (es_candidates[0] if es_candidates else os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/"))
 
             # Check if cache hit is available for instant response (fast statistical values + first 100 records)
-            if not q_param and offset == 0:
+            if not q_param and offset == 0 and active_es:
                 try:
                     async with httpx.AsyncClient(timeout=4.0) as cache_client:
                         cache_res = await cache_client.get(f"{es_url}/cache/_doc/variables_index_summary")
@@ -12097,6 +12149,73 @@ Instructions:
                         except Exception as ds_fallback_err:
                             print(f"Warning: could not search dataset fields: {ds_fallback_err}", file=sys.stderr)
 
+                    if not all_variables:
+                        # Fallback to querying QLever SPARQL for InstanceVariable records
+                        qlever_urls = get_qlever_lookup_urls()
+                        for q_url in qlever_urls:
+                            try:
+                                sparql_limit = limit if (limit and not q_param) else 100
+                                sparql_query = f"""
+                                PREFIX ddicdi: <http://ddialliance.org/Specification/DDI-CDI/1.0/RDF/>
+                                PREFIX schema: <http://schema.org/>
+                                SELECT ?v ?name ?desc ?dtype ?ds ?ds_title ?ds_url ?file_name WHERE {{
+                                  ?v a ddicdi:InstanceVariable .
+                                  OPTIONAL {{ ?v schema:name ?name }}
+                                  OPTIONAL {{ ?v schema:description ?desc }}
+                                  OPTIONAL {{ ?v ddicdi:hasIntendedDataType ?dtype }}
+                                  OPTIONAL {{
+                                    ?ds schema:variableMeasured ?v .
+                                    OPTIONAL {{ ?ds schema:name ?ds_title }}
+                                    OPTIONAL {{ ?ds schema:url ?ds_url }}
+                                  }}
+                                  OPTIONAL {{
+                                    ?file ddicdi:DataStore-has_InstanceVariable ?v .
+                                    OPTIONAL {{ ?file schema:name ?file_name }}
+                                  }}
+                                }} LIMIT {sparql_limit}
+                                """
+                                async with httpx.AsyncClient(timeout=10.0) as q_client:
+                                    q_resp = await q_client.post(
+                                        q_url,
+                                        content=sparql_query,
+                                        headers={"Content-Type": "application/sparql-query", "Accept": "application/sparql-results+json"}
+                                    )
+                                    if q_resp.status_code == 200:
+                                        bindings = q_resp.json().get("results", {}).get("bindings", [])
+                                        for b in bindings:
+                                            v_raw = b.get("name", {}).get("value", "") or b.get("v", {}).get("value", "")
+                                            v_name = v_raw.lstrip("#").strip()
+                                            v_desc = b.get("desc", {}).get("value", "") or v_name
+                                            v_dt_uri = b.get("dtype", {}).get("value", "")
+                                            v_type = v_dt_uri.split("#")[-1] if "#" in v_dt_uri else (v_dt_uri.split("/")[-1] if v_dt_uri else "string")
+                                            ds_uri = b.get("ds", {}).get("value", "")
+                                            ds_title = b.get("ds_title", {}).get("value", "") or ""
+                                            ds_url = b.get("ds_url", {}).get("value", "")
+                                            fname = b.get("file_name", {}).get("value", "")
+                                            if not fname and ds_uri:
+                                                fname = ds_uri.split("file=")[-1].split("&")[0] if "file=" in ds_uri else ""
+                                                fname = urllib.parse.unquote(fname)
+                                            cdif_link = ds_uri or (f"https://{MCP_DOMAIN}/export?q={urllib.parse.quote(v_name)}" if v_name else "")
+                                            
+                                            all_variables.append({
+                                                "variable_name": v_name or "variable",
+                                                "display_label": v_name or "variable",
+                                                "data_type": v_type,
+                                                "description": v_desc,
+                                                "unit": "",
+                                                "file_name": fname or "QLever Graph",
+                                                "file_url": "",
+                                                "dataset_url": ds_url,
+                                                "dataset_id": "",
+                                                "dataset_title": ds_title or "DDI-CDI InstanceVariables",
+                                                "collection_id": "",
+                                                "cdif_export_url": cdif_link
+                                            })
+                                        if all_variables:
+                                            break
+                            except Exception as q_err:
+                                print(f"Warning: could not fetch variables from QLever {q_url}: {q_err}", file=sys.stderr)
+
                     if q_param and tokens:
                         filtered_vars = []
                         for v in all_variables:
@@ -12138,7 +12257,18 @@ Instructions:
             if not query:
                 return JSONResponse({"answer": "Please provide a question about the variables."})
 
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_candidates = get_elasticsearch_lookup_urls()
+            active_es = None
+            for cand in es_candidates:
+                try:
+                    async with httpx.AsyncClient(timeout=3.0) as chk:
+                        r = await chk.get(f"{cand}/cdif/_count")
+                        if r.status_code == 200:
+                            active_es = cand
+                            break
+                except Exception:
+                    continue
+            es_url = active_es or (es_candidates[0] if es_candidates else os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/"))
             payload = {
                 "query": {"match_all": {}},
                 "size": 10000,
