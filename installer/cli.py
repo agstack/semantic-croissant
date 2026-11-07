@@ -397,7 +397,7 @@ def step_3_select_profile(repo_dir: str) -> str:
 
 
 def step_4_build_docker_images(repo_dir: str, profile_name: str):
-    """Builds required Docker images and ensures volume permissions are initialized."""
+    """Builds required Docker images without modifying any host OS configuration."""
     print(f"\n{Colors.BOLD}--- Step 4: Build Docker Images ---{Colors.RESET}")
     os.chdir(repo_dir)
 
@@ -440,15 +440,7 @@ def step_4_build_docker_images(repo_dir: str, profile_name: str):
     for img in base_images:
         subprocess.run(["docker", "pull", img])
 
-    # 4. Run init service to ensure proper file permissions
-    log_info("Initializing volume directory permissions via init service...")
-    env_vars = os.environ.copy()
-    env_vars["PROFILE_NAME"] = profile_name
-    subprocess.run(
-        ["docker", "compose", "--profile", profile_name, "up", "init"],
-        env=env_vars
-    )
-    log_success("Docker images built and volume permissions set.")
+    log_success("All Docker images built and pulled successfully.")
 
 
 def step_5_run_and_test(repo_dir: str, profile_name: str):
