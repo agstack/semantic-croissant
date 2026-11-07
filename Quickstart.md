@@ -142,7 +142,7 @@ OLLAMA_DEFAULT_MODEL=gemma4:31b-cloud
 # Port Allocation (Ensure no port conflicts on the host)
 QLEVER_SERVER_PORT=7011
 QLEVER_UI_PORT=7055
-ES_PORT=9201
+ES_HOST=http://localhost:9201
 API_PORT=7013
 MCP_PORT=7115
 MINIO_API_PORT=9055

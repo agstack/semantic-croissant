@@ -90,6 +90,8 @@ To ensure high precision, every extracted variable is evaluated against the sear
 ## 5. Related Files & Scripts
 
 - [`api/mcp_server.py`](../api/mcp_server.py): Implements `/api/variableindex/data` and `/export?q=...`.
+- [`scripts/upload_cdif_to_qlever.py`](../scripts/upload_cdif_to_qlever.py): Creates custom QLever collection indexes from Elasticsearch filters (`--query`, `--elastic-host`) or local folders.
+- [`scripts/search_qlever_variables.py`](../scripts/search_qlever_variables.py): Searches variables and graphs directly in QLever SPARQL endpoints or custom collection indexes (`--index-name`).
 - [`scripts/search_elastic_variables.py`](../scripts/search_elastic_variables.py): CLI tool replicating the exact search & variable extraction logic with index switching (`--index cdif`, `--index dataverse,cdif`).
 - [`scripts/count_unique_cdif_variables.py`](../scripts/count_unique_cdif_variables.py): Inspects total unique variables indexed in the `cdif` index.
 

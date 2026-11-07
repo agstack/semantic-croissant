@@ -355,8 +355,8 @@ def create_custom_profile_from_template(repo_dir: str) -> str:
     return custom_name
 
 
-def step_3_select_profile(repo_dir: str) -> str:
-    """Lists available environment profiles and prompts the user to select or create one."""
+def step_3_select_profile(repo_dir: str, profile_arg: str = None) -> str:
+    """Lists available environment profiles and prompts the user to select or create one, or reads from profile_arg if provided."""
     print(f"\n{Colors.BOLD}--- Step 3: Deployment Profile Selection ---{Colors.RESET}")
     profiles_dir = os.path.join(repo_dir, "profiles")
     available_profiles = []
@@ -369,35 +369,61 @@ def step_3_select_profile(repo_dir: str) -> str:
     if not available_profiles:
         available_profiles = ["croissant-live", "codata", "codata-dev", "ca4eosc", "cdif4eosc"]
 
-    print("Available profiles found in repository:")
-    for idx, p in enumerate(available_profiles, 1):
-        print(f"  {Colors.CYAN}[{idx}]{Colors.RESET} {p}")
-    create_idx = len(available_profiles) + 1
-    print(f"  {Colors.GREEN}[{create_idx}]{Colors.RESET} Create own profile (from codata.env template)")
+    # If --profile argument was passed, resolve it
+    if profile_arg:
+        profile_clean = profile_arg.strip()
+        # Handle path like profiles/asknowmuseum.env or /path/to/asknowmuseum.env
+        if profile_clean.endswith(".env"):
+            p_basename = os.path.basename(profile_clean)[:-4]
+            # If a custom file path was passed outside repo profiles/, copy it in
+            if os.path.isfile(profile_clean) and not os.path.isfile(os.path.join(profiles_dir, f"{p_basename}.env")):
+                shutil.copyfile(profile_clean, os.path.join(profiles_dir, f"{p_basename}.env"))
+            profile_clean = p_basename
 
-    default_profile = "codata" if "codata" in available_profiles else available_profiles[0]
-    choice = ask_prompt(
-        f"Select profile number or enter profile name",
-        default=default_profile
-    )
+        # Read PROFILE_NAME from the .env file if available
+        env_candidate = os.path.join(profiles_dir, f"{profile_clean}.env")
+        if os.path.isfile(env_candidate):
+            with open(env_candidate, "r", encoding="utf-8") as f:
+                for line in f:
+                    line_s = line.strip()
+                    if line_s.startswith("PROFILE_NAME=") and not line_s.startswith("#"):
+                        extracted = line_s.split("=", 1)[1].strip().strip('"').strip("'")
+                        if extracted:
+                            profile_clean = extracted
+                            break
 
-    if choice.isdigit():
-        choice_num = int(choice)
-        if 1 <= choice_num <= len(available_profiles):
-            selected_profile = available_profiles[choice_num - 1]
-        elif choice_num == create_idx:
-            selected_profile = create_custom_profile_from_template(repo_dir)
-        else:
-            log_warn(f"Option [{choice}] not recognized. Creating new profile.")
-            selected_profile = create_custom_profile_from_template(repo_dir)
-    elif choice.strip().lower() in ["create", "new", "create own profile"]:
-        selected_profile = create_custom_profile_from_template(repo_dir)
-    elif choice.strip() in available_profiles:
-        selected_profile = choice.strip()
+        selected_profile = profile_clean
+        log_info(f"Using profile specified via --profile: '{selected_profile}'")
     else:
-        # User typed a profile name not in the list
-        log_info(f"Profile '{choice.strip()}' does not exist yet. Creating it from codata.env template...")
-        selected_profile = create_custom_profile_from_template(repo_dir)
+        print("Available profiles found in repository:")
+        for idx, p in enumerate(available_profiles, 1):
+            print(f"  {Colors.CYAN}[{idx}]{Colors.RESET} {p}")
+        create_idx = len(available_profiles) + 1
+        print(f"  {Colors.GREEN}[{create_idx}]{Colors.RESET} Create own profile (from codata.env template)")
+
+        default_profile = "codata" if "codata" in available_profiles else available_profiles[0]
+        choice = ask_prompt(
+            f"Select profile number or enter profile name",
+            default=default_profile
+        )
+
+        if choice.isdigit():
+            choice_num = int(choice)
+            if 1 <= choice_num <= len(available_profiles):
+                selected_profile = available_profiles[choice_num - 1]
+            elif choice_num == create_idx:
+                selected_profile = create_custom_profile_from_template(repo_dir)
+            else:
+                log_warn(f"Option [{choice}] not recognized. Creating new profile.")
+                selected_profile = create_custom_profile_from_template(repo_dir)
+        elif choice.strip().lower() in ["create", "new", "create own profile"]:
+            selected_profile = create_custom_profile_from_template(repo_dir)
+        elif choice.strip() in available_profiles:
+            selected_profile = choice.strip()
+        else:
+            # User typed a profile name not in the list
+            log_info(f"Profile '{choice.strip()}' does not exist yet. Creating it from codata.env template...")
+            selected_profile = create_custom_profile_from_template(repo_dir)
 
     log_success(f"Selected profile: '{selected_profile}'")
 
@@ -744,6 +770,11 @@ def main():
         default="https://github.com/codata/semantic-croissant",
         help="Git repository URL to clone"
     )
+    parser.add_argument(
+        "--profile", "-p",
+        default=None,
+        help="Optional path or name of profile (e.g. profiles/asknowmuseum.env or asknowmuseum). If set, skips profile prompt."
+    )
     args = parser.parse_args()
 
     print_banner()
@@ -756,7 +787,7 @@ def main():
     step_2_download_dump(repo_dir=repo_dir)
 
     # Step 3: Select profile
-    profile_name = step_3_select_profile(repo_dir=repo_dir)
+    profile_name = step_3_select_profile(repo_dir=repo_dir, profile_arg=args.profile)
 
     # Step 4: Build Docker images
     step_4_build_docker_images(repo_dir=repo_dir, profile_name=profile_name)
