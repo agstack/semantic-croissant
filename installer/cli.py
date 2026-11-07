@@ -144,32 +144,62 @@ def step_1_clone_repo(target_dir: str, repo_url: str = "https://github.com/codat
     return abs_target
 
 
-def step_2_download_dump(repo_dir: str):
+def parse_env_file(filepath: str) -> dict:
+    """Parses key-value pairs from an .env profile file."""
+    config = {}
+    if not os.path.isfile(filepath):
+        return config
+    with open(filepath, "r", encoding="utf-8") as f:
+        for line in f:
+            line_s = line.strip()
+            if not line_s or line_s.startswith("#") or "=" not in line_s:
+                continue
+            k, v = line_s.split("=", 1)
+            config[k.strip()] = v.strip().strip('"').strip("'")
+    return config
+
+
+def step_2_download_dump(repo_dir: str, profile_config: dict = None):
     """
     Asks the user for a download URL, login, and password for the protected data dump,
     downloads the archive, and extracts it into the proper data/volume directories.
+    Can take defaults from profile_config (DUMPS_HOST, DUMPS_USER, DUMPS_PASSWORD, DUMPS_DIR).
     """
+    profile_config = profile_config or {}
     print(f"\n{Colors.BOLD}--- Step 2: Protected Data Dump Ingestion ---{Colors.RESET}")
     print("All required data can be restored from a protected dump archive (.tar.gz, .tgz, .zip, .tar).")
-    has_dump = ask_prompt("Do you have a protected data dump URL to download? (y/n)", default="y").lower()
+
+    default_host = profile_config.get("DUMPS_HOST", "")
+    default_user = profile_config.get("DUMPS_USER", "")
+    default_pass = profile_config.get("DUMPS_PASSWORD", "")
+
+    # Default prompt: if profile does not specify DUMPS_HOST and dumps/ already has files, default to 'n'
+    has_dump = ask_prompt(
+        "Do you have a protected data dump URL to download? (y/n)",
+        default="y" if default_host else "n"
+    ).lower()
 
     if has_dump not in ["y", "yes"]:
         log_info("Skipping data dump download. Continuing with existing local data.")
         return
 
-    download_url = ask_prompt("Enter the data dump download URL")
+    default_url = default_host if default_host else ""
+    download_url = ask_prompt("Enter the data dump download URL", default=default_url)
     while not download_url.startswith(("http://", "https://", "ftp://")):
         log_error("Invalid URL schema. Please provide a full URL (http:// or https://).")
-        download_url = ask_prompt("Enter the data dump download URL")
+        download_url = ask_prompt("Enter the data dump download URL", default=default_url)
 
-    username = ask_prompt("Username for protected download (leave blank if none)", default="")
+    username = ask_prompt("Username for protected download (leave blank if none)", default=default_user)
     password = ""
     if username:
-        password = ask_prompt("Password", secret=True)
+        if default_pass:
+            password = ask_prompt("Password", default=default_pass, secret=True)
+        else:
+            password = ask_prompt("Password", secret=True)
 
     dest_folder = ask_prompt(
-        "Directory to unpack dump into (e.g. repo root, ./volumes, or data directory)",
-        default=repo_dir
+        "Directory to unpack dump into (e.g. repo root, ./volumes, or dumps directory)",
+        default=os.path.join(repo_dir, "dumps")
     )
     dest_folder = os.path.abspath(dest_folder)
     os.makedirs(dest_folder, exist_ok=True)
@@ -426,10 +456,6 @@ def step_3_select_profile(repo_dir: str, profile_arg: str = None) -> str:
             selected_profile = create_custom_profile_from_template(repo_dir)
 
     log_success(f"Selected profile: '{selected_profile}'")
-
-    # Offer to restore Elasticsearch & QLever indexes from archive if available or desired
-    step_3b_restore_indexes(repo_dir=repo_dir, profile_name=selected_profile)
-
     return selected_profile
 
 
@@ -786,11 +812,16 @@ def main():
     # Step 1: Clone or locate repository
     repo_dir = step_1_clone_repo(target_dir=args.dir, repo_url=args.repo_url)
 
-    # Step 2: Download and unpack protected dump
-    step_2_download_dump(repo_dir=repo_dir)
-
-    # Step 3: Select profile
+    # Step 2: Select profile (and optionally read dump/network parameters from it)
     profile_name = step_3_select_profile(repo_dir=repo_dir, profile_arg=args.profile)
+    profile_env_file = os.path.join(repo_dir, "profiles", f"{profile_name}.env")
+    profile_config = parse_env_file(profile_env_file)
+
+    # Step 3: Download and unpack protected dump (utilizing profile defaults if available)
+    step_2_download_dump(repo_dir=repo_dir, profile_config=profile_config)
+
+    # Step 3b: Restore indexes & data if requested or archives found
+    step_3b_restore_indexes(repo_dir=repo_dir, profile_name=profile_name)
 
     # Step 4: Build Docker images
     step_4_build_docker_images(repo_dir=repo_dir, profile_name=profile_name)
