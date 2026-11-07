@@ -29,8 +29,8 @@ services:
     env_file:
       - ./profiles/${PROFILE_NAME:-croissant-live}.env
     environment:
-      - INDEXING=true
-      - FORCE_INDEXING=true
+      - INDEXING=${INDEXING:-false}
+      - FORCE_INDEXING=${FORCE_INDEXING:-false}
     volumes:
       - ${VOLUME_DIR:-./qlever-tests/volumes}/${PROFILE_NAME:-croissant-live}/server:/data
       - ${DATA_DIR:-./qlever-tests/data}:/raw_data:ro
