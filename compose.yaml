@@ -108,6 +108,8 @@ services:
       - ./credentials.json:/app/credentials.json:ro
       - ./nodes.conf:/app/nodes.conf:ro
       - ./profiles:/app/profiles:ro
+      - ./dumps:/app/dumps:ro
+      - ./dumps:/app/dumps:ro
     depends_on:
       - server
       - elasticsearch
@@ -150,6 +152,7 @@ services:
       - ./credentials.json:/app/credentials.json:ro
       - ./nodes.conf:/app/nodes.conf:ro
       - ./profiles:/app/profiles:ro
+      - ./dumps:/app/dumps:ro
     depends_on:
       - api
       - elasticsearch

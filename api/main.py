@@ -19,12 +19,94 @@ app.add_middleware(
 )
 
 from fastapi.staticfiles import StaticFiles
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.responses import FileResponse, HTMLResponse
+import secrets
 import os
 
 if os.path.exists("/app/static"):
     app.mount("/static", StaticFiles(directory="/app/static"), name="static")
 elif os.path.exists("api/static"):
     app.mount("/static", StaticFiles(directory="api/static"), name="static")
+
+# Protected /dumps file distribution
+DUMPS_DIR = "/app/dumps" if os.path.exists("/app/dumps") else os.path.abspath("dumps")
+DUMPS_USER = os.environ.get("DUMPS_USER", "admin")
+DUMPS_PASSWORD = os.environ.get("DUMPS_PASSWORD", "croissant2026")
+security = HTTPBasic()
+
+def authenticate_dumps_user(credentials: HTTPBasicCredentials = Depends(security)):
+    is_correct_username = secrets.compare_digest(credentials.username.encode("utf-8"), DUMPS_USER.encode("utf-8"))
+    is_correct_password = secrets.compare_digest(credentials.password.encode("utf-8"), DUMPS_PASSWORD.encode("utf-8"))
+    if not (is_correct_username and is_correct_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+@app.get("/dumps/{filepath:path}")
+async def get_dump_file(filepath: str, user: str = Depends(authenticate_dumps_user)):
+    """Serves protected dump files or an HTML directory listing with Basic Auth."""
+    full_path = os.path.abspath(os.path.join(DUMPS_DIR, filepath)) if filepath else DUMPS_DIR
+    
+    # Path traversal protection
+    if not full_path.startswith(os.path.abspath(DUMPS_DIR)):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not os.path.exists(full_path):
+        raise HTTPException(status_code=404, detail="File or directory not found")
+
+    if os.path.isdir(full_path):
+        entries = sorted(os.listdir(full_path))
+        html_lines = [
+            "<!DOCTYPE html>",
+            "<html><head><meta charset='utf-8'><title>Semantic Croissant Protected Dumps</title>",
+            "<style>body{font-family:sans-serif;margin:40px;background:#f8fafc;color:#1e293b}a{color:#2563eb;text-decoration:none}a:hover{text-decoration:underline}table{width:100%;max-width:900px;border-collapse:collapse;margin-top:20px}th,td{padding:10px 14px;border-bottom:1px solid #e2e8f0;text-align:left}th{background:#e2e8f0}</style>",
+            "</head><body>",
+            f"<h2>Index of /dumps/{filepath}</h2>",
+            "<p>Authenticated as: <b>" + str(user) + "</b></p>",
+            "<table><tr><th>Name</th><th>Size</th><th>Last Modified</th></tr>"
+        ]
+        if filepath:
+            parent = "/".join(filepath.rstrip("/").split("/")[:-1])
+            html_lines.append(f"<tr><td><a href='/dumps/{parent}'>📁 .. (parent directory)</a></td><td>-</td><td>-</td></tr>")
+        
+        for e in entries:
+            e_path = os.path.join(full_path, e)
+            e_rel = os.path.join(filepath, e).lstrip("/")
+            is_dir = os.path.isdir(e_path)
+            size_str = "-"
+            if not is_dir:
+                try:
+                    size_b = os.path.getsize(e_path)
+                    if size_b >= 1024 * 1024 * 1024:
+                        size_str = f"{size_b / (1024**3):.2f} GB"
+                    elif size_b >= 1024 * 1024:
+                        size_str = f"{size_b / (1024**2):.2f} MB"
+                    elif size_b >= 1024:
+                        size_str = f"{size_b / 1024:.2f} KB"
+                    else:
+                        size_str = f"{size_b} B"
+                except OSError:
+                    pass
+            try:
+                mtime_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(e_path)))
+            except OSError:
+                mtime_str = "-"
+            icon = "📁 " if is_dir else "📄 "
+            html_lines.append(f"<tr><td><a href='/dumps/{e_rel}'>{icon}{e}</a></td><td>{size_str}</td><td>{mtime_str}</td></tr>")
+        html_lines.append("</table></body></html>")
+        return HTMLResponse(content="\n".join(html_lines))
+
+    return FileResponse(path=full_path, filename=os.path.basename(full_path))
+
+@app.get("/dumps")
+async def get_dumps_root(user: str = Depends(authenticate_dumps_user)):
+    return await get_dump_file("", user=user)
+
 
 
 DATA_DIR = "/data"

@@ -1,4 +1,5 @@
 import sys
+import asyncio
 import anyio
 import click
 import httpx
@@ -5113,6 +5114,91 @@ def main(port: int, transport: str) -> int:
             path = "/app/static/logo.png"
             if not os.path.exists(path): path = "api/static/logo.png"
             return FileResponse(path)
+
+        async def serve_dumps(request):
+            import os
+            import secrets
+            import base64
+            import time
+            from starlette.responses import Response, HTMLResponse, FileResponse
+
+            dumps_user = os.environ.get("DUMPS_USER", "admin")
+            dumps_pass = os.environ.get("DUMPS_PASSWORD", "croissant2026")
+
+            auth_header = request.headers.get("Authorization")
+            authenticated = False
+            username = None
+            if auth_header and auth_header.startswith("Basic "):
+                try:
+                    decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+                    u, p = decoded.split(":", 1)
+                    if secrets.compare_digest(u.encode("utf-8"), dumps_user.encode("utf-8")) and \
+                       secrets.compare_digest(p.encode("utf-8"), dumps_pass.encode("utf-8")):
+                        authenticated = True
+                        username = u
+                except Exception:
+                    pass
+
+            if not authenticated:
+                return Response(
+                    "Unauthorized",
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="Semantic Croissant Protected Dumps"'}
+                )
+
+            dumps_dir = "/app/dumps" if os.path.exists("/app/dumps") else os.path.abspath("dumps")
+            filepath = request.path_params.get("filepath", "").strip("/")
+            full_path = os.path.abspath(os.path.join(dumps_dir, filepath)) if filepath else os.path.abspath(dumps_dir)
+
+            if not full_path.startswith(os.path.abspath(dumps_dir)):
+                return Response("Access denied", status_code=403)
+
+            if not os.path.exists(full_path):
+                return Response("File or directory not found", status_code=404)
+
+            if os.path.isdir(full_path):
+                entries = sorted(os.listdir(full_path))
+                html_lines = [
+                    "<!DOCTYPE html>",
+                    "<html><head><meta charset='utf-8'><title>Semantic Croissant Protected Dumps</title>",
+                    "<style>body{font-family:sans-serif;margin:40px;background:#f8fafc;color:#1e293b}a{color:#2563eb;text-decoration:none}a:hover{text-decoration:underline}table{width:100%;max-width:900px;border-collapse:collapse;margin-top:20px}th,td{padding:10px 14px;border-bottom:1px solid #e2e8f0;text-align:left}th{background:#e2e8f0}</style>",
+                    "</head><body>",
+                    f"<h2>Index of /dumps/{filepath}</h2>",
+                    "<p>Authenticated as: <b>" + str(username) + "</b></p>",
+                    "<table><tr><th>Name</th><th>Size</th><th>Last Modified</th></tr>"
+                ]
+                if filepath:
+                    parent = "/".join(filepath.rstrip("/").split("/")[:-1])
+                    html_lines.append(f"<tr><td><a href='/dumps/{parent}'>📁 .. (parent directory)</a></td><td>-</td><td>-</td></tr>")
+
+                for e in entries:
+                    e_path = os.path.join(full_path, e)
+                    e_rel = os.path.join(filepath, e).lstrip("/")
+                    is_dir = os.path.isdir(e_path)
+                    size_str = "-"
+                    if not is_dir:
+                        try:
+                            size_b = os.path.getsize(e_path)
+                            if size_b >= 1024 * 1024 * 1024:
+                                size_str = f"{size_b / (1024**3):.2f} GB"
+                            elif size_b >= 1024 * 1024:
+                                size_str = f"{size_b / (1024**2):.2f} MB"
+                            elif size_b >= 1024:
+                                size_str = f"{size_b / 1024:.2f} KB"
+                            else:
+                                size_str = f"{size_b} B"
+                        except OSError:
+                            pass
+                    try:
+                        mtime_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(e_path)))
+                    except OSError:
+                        mtime_str = "-"
+                    icon = "📁 " if is_dir else "📄 "
+                    html_lines.append(f"<tr><td><a href='/dumps/{e_rel}'>{icon}{e}</a></td><td>{size_str}</td><td>{mtime_str}</td></tr>")
+                html_lines.append("</table></body></html>")
+                return HTMLResponse(content="\n".join(html_lines))
+
+            return FileResponse(path=full_path, filename=os.path.basename(full_path))
 
         async def index(request):
             import os
@@ -11223,7 +11309,7 @@ Instructions:
                     cnt_resp = await client.post(f"{es_url}/cdif/_count")
                     total_docs = cnt_resp.json().get("count", 0) if cnt_resp.status_code == 200 else 0
 
-                    sample_size = min(total_docs, 10000) if total_docs > 0 else 10000
+                    sample_size = min(total_docs, 300) if total_docs > 0 else 300
                     payload = {
                         "query": {"match_all": {}},
                         "size": sample_size,
@@ -11233,15 +11319,21 @@ Instructions:
                             "cdif_jsonld.DDICDIModels.@id",
                             "cdif_jsonld.DDICDIModels.@type",
                             "cdif_jsonld.DDICDIModels.name",
-                            "cdif_jsonld.DDICDIModels.displayLabel",
-                            "cdif_jsonld.DDICDIModels.physicalDataType",
+                            "cdif_jsonld.DDICDIModels.displayLabel.locationVariant.entryValue",
+                            "cdif_jsonld.DDICDIModels.physicalDataType.entryValue",
                             "cdif_jsonld.DDICDIModels.dct:description",
-                            "cdif_jsonld.DDICDIModels.definition",
+                            "cdif_jsonld.DDICDIModels.definition.content",
                             "cdif_jsonld.DDICDIModels.schema:unitText",
-                            "cdif_jsonld.schema:variableMeasured",
-                            "cdif_jsonld.variableMeasured",
-                            "cdif_jsonld.schema:distribution",
-                            "cdif_jsonld.distribution"
+                            "cdif_jsonld.schema:variableMeasured.@id",
+                            "cdif_jsonld.schema:variableMeasured.@type",
+                            "cdif_jsonld.schema:variableMeasured.schema:name",
+                            "cdif_jsonld.schema:variableMeasured.name",
+                            "cdif_jsonld.schema:variableMeasured.schema:description",
+                            "cdif_jsonld.schema:variableMeasured.description",
+                            "cdif_jsonld.schema:variableMeasured.cdif:physicalDataType",
+                            "cdif_jsonld.schema:variableMeasured.physicalDataType",
+                            "cdif_jsonld.schema:variableMeasured.schema:unitText",
+                            "cdif_jsonld.variableMeasured"
                         ]
                     }
                     resp = await client.post(f"{es_url}/cdif/_search", json=payload)
@@ -11564,9 +11656,10 @@ Instructions:
                     "cdif_jsonld.variableMeasured"
                 ]
 
+                query_size = 1000 if q_param else (min(limit, 300) if limit else 300)
                 payload = {
                     "query": es_query,
-                    "size": 10000,
+                    "size": query_size,
                     "_source": source_fields
                 }
                 async with httpx.AsyncClient(timeout=60.0) as client:
@@ -13150,6 +13243,9 @@ Output a JSON object with:
                 Route("/api/variables/explain/save", endpoint=api_variables_explain_save, methods=["POST"]),
                 Route("/api/text/process", endpoint=process_text, methods=["POST"]),
                 Route("/logo.png", endpoint=serve_logo),
+                Route("/dumps", endpoint=serve_dumps, methods=["GET"]),
+                Route("/dumps/", endpoint=serve_dumps, methods=["GET"]),
+                Route("/dumps/{filepath:path}", endpoint=serve_dumps, methods=["GET"]),
                 Route("/", endpoint=index),
                 Route("/sse", endpoint=handle_sse),
 
