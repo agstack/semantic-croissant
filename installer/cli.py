@@ -485,6 +485,7 @@ def create_custom_profile_from_template(repo_dir: str) -> str:
     parsed_host = urllib.parse.urlparse(host_url).netloc or f"ai.{custom_name}.org"
     mcp_domain = ask_prompt("MCP Domain", default=parsed_host)
     ollama_host = ask_prompt("Ollama Host URL", default="http://10.147.18.24:11444")
+    ollama_model = ask_prompt("Ollama Default Model", default="gemma4:31b-cloud")
     openai_api_key = ask_prompt("OpenAI API Key (or test placeholder)", default="test-api-key-12345")
     api_port = ask_prompt("API Port", default="7043")
     mcp_port = ask_prompt("MCP Port", default="7110")
@@ -496,6 +497,7 @@ def create_custom_profile_from_template(repo_dir: str) -> str:
         "PROFILE_NAME": custom_name,
         "QLEVER_SERVER_HOST_NAME": f"{custom_name}-server",
         "OLLAMA_HOST": ollama_host,
+        "OLLAMA_DEFAULT_MODEL": ollama_model,
         "OPENAI_API_KEY": openai_api_key,
         "OLLAMA_API_KEY": openai_api_key,
         "HOST": host_url,
@@ -610,7 +612,102 @@ def step_3_select_profile(repo_dir: str, profile_arg: str = None) -> str:
             selected_profile = create_custom_profile_from_template(repo_dir)
 
     log_success(f"Selected profile: '{selected_profile}'")
+
+    # Step 3.1: Configure and verify Ollama Host and Model
+    step_3c_configure_ollama(repo_dir=repo_dir, profile_name=selected_profile)
+
     return selected_profile
+
+
+def step_3c_configure_ollama(repo_dir: str, profile_name: str):
+    """
+    Prompts user to select/confirm Ollama host and model (default: gemma4:31b-cloud).
+    Verifies that the model is available on the Ollama host, and pulls it if missing.
+    Updates the profile's .env file accordingly.
+    """
+    print(f"\n{Colors.BOLD}--- Step 3c: Configure Ollama Host & Model ---{Colors.RESET}")
+    profile_env_file = os.path.join(repo_dir, "profiles", f"{profile_name}.env")
+    cfg = parse_env_file(profile_env_file)
+
+    current_ollama_host = cfg.get("OLLAMA_HOST", "http://10.147.18.24:11444")
+    current_model = cfg.get("OLLAMA_DEFAULT_MODEL", "gemma4:31b-cloud")
+
+    selected_host = ask_prompt(
+        "Enter Ollama host endpoint URL",
+        default=current_ollama_host
+    ).rstrip("/")
+
+    selected_model = ask_prompt(
+        "Enter default Ollama model name",
+        default=current_model
+    ).strip()
+
+    # Verify model availability on Ollama host
+    log_info(f"Checking model '{selected_model}' on Ollama host '{selected_host}'...")
+    model_available = False
+    try:
+        check_url = f"{selected_host}/api/show"
+        req_data = json.dumps({"name": selected_model}).encode("utf-8")
+        req = urllib.request.Request(check_url, data=req_data, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            if resp.status == 200:
+                model_available = True
+                log_success(f"Model '{selected_model}' is available on '{selected_host}'.")
+    except Exception as e:
+        log_info(f"Model '{selected_model}' not found on '{selected_host}' (or host checking failed: {e})")
+
+    if not model_available:
+        pull_prompt = ask_prompt(
+            f"Model '{selected_model}' is not available on '{selected_host}'. Pull it now? (y/n)",
+            default="y"
+        ).lower()
+        if pull_prompt in ["y", "yes"]:
+            log_info(f"Pulling model '{selected_model}' from '{selected_host}' (this may take a few minutes)...")
+            try:
+                pull_url = f"{selected_host}/api/pull"
+                req_data = json.dumps({"name": selected_model, "stream": False}).encode("utf-8")
+                req = urllib.request.Request(pull_url, data=req_data, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=1200) as resp:
+                    resp_data = json.loads(resp.read().decode("utf-8"))
+                    if resp_data.get("status") == "success":
+                        log_success(f"Successfully pulled '{selected_model}'.")
+                    elif "error" in resp_data:
+                        log_warn(f"Ollama pull returned error: {resp_data['error']}")
+                    else:
+                        log_success(f"Pull completed: {resp_data.get('status', 'done')}")
+            except Exception as pe:
+                log_warn(f"Failed to pull model '{selected_model}' automatically: {pe}")
+        else:
+            log_warn(f"Proceeding without pulling '{selected_model}'. Ensure it is pulled before running LLM tasks.")
+
+    # Update profile env file with chosen Ollama host and model
+    if os.path.isfile(profile_env_file):
+        with open(profile_env_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        new_lines = []
+        seen_keys = set()
+        for line in lines:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                k, _ = stripped.split("=", 1)
+                k = k.strip()
+                if k == "OLLAMA_HOST":
+                    new_lines.append(f"OLLAMA_HOST={selected_host}\n")
+                    seen_keys.add("OLLAMA_HOST")
+                    continue
+                elif k == "OLLAMA_DEFAULT_MODEL":
+                    new_lines.append(f"OLLAMA_DEFAULT_MODEL={selected_model}\n")
+                    seen_keys.add("OLLAMA_DEFAULT_MODEL")
+                    continue
+            new_lines.append(line)
+        if "OLLAMA_HOST" not in seen_keys:
+            new_lines.append(f"OLLAMA_HOST={selected_host}\n")
+        if "OLLAMA_DEFAULT_MODEL" not in seen_keys:
+            new_lines.append(f"OLLAMA_DEFAULT_MODEL={selected_model}\n")
+
+        with open(profile_env_file, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+        log_success(f"Updated Ollama configuration in '{profile_env_file}'.")
 
 
 def step_3b_restore_indexes(repo_dir: str, profile_name: str):
