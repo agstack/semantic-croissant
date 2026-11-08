@@ -593,19 +593,18 @@ def step_3b_restore_indexes(repo_dir: str, profile_name: str):
     """
     Checks if Elasticsearch, QLever, and MinIO archives exist or prompts user to restore them.
     Can restore directly from dumps/ directory using installer/restore.sh or custom location.
+    Supports both full dumps and keyword-specific subset dumps (e.g. dumps/honduras, dumps/coffee).
     """
     dumps_dir = os.path.join(repo_dir, "dumps")
-    es_archive = os.path.join(dumps_dir, "elasticsearch-indexes.tar.gz")
-    qlever_archive = os.path.join(dumps_dir, "qlever-cdif-indexes.tar.gz")
-    minio_archive = os.path.join(dumps_dir, "minio-data.tar.gz")
-
+    
+    # Check for direct or keyword subfolder archives
     found_archives = []
-    if os.path.isfile(es_archive):
-        found_archives.append("Elasticsearch indexes (elasticsearch-indexes.tar.gz)")
-    if os.path.isfile(qlever_archive):
-        found_archives.append("QLever SPARQL indexes (qlever-cdif-indexes.tar.gz)")
-    if os.path.isfile(minio_archive):
-        found_archives.append("MinIO Vault & Data (minio-data.tar.gz)")
+    if os.path.isdir(dumps_dir):
+        for root, dirs, files in os.walk(dumps_dir):
+            for f in sorted(files):
+                if f.endswith(".tar.gz") and any(k in f for k in ["elasticsearch", "qlever", "minio", "converters", "ddicdi"]):
+                    rel_p = os.path.relpath(os.path.join(root, f), dumps_dir)
+                    found_archives.append(rel_p)
 
     print(f"\n{Colors.BOLD}--- Step 3b: Restore Elasticsearch, QLever & MinIO Data ---{Colors.RESET}")
     if found_archives:
@@ -625,12 +624,22 @@ def step_3b_restore_indexes(repo_dir: str, profile_name: str):
     custom_dumps = ask_prompt("Path to dumps directory containing archives", default=dumps_dir)
     custom_dumps = os.path.abspath(custom_dumps)
 
+    # Check if user wants to restore a specific keyword subset subdirectory if available
+    subdirs = [d for d in os.listdir(custom_dumps) if os.path.isdir(os.path.join(custom_dumps, d))] if os.path.isdir(custom_dumps) else []
+    kw_subdirs = [d for d in subdirs if d not in ["__pycache__", ".git"]]
+    if kw_subdirs:
+        log_info(f"Detected keyword-filtered backup subdirectories: {', '.join(kw_subdirs)}")
+        use_kw = ask_prompt(f"Select keyword subset directory to restore from (or 'all' for root)", default=kw_subdirs[0])
+        if use_kw != "all" and os.path.isdir(os.path.join(custom_dumps, use_kw)):
+            custom_dumps = os.path.join(custom_dumps, use_kw)
+            log_info(f"Restoring from subset directory: {custom_dumps}")
+
     restore_script = os.path.join(repo_dir, "installer", "restore.sh")
     if os.path.isfile(restore_script):
         log_info(f"Running restore script '{restore_script}' for profile '{profile_name}'...")
         res = subprocess.run(["bash", restore_script, profile_name, custom_dumps])
         if res.returncode == 0:
-            log_success(f"Indexes restored successfully for profile '{profile_name}'.")
+            log_success(f"Data restored successfully for profile '{profile_name}'.")
         else:
             log_warn(f"Restore script exited with status code {res.returncode}.")
     else:

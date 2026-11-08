@@ -58,40 +58,60 @@ fi
 # ------------------------------------------------------------------------------
 # 1. Restore Elasticsearch
 # ------------------------------------------------------------------------------
+# Support full archive or keyword-specific subset archives in dumps/ or dumps/<kw>/
 ES_ARCHIVE="${DUMPS_DIR}/elasticsearch-indexes.tar.gz"
-if [ -f "${ES_ARCHIVE}" ]; then
-    log_info "Restoring Elasticsearch indexes from ${ES_ARCHIVE} to ${ES_TARGET}..."
+if [ ! -f "${ES_ARCHIVE}" ]; then
+    ES_ARCHIVE="$(find "${DUMPS_DIR}" -maxdepth 2 -name "elasticsearch-*.tar.gz" 2>/dev/null | head -n 1 || true)"
+fi
+
+if [ -n "${ES_ARCHIVE}" ] && [ -f "${ES_ARCHIVE}" ]; then
+    log_info "Restoring Elasticsearch indexes/data from ${ES_ARCHIVE} to ${ES_TARGET}..."
     mkdir -p "${ES_TARGET}"
-    tar --use-compress-program="${DECOMPRESS_CMD}" -xf "${ES_ARCHIVE}" -C "${ES_TARGET}"
-    log_success "Elasticsearch indexes restored to ${ES_TARGET}."
+    # Check if archive contains direct ES data directory (indices/) or JSONL hits
+    if tar -ztf "${ES_ARCHIVE}" 2>/dev/null | grep -q "es_hits.jsonl"; then
+        log_info "Archive contains Elasticsearch JSONL documents. Unpacking to ${ES_TARGET}..."
+        tar --use-compress-program="${DECOMPRESS_CMD}" -xf "${ES_ARCHIVE}" -C "${ES_TARGET}"
+        log_success "Elasticsearch documents unpacked to ${ES_TARGET}."
+    else
+        tar --use-compress-program="${DECOMPRESS_CMD}" -xf "${ES_ARCHIVE}" -C "${ES_TARGET}"
+        log_success "Elasticsearch binary indexes restored to ${ES_TARGET}."
+    fi
 else
-    log_warn "Elasticsearch archive not found at ${ES_ARCHIVE} (skipping ES restore)."
+    log_warn "Elasticsearch archive not found in ${DUMPS_DIR} (skipping ES restore)."
 fi
 
 # ------------------------------------------------------------------------------
 # 2. Restore QLever
 # ------------------------------------------------------------------------------
 QLEVER_ARCHIVE="${DUMPS_DIR}/qlever-cdif-indexes.tar.gz"
-if [ -f "${QLEVER_ARCHIVE}" ]; then
+if [ ! -f "${QLEVER_ARCHIVE}" ]; then
+    QLEVER_ARCHIVE="$(find "${DUMPS_DIR}" -maxdepth 2 -name "qlever-*.tar.gz" 2>/dev/null | head -n 1 || true)"
+fi
+
+if [ -n "${QLEVER_ARCHIVE}" ] && [ -f "${QLEVER_ARCHIVE}" ]; then
     log_info "Restoring QLever indexes from ${QLEVER_ARCHIVE} to ${QLEVER_TARGET}..."
     mkdir -p "${QLEVER_TARGET}"
     tar --use-compress-program="${DECOMPRESS_CMD}" -xf "${QLEVER_ARCHIVE}" -C "${QLEVER_TARGET}"
     log_success "QLever indexes restored to ${QLEVER_TARGET}."
 else
-    log_warn "QLever archive not found at ${QLEVER_ARCHIVE} (skipping QLever restore)."
+    log_warn "QLever archive not found in ${DUMPS_DIR} (skipping QLever restore)."
 fi
 
 # ------------------------------------------------------------------------------
 # 3. Restore MinIO
 # ------------------------------------------------------------------------------
 MINIO_ARCHIVE="${DUMPS_DIR}/minio-data.tar.gz"
-if [ -f "${MINIO_ARCHIVE}" ]; then
+if [ ! -f "${MINIO_ARCHIVE}" ]; then
+    MINIO_ARCHIVE="$(find "${DUMPS_DIR}" -maxdepth 2 -name "minio-*.tar.gz" 2>/dev/null | head -n 1 || true)"
+fi
+
+if [ -n "${MINIO_ARCHIVE}" ] && [ -f "${MINIO_ARCHIVE}" ]; then
     log_info "Restoring MinIO data from ${MINIO_ARCHIVE} to ${MINIO_TARGET}..."
     mkdir -p "${MINIO_TARGET}"
     tar --use-compress-program="${DECOMPRESS_CMD}" -xf "${MINIO_ARCHIVE}" -C "${MINIO_TARGET}"
     log_success "MinIO data restored to ${MINIO_TARGET}."
 else
-    log_warn "MinIO archive not found at ${MINIO_ARCHIVE} (skipping MinIO restore)."
+    log_warn "MinIO archive not found in ${DUMPS_DIR} (skipping MinIO restore)."
 fi
 
 # Ensure permissions

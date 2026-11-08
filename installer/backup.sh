@@ -48,9 +48,29 @@ log_info "Elasticsearch Endpoint: ${ES_HOST}"
 log_info "QLever SPARQL Endpoint: ${QLEVER_HOST}"
 echo ""
 
-# ------------------------------------------------------------------------------
-# 1. Backup Elasticsearch Indexes
-# ------------------------------------------------------------------------------
+# Read DUMPS_KEYWORDS from profile or environment if present
+DUMPS_KEYWORDS="${DUMPS_KEYWORDS:-}"
+PROFILE_FILE="${1:-${PROFILE_FILE:-}}"
+
+if [ -n "${PROFILE_FILE}" ] && [ -f "${PROFILE_FILE}" ]; then
+    log_info "Reading environment from profile: ${PROFILE_FILE}"
+    PROFILE_KEYWORDS="$(grep -E '^DUMPS_KEYWORDS=' "${PROFILE_FILE}" | cut -d'=' -f2- | tr -d '"' | tr -d "'")"
+    if [ -n "${PROFILE_KEYWORDS}" ]; then
+        DUMPS_KEYWORDS="${PROFILE_KEYWORDS}"
+    fi
+    PROFILE_ES="$(grep -E '^(ES_GLOBAL_HOST|ES_HOST)=' "${PROFILE_FILE}" | head -n 1 | cut -d'=' -f2- | tr -d '"' | tr -d "'")"
+    if [ -n "${PROFILE_ES}" ]; then
+        ES_HOST="${PROFILE_ES}"
+    fi
+fi
+
+# If DUMPS_KEYWORDS is configured, run keyword subset extraction pipeline
+if [ -n "${DUMPS_KEYWORDS}" ]; then
+    log_info "DUMPS_KEYWORDS detected: '${DUMPS_KEYWORDS}'"
+    log_info "Launching keyword subset backup pipeline..."
+    python3 "${SCRIPT_DIR}/keyword_backup.py" "${DUMPS_KEYWORDS}" "${DUMPS_DIR}" "${PROFILE_FILE:-}"
+    exit 0
+fi
 log_info "Step 1: Backing up Elasticsearch indexes..."
 
 # Check ES connectivity & flush synced data
