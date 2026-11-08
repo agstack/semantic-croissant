@@ -10071,33 +10071,48 @@ Please answer the question based ONLY on the context provided above (including t
                 "results": results
             })
 
-        async def update_collection_variables_cache(cid: str, es_url: str):
+        async def update_collection_variables_cache(cid: str, es_url: str = None):
             """
             Background updater that scans all CDIF records for a collection, computes accurate
             population-wide variable totals (numeric, text/other, files), extracts the first 100
             variables, and stores the summary in the Elasticsearch 'cache' index under
-            'collection_variables_{cid}'.
+            'collection_variables_{cid}'. Iterates through get_elasticsearch_lookup_urls() to ensure
+            robust connectivity in all deployment environments.
             """
             import httpx, json, sys, time
             try:
-                # Mark updating status in cache doc if it exists
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    try:
-                        await client.post(
-                            f"{es_url}/cache/_update/collection_variables_{cid}",
-                            json={"doc": {"is_updating": True}},
-                            headers={"Content-Type": "application/json"}
-                        )
-                    except Exception:
-                        pass
+                es_candidates = [es_url] if es_url else get_elasticsearch_lookup_urls()
+                target_es = None
+                raw_hits = []
+                col_items = []
 
-                    col_items = []
-                    try:
-                        c_resp = await client.get(f"{es_url}/collections/_doc/{cid}", timeout=5.0)
-                        if c_resp.status_code == 200:
-                            col_items = c_resp.json().get("_source", {}).get("items", []) or []
-                    except Exception:
-                        pass
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    # Find working ES node and fetch collection items
+                    for cand_url in es_candidates:
+                        if not cand_url:
+                            continue
+                        try:
+                            c_resp = await client.get(f"{cand_url}/collections/_doc/{cid}", timeout=5.0)
+                            if c_resp.status_code == 200:
+                                col_items = c_resp.json().get("_source", {}).get("items", []) or []
+                                target_es = cand_url
+                                break
+                        except Exception:
+                            continue
+
+                    if not target_es and es_candidates:
+                        target_es = es_candidates[0]
+
+                    # Mark updating status in cache doc if it exists
+                    if target_es:
+                        try:
+                            await client.post(
+                                f"{target_es}/cache/_update/collection_variables_{cid}",
+                                json={"doc": {"is_updating": True}},
+                                headers={"Content-Type": "application/json"}
+                            )
+                        except Exception:
+                            pass
 
                     should_clauses = [{"term": {"collection_id": cid}}]
                     if col_items:
@@ -10127,8 +10142,21 @@ Please answer the question based ONLY on the context provided above (including t
                             "cdif_jsonld.distribution"
                         ]
                     }
-                    resp = await client.post(f"{es_url}/cdif/_search", json=payload)
-                    if resp.status_code != 200:
+
+                    # Query cdif index across candidates
+                    for cand_url in ([target_es] if target_es else []) + [u for u in es_candidates if u != target_es]:
+                        if not cand_url:
+                            continue
+                        try:
+                            resp = await client.post(f"{cand_url}/cdif/_search", json=payload, timeout=20.0)
+                            if resp.status_code == 200:
+                                raw_hits = resp.json().get("hits", {}).get("hits", [])
+                                target_es = cand_url
+                                break
+                        except Exception:
+                            continue
+
+                    if not target_es:
                         return
 
                     raw_hits = resp.json().get("hits", {}).get("hits", [])
@@ -10317,7 +10345,8 @@ Please answer the question based ONLY on the context provided above (including t
                         "is_updating": False,
                         "updated_at": int(time.time())
                     }
-                    await client.put(f"{es_url}/cache/_doc/collection_variables_{cid}", json=cache_doc)
+                    if target_es:
+                        await client.put(f"{target_es}/cache/_doc/collection_variables_{cid}", json=cache_doc)
             except Exception as e:
                 print(f"[CollectionVariablesCache] Error updating collection {cid} variables cache: {e}", file=sys.stderr)
 
@@ -10325,11 +10354,10 @@ Please answer the question based ONLY on the context provided above (including t
             """
             Background cache updater trigger for a collection's variables index.
             """
-            import asyncio, os
+            import asyncio
             from starlette.responses import JSONResponse
             cid = request.path_params["id"]
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
-            asyncio.create_task(update_collection_variables_cache(cid, es_url))
+            asyncio.create_task(update_collection_variables_cache(cid))
             return JSONResponse({"status": "ok", "message": f"Collection {cid} variables cache update initiated in background"})
 
         async def api_collections_variables(request):
@@ -10337,62 +10365,77 @@ Please answer the question based ONLY on the context provided above (including t
             Fetches all CDIF variables (InstanceVariable) extracted from tabular files
             for this collection from the Elasticsearch 'cdif' index, leveraging the
             Elasticsearch 'cache' index for instantaneous (<200ms) statistical KPI responses.
+            Iterates through get_elasticsearch_lookup_urls() like api_collections_get_single.
             """
             from starlette.responses import JSONResponse
-            import json, httpx, os, asyncio, time
+            import json, httpx, asyncio, time
 
             cid = request.path_params["id"]
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_candidates = get_elasticsearch_lookup_urls()
             
             limit_param = request.query_params.get("limit")
             limit = int(limit_param) if limit_param and limit_param.isdigit() else None
             offset_param = request.query_params.get("offset")
             offset = int(offset_param) if offset_param and offset_param.isdigit() else 0
 
-            # 1. Fast Cache Hit from Elasticsearch 'cache' index
+            # 1. Fast Cache Hit from Elasticsearch 'cache' index across candidate nodes
             if offset == 0:
-                try:
-                    async with httpx.AsyncClient(timeout=4.0) as cache_client:
-                        cache_res = await cache_client.get(f"{es_url}/cache/_doc/collection_variables_{cid}")
-                        if cache_res.status_code == 200:
-                            c_data = cache_res.json().get("_source", {})
-                            cached_vars = c_data.get("first_100_variables", [])
-                            if limit is not None:
-                                cached_vars = cached_vars[:limit]
-                            num_val = c_data.get("numeric_variables", c_data.get("total_numeric", 0))
-                            other_val = c_data.get("text_other_variables", c_data.get("total_other", 0))
-                            
-                            # Trigger background refresh if stale (> 5 minutes) or requested
-                            if time.time() - c_data.get("updated_at", 0) > 300:
-                                asyncio.create_task(update_collection_variables_cache(cid, es_url))
+                for es_url in es_candidates:
+                    if not es_url:
+                        continue
+                    try:
+                        async with httpx.AsyncClient(timeout=4.0) as cache_client:
+                            cache_res = await cache_client.get(f"{es_url}/cache/_doc/collection_variables_{cid}")
+                            if cache_res.status_code == 200:
+                                c_data = cache_res.json().get("_source", {})
+                                cached_vars = c_data.get("first_100_variables", [])
+                                if limit is not None:
+                                    cached_vars = cached_vars[:limit]
+                                num_val = c_data.get("numeric_variables", c_data.get("total_numeric", 0))
+                                other_val = c_data.get("text_other_variables", c_data.get("total_other", 0))
+                                
+                                # Trigger background refresh if stale (> 5 minutes) or requested
+                                if time.time() - c_data.get("updated_at", 0) > 300:
+                                    asyncio.create_task(update_collection_variables_cache(cid, es_url))
 
-                            return JSONResponse({
-                                "collection_id": cid,
-                                "total_files": c_data.get("total_files", 0),
-                                "total_variables": c_data.get("total_variables", len(cached_vars)),
-                                "total_numeric": num_val,
-                                "total_other": other_val,
-                                "numeric_variables": num_val,
-                                "text_other_variables": other_val,
-                                "variables": cached_vars,
-                                "files": c_data.get("files", []),
-                                "has_more": c_data.get("total_variables", 0) > len(cached_vars),
-                                "cached": True,
-                                "is_updating": c_data.get("is_updating", False)
-                            })
-                except Exception as cache_err:
-                    print(f"[CollectionVariablesCache] Note: could not load from cache index: {cache_err}", file=sys.stderr)
+                                return JSONResponse({
+                                    "collection_id": cid,
+                                    "total_files": c_data.get("total_files", 0),
+                                    "total_variables": c_data.get("total_variables", len(cached_vars)),
+                                    "total_numeric": num_val,
+                                    "total_other": other_val,
+                                    "numeric_variables": num_val,
+                                    "text_other_variables": other_val,
+                                    "variables": cached_vars,
+                                    "files": c_data.get("files", []),
+                                    "has_more": c_data.get("total_variables", 0) > len(cached_vars),
+                                    "cached": True,
+                                    "is_updating": c_data.get("is_updating", False)
+                                })
+                    except Exception as cache_err:
+                        pass
 
             try:
                 # Query ES 'cdif' index for this collection with selective fields
                 col_items = []
+                target_es = None
+                raw_hits = []
+
                 async with httpx.AsyncClient(timeout=30.0) as client:
-                    try:
-                        c_resp = await client.get(f"{es_url}/collections/_doc/{cid}", timeout=5.0)
-                        if c_resp.status_code == 200:
-                            col_items = c_resp.json().get("_source", {}).get("items", []) or []
-                    except Exception:
-                        pass
+                    for es_url in es_candidates:
+                        if not es_url:
+                            continue
+                        try:
+                            c_resp = await client.get(f"{es_url}/collections/_doc/{cid}", timeout=5.0)
+                            if c_resp.status_code == 200:
+                                col_items = c_resp.json().get("_source", {}).get("items", []) or []
+                                target_es = es_url
+                                break
+                        except Exception:
+                            continue
+
+                    if not target_es and es_candidates:
+                        target_es = es_candidates[0]
 
                     should_clauses = [{"term": {"collection_id": cid}}]
                     if col_items:
@@ -10422,8 +10465,20 @@ Please answer the question based ONLY on the context provided above (including t
                             "cdif_jsonld.distribution"
                         ]
                     }
-                    resp = await client.post(f"{es_url}/cdif/_search", json=payload)
-                    if resp.status_code != 200:
+
+                    for cand_url in ([target_es] if target_es else []) + [u for u in es_candidates if u != target_es]:
+                        if not cand_url:
+                            continue
+                        try:
+                            resp = await client.post(f"{cand_url}/cdif/_search", json=payload, timeout=20.0)
+                            if resp.status_code == 200:
+                                raw_hits = resp.json().get("hits", {}).get("hits", [])
+                                target_es = cand_url
+                                break
+                        except Exception:
+                            continue
+
+                    if not target_es:
                         return JSONResponse({"collection_id": cid, "total_files": 0, "total_variables": 0, "variables": [], "files": []})
 
                     raw_hits = resp.json().get("hits", {}).get("hits", [])
@@ -10448,10 +10503,10 @@ Please answer the question based ONLY on the context provided above (including t
                     # Batch fetch dataset names and spatialCoverage from croissant,trump,dataverse indices for all unique dataset_ids
                     unique_dids = list(set(h.get("_source", {}).get("dataset_id") for h in hits if h.get("_source", {}).get("dataset_id")))
                     dataset_meta = {}
-                    if unique_dids:
+                    if unique_dids and target_es:
                         try:
                             ds_resp = await client.post(
-                                f"{es_url}/*,-.*,-collections,-history,-groups,-cdif/_search",
+                                f"{target_es}/*,-.*,-collections,-history,-groups,-cdif/_search",
                                 json={
                                     "query": {"ids": {"values": unique_dids}},
                                     "size": len(unique_dids),
@@ -10711,17 +10766,26 @@ Please answer the question based ONLY on the context provided above (including t
                 return JSONResponse({"answer": "Please provide a question about the variables."})
 
             # Retrieve cached or extracted variables from ES cdif index
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_candidates = get_elasticsearch_lookup_urls()
             all_vars = []
             try:
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     col_items = []
-                    try:
-                        c_resp = await client.get(f"{es_url}/collections/_doc/{cid}", timeout=5.0)
-                        if c_resp.status_code == 200:
-                            col_items = c_resp.json().get("_source", {}).get("items", []) or []
-                    except Exception:
-                        pass
+                    target_es = None
+                    for cand_url in es_candidates:
+                        if not cand_url:
+                            continue
+                        try:
+                            c_resp = await client.get(f"{cand_url}/collections/_doc/{cid}", timeout=5.0)
+                            if c_resp.status_code == 200:
+                                col_items = c_resp.json().get("_source", {}).get("items", []) or []
+                                target_es = cand_url
+                                break
+                        except Exception:
+                            continue
+
+                    if not target_es and es_candidates:
+                        target_es = es_candidates[0]
 
                     should_clauses = [{"term": {"collection_id": cid}}]
                     if col_items:
@@ -10748,9 +10812,20 @@ Please answer the question based ONLY on the context provided above (including t
                             "cdif_jsonld.variableMeasured"
                         ]
                     }
-                    resp = await client.post(f"{es_url}/cdif/_search", json=payload)
-                    if resp.status_code == 200:
-                        hits = resp.json().get("hits", {}).get("hits", [])
+
+                    hits = []
+                    for cand_url in ([target_es] if target_es else []) + [u for u in es_candidates if u != target_es]:
+                        if not cand_url:
+                            continue
+                        try:
+                            resp = await client.post(f"{cand_url}/cdif/_search", json=payload, timeout=20.0)
+                            if resp.status_code == 200:
+                                hits = resp.json().get("hits", {}).get("hits", [])
+                                break
+                        except Exception:
+                            continue
+
+                    if hits:
                         for h in hits:
                             src = h.get("_source", {})
                             fname = src.get("file_name", "")
