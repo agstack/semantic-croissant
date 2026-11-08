@@ -12,9 +12,7 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.co
 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
     config = json.load(f)
 
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", config.get("OLLAMA_HOST", "http://10.147.18.82:11435"))
-if "10.147.18.24" in OLLAMA_HOST or "ollama:11434" in OLLAMA_HOST:
-    OLLAMA_HOST = "http://10.147.18.82:11435"
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", config.get("OLLAMA_HOST", "http://10.147.18.24:11444"))
 MODEL = os.environ.get("MODEL", config.get("MODEL", "gemma4:31b-cloud"))
 OLLAMA_TOKEN = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
 MCP_URL = os.environ.get("MCP_URL", config.get("MCP_URL", "http://localhost:7070/sse"))

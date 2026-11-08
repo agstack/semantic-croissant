@@ -5501,9 +5501,7 @@ Please answer the question based ONLY on the context provided above (including t
                 def run_agent():
                     env = os.environ.copy()
                     env["MCP_URL"] = "http://localhost:7070/sse"
-                    ollama_h = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-                    if "10.147.18.24" in ollama_h or "ollama:11434" in ollama_h:
-                        ollama_h = "http://10.147.18.82:11435"
+                    ollama_h = os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444")
                     env["OLLAMA_HOST"] = ollama_h
                     env["MODEL"] = model_name
                     env["OLLAMA_TOKEN"] = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
@@ -5542,16 +5540,18 @@ Please answer the question based ONLY on the context provided above (including t
 
         async def vault_models(request):
             import os, httpx
-            ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
+            ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444")
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY")
             headers = {}
             if ollama_token:
                 headers["Authorization"] = f"Bearer {ollama_token}"
             try:
                 import json
-                endpoints = ["http://10.147.18.82:11435"]
-                if ollama_host and ollama_host not in endpoints:
+                endpoints = []
+                if ollama_host:
                     endpoints.append(ollama_host)
+                if "http://10.147.18.82:11435" not in endpoints:
+                    endpoints.append("http://10.147.18.82:11435")
                 cfg_candidates = ["gateway_config.json", os.path.join(os.path.dirname(__file__), "gateway_config.json")]
                 for cfg_file in cfg_candidates:
                     if os.path.exists(cfg_file):
