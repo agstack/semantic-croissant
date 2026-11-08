@@ -80,6 +80,10 @@ if [ -n "${ES_ARCHIVE}" ] && [ -f "${ES_ARCHIVE}" ]; then
     if tar -ztf "${ES_ARCHIVE}" 2>/dev/null | grep -q "es_hits.jsonl"; then
         log_info "Archive contains Elasticsearch JSONL documents. Unpacking to ${ES_TARGET}..."
         tar --no-same-owner --no-same-permissions --touch -xf "${ES_ARCHIVE}" --use-compress-program="${DECOMPRESS_CMD}" -C "${ES_TARGET}" 2>/dev/null || tar -xf "${ES_ARCHIVE}" -C "${ES_TARGET}" 2>/dev/null || true
+        # Also ensure unpacked in volumes/${PROFILE_NAME}/es in case symlink wasn't created yet
+        if [ -d "${ES_VOLUMES_LINK}" ] && [ "${ES_VOLUMES_LINK}" != "${ES_TARGET}" ]; then
+            cp -f "${ES_TARGET}/es_hits.jsonl" "${ES_VOLUMES_LINK}/" 2>/dev/null || true
+        fi
         log_success "Elasticsearch documents unpacked to ${ES_TARGET}."
     else
         tar --no-same-owner --no-same-permissions --touch -xf "${ES_ARCHIVE}" --use-compress-program="${DECOMPRESS_CMD}" -C "${ES_TARGET}" 2>/dev/null || tar -xf "${ES_ARCHIVE}" -C "${ES_TARGET}" 2>/dev/null || true
