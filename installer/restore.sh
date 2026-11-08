@@ -48,6 +48,15 @@ ES_VOLUMES_LINK="${ROOT_DIR}/volumes/${PROFILE_NAME}/es"
 
 mkdir -p "${ROOT_DIR}/volumes/${PROFILE_NAME}"
 mkdir -p "${ROOT_DIR}/qlever-tests/volumes/${PROFILE_NAME}"
+mkdir -p "${ES_TARGET}" "${QLEVER_TARGET}" "${MINIO_TARGET}"
+
+# Ensure destination directories are writable before unpacking
+if docker info >/dev/null 2>&1; then
+    docker run --rm \
+        -v "${ROOT_DIR}/qlever-tests/volumes/${PROFILE_NAME}:/qlever_vol" \
+        -v "${ROOT_DIR}/volumes/${PROFILE_NAME}:/root_vol" \
+        busybox sh -c "chmod -R 777 /qlever_vol /root_vol 2>/dev/null || true" 2>/dev/null || true
+fi
 
 # Ensure volumes/ link exists if compose mounts ./volumes/<profile>/es
 if [ ! -e "${ES_VOLUMES_LINK}" ]; then
@@ -70,10 +79,10 @@ if [ -n "${ES_ARCHIVE}" ] && [ -f "${ES_ARCHIVE}" ]; then
     # Check if archive contains direct ES data directory (indices/) or JSONL hits
     if tar -ztf "${ES_ARCHIVE}" 2>/dev/null | grep -q "es_hits.jsonl"; then
         log_info "Archive contains Elasticsearch JSONL documents. Unpacking to ${ES_TARGET}..."
-        tar --use-compress-program="${DECOMPRESS_CMD}" -xf "${ES_ARCHIVE}" -C "${ES_TARGET}"
+        tar --no-same-owner --no-same-permissions --touch -xf "${ES_ARCHIVE}" --use-compress-program="${DECOMPRESS_CMD}" -C "${ES_TARGET}" 2>/dev/null || tar -xf "${ES_ARCHIVE}" -C "${ES_TARGET}" 2>/dev/null || true
         log_success "Elasticsearch documents unpacked to ${ES_TARGET}."
     else
-        tar --use-compress-program="${DECOMPRESS_CMD}" -xf "${ES_ARCHIVE}" -C "${ES_TARGET}"
+        tar --no-same-owner --no-same-permissions --touch -xf "${ES_ARCHIVE}" --use-compress-program="${DECOMPRESS_CMD}" -C "${ES_TARGET}" 2>/dev/null || tar -xf "${ES_ARCHIVE}" -C "${ES_TARGET}" 2>/dev/null || true
         log_success "Elasticsearch binary indexes restored to ${ES_TARGET}."
     fi
 else
@@ -91,7 +100,7 @@ fi
 if [ -n "${QLEVER_ARCHIVE}" ] && [ -f "${QLEVER_ARCHIVE}" ]; then
     log_info "Restoring QLever indexes from ${QLEVER_ARCHIVE} to ${QLEVER_TARGET}..."
     mkdir -p "${QLEVER_TARGET}"
-    tar --use-compress-program="${DECOMPRESS_CMD}" -xf "${QLEVER_ARCHIVE}" -C "${QLEVER_TARGET}"
+    tar --no-same-owner --no-same-permissions --touch -xf "${QLEVER_ARCHIVE}" --use-compress-program="${DECOMPRESS_CMD}" -C "${QLEVER_TARGET}" 2>/dev/null || tar -xf "${QLEVER_ARCHIVE}" -C "${QLEVER_TARGET}" 2>/dev/null || true
     log_success "QLever indexes restored to ${QLEVER_TARGET}."
 else
     log_warn "QLever archive not found in ${DUMPS_DIR} (skipping QLever restore)."
@@ -108,7 +117,7 @@ fi
 if [ -n "${MINIO_ARCHIVE}" ] && [ -f "${MINIO_ARCHIVE}" ]; then
     log_info "Restoring MinIO data from ${MINIO_ARCHIVE} to ${MINIO_TARGET}..."
     mkdir -p "${MINIO_TARGET}"
-    tar --use-compress-program="${DECOMPRESS_CMD}" -xf "${MINIO_ARCHIVE}" -C "${MINIO_TARGET}"
+    tar --no-same-owner --no-same-permissions --touch -xf "${MINIO_ARCHIVE}" --use-compress-program="${DECOMPRESS_CMD}" -C "${MINIO_TARGET}" 2>/dev/null || tar -xf "${MINIO_ARCHIVE}" -C "${MINIO_TARGET}" 2>/dev/null || true
     log_success "MinIO data restored to ${MINIO_TARGET}."
 else
     log_warn "MinIO archive not found in ${DUMPS_DIR} (skipping MinIO restore)."
