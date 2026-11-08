@@ -901,8 +901,9 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
             palefire_enabled = True
 
     if palefire_enabled and os.path.isdir(palefire_dir) and os.path.exists(os.path.join(palefire_dir, "docker-compose.yml")):
-        log_info("Starting Pale Fire knowledge graph & spatial engine...")
-        subprocess.run(["docker", "compose", "-f", "docker-compose.yml", "up", "-d"], cwd=palefire_dir)
+        log_info("Starting Pale Fire knowledge graph & spatial engine (palefire-api, neo4j, qdrant)...")
+        # Run specific non-conflicting services without enabling local-ollama profile (which conflicts on port 11434)
+        subprocess.run(["docker", "compose", "-f", "docker-compose.yml", "up", "-d", "neo4j", "qdrant", "palefire-api"], cwd=palefire_dir)
         # Connect palefire-api to profile network if necessary
         profile_net = f"{profile_name}_default"
         try:
@@ -1088,9 +1089,14 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
         else:
             log_warn("Test check exited with non-zero status.")
 
-    print(f"\n{Colors.GREEN}{Colors.BOLD}========================================================================{Colors.RESET}")
-    print(f"{Colors.GREEN}{Colors.BOLD}       SEMANTIC CROISSANT INSTALLATION COMPLETED SUCCESSFULLY!         {Colors.RESET}")
-    print(f"{Colors.GREEN}{Colors.BOLD}========================================================================{Colors.RESET}")
+    if palefire_enabled:
+        print(f"\n{Colors.GREEN}{Colors.BOLD}========================================================================{Colors.RESET}")
+        print(f"{Colors.GREEN}{Colors.BOLD} Palefire installation on Semantic Croissant Platform completed successfully! {Colors.RESET}")
+        print(f"{Colors.GREEN}{Colors.BOLD}========================================================================{Colors.RESET}")
+    else:
+        print(f"\n{Colors.GREEN}{Colors.BOLD}========================================================================{Colors.RESET}")
+        print(f"{Colors.GREEN}{Colors.BOLD}       SEMANTIC CROISSANT INSTALLATION COMPLETED SUCCESSFULLY!         {Colors.RESET}")
+        print(f"{Colors.GREEN}{Colors.BOLD}========================================================================{Colors.RESET}")
     print(f"Profile:     {profile_name}")
     print(f"UI:          Semantic Croissant AI Studio running on http://localhost:{ports['MCP']}")
     print(f"API:         http://localhost:{ports['API']}/")
