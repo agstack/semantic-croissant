@@ -330,12 +330,35 @@ def step_2_download_dump(repo_dir: str, profile_config: dict = None):
             req.add_header("Authorization", f"Basic {encoded_auth}")
 
         found_archives = []
+        found_subdirs = []
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 html = resp.read().decode("utf-8", errors="ignore")
                 found_archives = sorted(list(set(re.findall(r"href=['\"](?:/dumps/)?([^/'\"]+\.(?:tar\.gz|tgz|tar|zip))['\"]", html))))
+                # Also detect keyword subdirectories (e.g. coffee, honduras)
+                for dir_match in re.findall(r"href=['\"](?:/dumps/)?([^/'\"?#]+)/?['\"]>\s*📁\s*([^<]+)<", html):
+                    subdir_name = dir_match[0].strip().rstrip("/")
+                    if subdir_name and subdir_name not in ["..", "."]:
+                        found_subdirs.append(subdir_name)
+                found_subdirs = sorted(list(set(found_subdirs)))
         except Exception as e:
             log_error(f"Failed to fetch directory index from {download_url}: {e}")
+
+        # Scan detected subdirectories for keyword-specific archives
+        base_dl = download_url.rstrip("/")
+        for sub in found_subdirs:
+            sub_url = f"{base_dl}/{sub}"
+            try:
+                sub_req = urllib.request.Request(sub_url)
+                if username:
+                    sub_req.add_header("Authorization", f"Basic {encoded_auth}")
+                with urllib.request.urlopen(sub_req, timeout=15) as s_resp:
+                    s_html = s_resp.read().decode("utf-8", errors="ignore")
+                    sub_arcs = re.findall(r"href=['\"](?:/dumps/" + re.escape(sub) + r"/)?([^/'\"]+\.(?:tar\.gz|tgz|tar|zip))['\"]", s_html)
+                    for sa in sub_arcs:
+                        found_archives.append(f"{sub}/{sa}")
+            except Exception:
+                pass
 
         if found_archives:
             log_info("Available archives discovered on dump server:")
@@ -359,11 +382,12 @@ def step_2_download_dump(repo_dir: str, profile_config: dict = None):
             base_dl = download_url.rstrip("/")
             for arc_name in to_download:
                 target_file = os.path.join(dest_folder, arc_name)
+                os.makedirs(os.path.dirname(target_file), exist_ok=True)
                 arc_url = f"{base_dl}/{arc_name}"
                 log_info(f"Downloading '{arc_name}' from {arc_url}...")
                 try:
                     download_file(arc_url, target_file)
-                    log_success(f"Saved '{arc_name}' into {dest_folder}")
+                    log_success(f"Saved '{arc_name}' into {os.path.dirname(target_file)}")
                 except Exception as dl_err:
                     log_error(f"Failed to download {arc_name}: {dl_err}")
             return
