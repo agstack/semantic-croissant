@@ -828,6 +828,36 @@ def step_4_build_docker_images(repo_dir: str, profile_name: str):
             except Exception as e:
                 log_error(f"Error downloading or loading ddicdi-studio: {e}")
 
+    # 5. Build and install Pale Fire if enabled in profile or directory present
+    palefire_dir = os.path.join(repo_dir, "palefire")
+    profile_env_file = os.path.join(repo_dir, "profiles", f"{profile_name}.env")
+    palefire_enabled = False
+    if os.path.isfile(profile_env_file):
+        profile_cfg = parse_env_file(profile_env_file)
+        if profile_cfg.get("PALEFIRE", "").lower() in ("true", "1", "yes"):
+            palefire_enabled = True
+
+    if os.path.isdir(palefire_dir):
+        if not os.path.exists(os.path.join(palefire_dir, "Dockerfile")):
+            log_info("Initializing palefire git submodule...")
+            subprocess.run(["git", "-C", repo_dir, "submodule", "update", "--init", "--recursive", "palefire"])
+
+        if palefire_enabled or os.path.exists(os.path.join(palefire_dir, "docker-compose.yml")):
+            build_pf = ask_prompt(
+                f"Build and install Pale Fire spatial/knowledge engine services for '{profile_name}'? (y/n)",
+                default="y" if palefire_enabled else "n"
+            ).lower()
+            if build_pf in ["y", "yes"]:
+                log_info("Building Pale Fire Docker image from palefire/Dockerfile...")
+                res_pf = subprocess.run(
+                    ["docker", "compose", "-f", "docker-compose.yml", "build", "palefire-api"],
+                    cwd=palefire_dir
+                )
+                if res_pf.returncode == 0:
+                    log_success("Pale Fire Docker images built successfully.")
+                else:
+                    log_warn(f"Pale Fire build completed with exit code {res_pf.returncode}")
+
     log_success("All Docker images built and pulled successfully.")
 
 
@@ -860,6 +890,39 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
     if res.returncode != 0:
         log_error("Docker Compose failed to start services.")
         sys.exit(res.returncode)
+
+    # Launch Pale Fire stack if enabled
+    profile_env_file = os.path.join(repo_dir, "profiles", f"{profile_name}.env")
+    palefire_enabled = False
+    palefire_dir = os.path.join(repo_dir, "palefire")
+    if os.path.isfile(profile_env_file):
+        profile_cfg = parse_env_file(profile_env_file)
+        if profile_cfg.get("PALEFIRE", "").lower() in ("true", "1", "yes"):
+            palefire_enabled = True
+
+    if palefire_enabled and os.path.isdir(palefire_dir) and os.path.exists(os.path.join(palefire_dir, "docker-compose.yml")):
+        log_info("Starting Pale Fire knowledge graph & spatial engine...")
+        subprocess.run(["docker", "compose", "-f", "docker-compose.yml", "up", "-d"], cwd=palefire_dir)
+        # Connect palefire-api to profile network if necessary
+        profile_net = f"{profile_name}_default"
+        try:
+            subprocess.run(
+                ["docker", "network", "connect", profile_net, "palefire-api"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            subprocess.run(
+                ["docker", "network", "connect", profile_net, "palefire-neo4j"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            subprocess.run(
+                ["docker", "network", "connect", profile_net, "palefire-qdrant"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        except Exception:
+            pass
 
     log_info("Waiting 15 seconds for services to initialize...")
     time.sleep(15)
@@ -929,6 +992,10 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
             break
         if attempt < 6:
             time.sleep(5)
+
+    # 5. Check Pale Fire spatial API if enabled
+    if palefire_enabled:
+        check_http_endpoint("http://localhost:8000/health", "Pale Fire Spatial & Graph Engine (port 8000)")
 
     # Ingest restored JSONL documents into Elasticsearch if present
     es_jsonl_paths = [
