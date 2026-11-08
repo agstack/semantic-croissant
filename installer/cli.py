@@ -1001,7 +1001,7 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
     print(f"{Colors.GREEN}{Colors.BOLD}       SEMANTIC CROISSANT INSTALLATION COMPLETED SUCCESSFULLY!         {Colors.RESET}")
     print(f"{Colors.GREEN}{Colors.BOLD}========================================================================{Colors.RESET}")
     print(f"Profile:     {profile_name}")
-    print(f"UI:          Semantic Croissant AI Studio running on http://localhost:{ports.get('QLEVER_UI', 7042)}")
+    print(f"UI:          Semantic Croissant AI Studio running on http://localhost:{ports['MCP']}")
     print(f"API:         http://localhost:{ports['API']}/")
     print(f"MCP SSE:     http://localhost:{ports['MCP']}/sse")
     print(f"QLever UI:   http://localhost:{ports.get('QLEVER_UI', 7042)}/")
