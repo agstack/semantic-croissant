@@ -947,6 +947,30 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
                 except Exception:
                     time.sleep(3)
             try:
+                # Apply index mappings if available
+                mappings_file = os.path.join(repo_dir, "installer", "es_mappings.json")
+                if os.path.isfile(mappings_file):
+                    try:
+                        with open(mappings_file, "r") as mf:
+                            mappings_dict = json.load(mf)
+                        for m_idx, m_body in mappings_dict.items():
+                            # Check if index exists; if not, create with proper mapping
+                            try:
+                                chk_req = urllib.request.Request(f"{es_url}/{m_idx}")
+                                with urllib.request.urlopen(chk_req, timeout=5):
+                                    pass
+                                # Put mapping to existing index
+                                put_m_req = urllib.request.Request(f"{es_url}/{m_idx}/_mapping", data=json.dumps(m_body).encode("utf-8"), headers={"Content-Type": "application/json"}, method="PUT")
+                                with urllib.request.urlopen(put_m_req, timeout=5):
+                                    pass
+                            except urllib.error.HTTPError as h_err:
+                                if h_err.code == 404:
+                                    create_req = urllib.request.Request(f"{es_url}/{m_idx}", data=json.dumps({"mappings": m_body}).encode("utf-8"), headers={"Content-Type": "application/json"}, method="PUT")
+                                    with urllib.request.urlopen(create_req, timeout=10):
+                                        pass
+                    except Exception as m_err:
+                        log_warn(f"Warning applying index mappings: {m_err}")
+
                 ingested = 0
                 batch = []
                 with open(jsonl_file, "r", encoding="utf-8") as f:
