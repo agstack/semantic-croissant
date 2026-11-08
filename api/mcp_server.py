@@ -56,7 +56,7 @@ def get_nodes_config() -> dict:
     if not nodes:
         local_pname = os.environ.get("PROFILE_NAME", "default")
         es_default = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200")
-        minio_default = os.environ.get("MINIO_URL", "http://minio:9000")
+        minio_default = get_minio_base_url()
         ip_default = os.environ.get("IP", "localhost")
         nodes[local_pname] = {
             "host": HOST,
@@ -167,19 +167,36 @@ def get_elasticsearch_lookup_urls() -> list[str]:
 
     return urls or (["http://elasticsearch:9200"] if in_docker else ["http://localhost:9200"])
 
+def get_minio_base_url() -> str:
+    """Returns the primary MinIO base endpoint (considering MINIO_GLOBAL_HOST, MINIO_URL)."""
+    minio_global = os.environ.get("MINIO_GLOBAL_HOST", "").strip().rstrip("/")
+    if minio_global:
+        if not (minio_global.startswith("http://") or minio_global.startswith("https://")):
+            return f"http://{minio_global}"
+        return minio_global
+    return os.environ.get("MINIO_URL", "http://minio:9000").rstrip("/")
+
 def get_minio_lookup_urls() -> list[str]:
     """
     Returns an ordered list of MinIO base endpoints to query across all known nodes.
-    Prioritizes the local profile's MinIO endpoint.
+    Supports MINIO_GLOBAL_HOST, profile settings, and fallback nodes.
     """
     urls = []
     nodes = get_nodes_config()
     profile_name = os.environ.get("PROFILE_NAME", "").strip().lower()
 
+    # 0. MINIO_GLOBAL_HOST takes priority if provided
+    minio_global = os.environ.get("MINIO_GLOBAL_HOST", "").strip().rstrip("/")
+    if minio_global:
+        if not (minio_global.startswith("http://") or minio_global.startswith("https://")):
+            minio_global = f"http://{minio_global}"
+        if minio_global not in urls:
+            urls.append(minio_global)
+
     # 1. Profile-specific MinIO settings from nodes.conf / env
     in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
     if in_docker:
-        container_minio = os.environ.get("MINIO_URL", "http://minio:9000").rstrip("/")
+        container_minio = get_minio_base_url().rstrip("/")
         if container_minio not in urls:
             urls.append(container_minio)
     elif profile_name and profile_name in nodes:
@@ -1226,7 +1243,7 @@ async def list_vault_documents(prefix: str = "") -> list[types.TextContent]:
     import os
     from minio import Minio
     
-    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+    minio_base = get_minio_base_url()
     endpoint = minio_base.replace("http://", "").replace("https://", "")
     
     try:
@@ -1258,7 +1275,7 @@ async def verify_document_provenance(filename: str) -> list[types.TextContent]:
     import os, json
     from minio import Minio
     
-    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+    minio_base = get_minio_base_url()
     endpoint = minio_base.replace("http://", "").replace("https://", "")
     
     import urllib.parse
@@ -1390,7 +1407,7 @@ async def store_in_vault(content: str, prefix: str = "custom", jsonld_payload: s
     filename = f"{base_name}{file_ext}"
     json_filename = f"{base_name}.jsonld"
 
-    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+    minio_base = get_minio_base_url()
     endpoint = minio_base.replace("http://", "").replace("https://", "")
     
     try:
@@ -2019,7 +2036,7 @@ async def update_vault_document(target_id: str, referenced_ids: list[str], new_c
     import sys, datetime, io, os, json, re, hashlib, asyncio
     from minio import Minio
     
-    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+    minio_base = get_minio_base_url()
     endpoint = minio_base.replace("http://", "").replace("https://", "")
     
     try:
@@ -2348,7 +2365,7 @@ async def read_direct_file(url: str, plan: str = None) -> list[types.TextContent
 
             # Check MinIO cache for CDIF JSON-LD
             try:
-                minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                minio_base = get_minio_base_url()
                 minio_endpoint = minio_base.replace("http://", "").replace("https://", "")
                 lookup_file = plan_target_file or url
                 vault_cache_key = f"cdif_cache_{hashlib.sha256((lookup_file + (plan_target_doi or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
@@ -2695,7 +2712,7 @@ async def get_cdif_summary(url_or_id: str) -> list[types.TextContent]:
             # Check 2: MinIO vault cache
             if not cdif_doc and target_file:
                 try:
-                    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                    minio_base = get_minio_base_url()
                     minio_endpoint = minio_base.replace("http://", "").replace("https://", "")
                     vault_cache_key = f"cdif_cache_{hashlib.sha256((target_file + (target_doi or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
                     from minio import Minio
@@ -4112,7 +4129,7 @@ async def finalize_keyfigures(csv_content: str, file_path: str = "") -> list[typ
                     if csv_hash:
                         from minio import Minio
                         import os, io
-                        minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                        minio_base = get_minio_base_url()
                         endpoint = minio_base.replace("http://", "").replace("https://", "")
                         client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
                         try:
@@ -4197,7 +4214,7 @@ async def extract_keyfigures_tool(file_path: str = None, text_content: str = Non
         try:
             from minio import Minio
             import os, io
-            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+            minio_base = get_minio_base_url()
             endpoint = minio_base.replace("http://", "").replace("https://", "")
             client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
             if not client.bucket_exists("vault"):
@@ -5303,7 +5320,7 @@ def main(port: int, transport: str) -> int:
             
             if not success:
                 # Try MinIO fallback
-                minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                minio_base = get_minio_base_url()
                 try:
                     from minio import Minio
                     import io
@@ -5576,7 +5593,7 @@ Please answer the question based ONLY on the context provided above (including t
                 
                 import datetime, json, re, os
                 # We fetch the original JSON-LD to get the creator/model
-                minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                minio_base = get_minio_base_url()
                 current_host = os.environ.get("HOST", HOST)
                 if not current_host.startswith("http"):
                     current_host = f"https://{current_host}"
@@ -5751,7 +5768,7 @@ Please answer the question based ONLY on the context provided above (including t
             filename = request.path_params["filename"]
             if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".gz") and not filename.endswith(".csv"):
                 filename += ".md"
-            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+            minio_base = get_minio_base_url()
             from minio import Minio
             from datetime import timedelta
             endpoint = minio_base.replace("http://", "").replace("https://", "")
@@ -6597,7 +6614,7 @@ Please answer the question based ONLY on the context provided above (including t
             if "localhost:8082" in cdif_converter_url or "127.0.0.1:8082" in cdif_converter_url:
                 cdif_converter_url = "http://converters:8000"
 
-            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+            minio_base = get_minio_base_url()
             minio_endpoint = minio_base.replace("http://", "").replace("https://", "")
             cache_prefix = "ddicdi" if is_ddi_cdi else "cdif_v2"
             vault_cache_key = f"{cache_prefix}_cache_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
@@ -7971,7 +7988,7 @@ Please answer the question based ONLY on the context provided above (including t
                 if media_type == "text/markdown" and isinstance(md_text, str) and request.url.path.startswith("/vault/print"):
                     import json, re
                     try:
-                        minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                        minio_base = get_minio_base_url()
                         from minio import Minio
                         endpoint = minio_base.replace("http://", "").replace("https://", "")
                         m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
@@ -8021,7 +8038,7 @@ Please answer the question based ONLY on the context provided above (including t
 
         async def proxy_downloads(request):
             filename = request.path_params["filename"]
-            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+            minio_base = get_minio_base_url()
             from minio import Minio
             from datetime import timedelta
             endpoint = minio_base.replace("http://", "").replace("https://", "")
@@ -8544,7 +8561,7 @@ Please answer the question based ONLY on the context provided above (including t
         # Collections Endpoints
         def get_minio_client():
             import os
-            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+            minio_base = get_minio_base_url()
             from minio import Minio
             endpoint = minio_base.replace("http://", "").replace("https://", "")
             return Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
@@ -12826,7 +12843,7 @@ Output a JSON object with:
                             import uuid, datetime, io
                             from minio import Minio
                             es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
-                            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                            minio_base = get_minio_base_url()
                             endpoint = minio_base.replace("http://", "").replace("https://", "")
                             m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
                             

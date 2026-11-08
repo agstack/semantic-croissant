@@ -1039,7 +1039,7 @@ async def proxy_vault_approve(request: Request, es_id: str):
 
 @app.get("/vault/{filename:path}")
 async def get_vault_file(filename: str):
-    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+    minio_base = os.environ.get("MINIO_GLOBAL_HOST", "").strip().rstrip("/") or os.environ.get("MINIO_URL", "http://minio:9000")
     
     if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".gz") and not filename.endswith(".csv"):
         filename += ".md"
