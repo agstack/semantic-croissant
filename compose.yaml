@@ -56,6 +56,9 @@ services:
     profiles:
       - ${PROFILE_NAME:-croissant-live}
     image: docker.elastic.co/elasticsearch/elasticsearch:8.14.3
+    depends_on:
+      init:
+        condition: service_completed_successfully
     env_file:
       - ./profiles/${PROFILE_NAME:-croissant-live}.env
     environment:

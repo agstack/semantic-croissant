@@ -1034,6 +1034,7 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
         "QLEVER_UI": 7042,
         "ES": 9200,
     }
+    es_host_cfg = None
 
     if os.path.isfile(profile_env_file):
         with open(profile_env_file, "r") as pf:
@@ -1049,6 +1050,8 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
                     ports["QLEVER_UI"] = int(line.split("=", 1)[1].strip())
                 elif line.startswith("ES_PORT="):
                     ports["ES"] = int(line.split("=", 1)[1].strip())
+                elif line.startswith("ES_HOST="):
+                    es_host_cfg = line.split("=", 1)[1].strip().strip('"').strip("'")
 
     print("\nRunning automated health checks:")
 
@@ -1082,11 +1085,23 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
     check_http_endpoint(f"{qlever_url}?query=SELECT%20*%20WHERE%20%7B%20%3Fs%20%3Fp%20%3Fo%20%7D%20LIMIT%201", f"QLever SPARQL service (port {ports['QLEVER']})")
 
     # 4. Check Elasticsearch endpoint (with retry to wait for JVM startup if needed)
-    es_url = f"http://localhost:{ports['ES']}/"
+    es_candidates = []
+    if es_host_cfg:
+        es_candidates.append(es_host_cfg)
+    if f"http://localhost:{ports['ES']}" not in es_candidates:
+        es_candidates.append(f"http://localhost:{ports['ES']}")
+    if f"http://127.0.0.1:{ports['ES']}" not in es_candidates:
+        es_candidates.append(f"http://127.0.0.1:{ports['ES']}")
+
     es_ready = False
+    es_url = es_candidates[0]
     for attempt in range(1, 7):
-        if check_http_endpoint(es_url, f"Elasticsearch service (port {ports['ES']})"):
-            es_ready = True
+        for cand in es_candidates:
+            if check_http_endpoint(f"{cand}/", f"Elasticsearch service ({cand})"):
+                es_ready = True
+                es_url = cand
+                break
+        if es_ready:
             break
         if attempt < 6:
             time.sleep(5)
