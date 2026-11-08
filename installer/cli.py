@@ -870,6 +870,7 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
         "API": 7013,
         "MCP": 7070,
         "QLEVER": 7011,
+        "QLEVER_UI": 7042,
         "ES": 9200,
     }
 
@@ -883,6 +884,8 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
                     ports["MCP"] = int(line.split("=", 1)[1].strip())
                 elif line.startswith("QLEVER_SERVER_PORT="):
                     ports["QLEVER"] = int(line.split("=", 1)[1].strip())
+                elif line.startswith("QLEVER_UI_PORT="):
+                    ports["QLEVER_UI"] = int(line.split("=", 1)[1].strip())
                 elif line.startswith("ES_PORT="):
                     ports["ES"] = int(line.split("=", 1)[1].strip())
 
@@ -917,9 +920,15 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
     qlever_url = f"http://localhost:{ports['QLEVER']}/"
     check_http_endpoint(f"{qlever_url}?query=SELECT%20*%20WHERE%20%7B%20%3Fs%20%3Fp%20%3Fo%20%7D%20LIMIT%201", f"QLever SPARQL service (port {ports['QLEVER']})")
 
-    # 4. Check Elasticsearch endpoint
+    # 4. Check Elasticsearch endpoint (with retry to wait for JVM startup if needed)
     es_url = f"http://localhost:{ports['ES']}/"
-    check_http_endpoint(es_url, f"Elasticsearch service (port {ports['ES']})")
+    es_ready = False
+    for attempt in range(1, 7):
+        if check_http_endpoint(es_url, f"Elasticsearch service (port {ports['ES']})"):
+            es_ready = True
+            break
+        if attempt < 6:
+            time.sleep(5)
 
     # Ingest restored JSONL documents into Elasticsearch if present
     es_jsonl_paths = [
@@ -929,6 +938,14 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
     for jsonl_file in es_jsonl_paths:
         if os.path.isfile(jsonl_file) and os.path.getsize(jsonl_file) > 0:
             log_info(f"Found restored Elasticsearch dump at {jsonl_file}. Ingesting into Elasticsearch...")
+            # Wait a few seconds for ES cluster state if not ready
+            for _ in range(5):
+                try:
+                    with urllib.request.urlopen(f"{es_url}/_cluster/health", timeout=5) as hr:
+                        if hr.status == 200:
+                            break
+                except Exception:
+                    time.sleep(3)
             try:
                 ingested = 0
                 batch = []
@@ -984,9 +1001,10 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
     print(f"{Colors.GREEN}{Colors.BOLD}       SEMANTIC CROISSANT INSTALLATION COMPLETED SUCCESSFULLY!         {Colors.RESET}")
     print(f"{Colors.GREEN}{Colors.BOLD}========================================================================{Colors.RESET}")
     print(f"Profile:     {profile_name}")
+    print(f"UI:          Semantic Croissant AI Studio running on http://localhost:{ports.get('QLEVER_UI', 7042)}")
     print(f"API:         http://localhost:{ports['API']}/")
     print(f"MCP SSE:     http://localhost:{ports['MCP']}/sse")
-    print(f"QLever UI:   http://localhost:{ports.get('QLEVER', 7011) + 1}/")
+    print(f"QLever UI:   http://localhost:{ports.get('QLEVER_UI', 7042)}/")
     print(f"Manage:      cd {repo_dir} && PROFILE_NAME={profile_name} docker compose --profile {profile_name} ps\n")
 
 
