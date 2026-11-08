@@ -2374,10 +2374,13 @@ async def spatial_query_dataset(
             pts = res_data.get("data_points", [])
             if pts:
                 lines.append("#### Observations & Data Points\n")
-                lines.append("| Department | Map Panel | Variable | Observation / Value | Color | Anomaly Range |")
-                lines.append("|---|---|---|---|---|---|")
+                lines.append("| Department | Page | Year | Map Panel | Variable | Observation / Value | Color | Anomaly Range |")
+                lines.append("|---|---|---|---|---|---|---|---|")
                 for pt in pts:
-                    lines.append(f"| {pt.get('Location')} | {pt.get('Side')} | {pt.get('Variable')} | **{pt.get('Value')}** | {pt.get('Color')} | {pt.get('Anomaly')} |")
+                    side_str = f"{pt.get('Side', '').capitalize()} panel" if pt.get('Side') else ""
+                    page_val = pt.get('Page')
+                    page_str = f"Page {page_val:02d}" if page_val is not None else "N/A"
+                    lines.append(f"| {pt.get('Location')} | **{page_str}** | **{pt.get('Year', 'N/A')}** | {side_str} | {pt.get('Variable')} | **{pt.get('Value')}** | {pt.get('Color')} | {pt.get('Anomaly')} |")
                 
                 lines.append("\n#### Legend & Calibration Provenance\n")
                 for pt in pts:
@@ -4480,6 +4483,11 @@ SYSTEM INSTRUCTION FOR LLM - Navigation Guide:
 13. If the user asks to "Answer this question based on the datasets in collection <ID>: <query>", use the 'get_collection_documents' tool with the given collection ID to get the metadata of the datasets in that collection. Then, answer the user's question using that retrieved information.
 
 14. If the user asks to read or analyze files from a dataset or vault document (e.g., "Read files...", "Read files from vault <ID>"), you MUST use the 'read_croissant_file' tool. Pass the dataset's ID, DOI, or vault URL as 'dataset_id_or_url', and pass the specific file name as 'file_name'. DO NOT use 'read_direct_file' or 'read_vault_article' for dataset files. Only use 'read_direct_file' if the user provides a direct raw file URL.
+
+15. If being asked about a location, municipality, or coordinates in a dataset (e.g., "Check rainfall in <coordinates>", "What was rainfall in <town>"):
+   - ALWAYS use the 'spatial_query_dataset' tool.
+   - ALWAYS state the Year associated with each observation or period if present.
+   - If left and right panels are present in the report or map layout, ALWAYS explicitly state on which panel ('left panel' or 'right panel') the observation is recorded.
 """
     return [types.TextContent(type="text", text=text)]
 
@@ -4524,6 +4532,11 @@ Here is detailed information about how every tool works:
 13. If the user asks to "Answer this question based on the datasets in collection <ID>: <query>", use the 'get_collection_documents' tool with the given collection ID to get the metadata of the datasets in that collection. Then, answer the user's question using that retrieved information.
 
 14. If the user asks to read or analyze files from a dataset or vault document (e.g., "Read files...", "Read files from vault <ID>"), you MUST use the 'read_croissant_file' tool. Pass the dataset's ID, DOI, or vault URL as 'dataset_id_or_url', and pass the specific file name as 'file_name'. DO NOT use 'read_direct_file' or 'read_vault_article' for dataset files. Only use 'read_direct_file' if the user provides a direct raw file URL.
+
+15. If being asked about a location, municipality, or coordinates in a dataset (e.g., "Check rainfall in <coordinates>", "What was rainfall in <town>"):
+   - ALWAYS use the 'spatial_query_dataset' tool.
+   - ALWAYS state the Year associated with each observation or period if present.
+   - If left and right panels are present in the report or map layout, ALWAYS explicitly state on which panel ('left panel' or 'right panel') the observation is recorded.
 """
         return [types.TextContent(type="text", text=guidance)]
     elif name == "search_web":
