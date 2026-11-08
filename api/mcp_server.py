@@ -2142,9 +2142,31 @@ async def update_vault_document(target_id: str, referenced_ids: list[str], new_c
         # 3. Use new jsonld if provided, else original
         final_jsonld = json.loads(new_jsonld) if new_jsonld is not None else original_jsonld
         
-        # 4. Generate new version ID
+        # 4. Generate new version ID and update versioning metadata
         # We update the original document's metadata in-place
         new_id = target_id
+        
+        # Track version increment
+        try:
+            curr_ver = final_jsonld.get("version")
+            if curr_ver is not None:
+                if isinstance(curr_ver, (int, float)):
+                    final_jsonld["version"] = round(float(curr_ver) + 0.1, 1)
+                elif isinstance(curr_ver, str):
+                    # Parse version string like "1.0", "1.1", or "1"
+                    m_ver = re.match(r"^(\d+)(?:\.(\d+))?$", curr_ver.strip())
+                    if m_ver:
+                        major = int(m_ver.group(1))
+                        minor = int(m_ver.group(2) or 0) + 1
+                        final_jsonld["version"] = f"{major}.{minor}"
+                    else:
+                        final_jsonld["version"] = f"{curr_ver}.1"
+            else:
+                final_jsonld["version"] = "1.1"
+        except Exception:
+            final_jsonld["version"] = "1.1"
+            
+        final_jsonld["dateModified"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         
         # 5. Build isBasedOn list
         if "isBasedOn" not in final_jsonld:
@@ -5584,6 +5606,16 @@ Please answer the question based ONLY on the context provided above (including t
                 note_text = (data.get("note") or "").strip()
                 model_used = data.get("model")
                 
+                # Sanitize snippet_text to strip accidental recursive dumps of the main document or raw HTML
+                if snippet_text:
+                    import re
+                    snippet_text = re.sub(r"\*\*Context:\*\*\s*>\s*=== MAIN DOCUMENT ===.*?(?=\*\*Question:\*\*|\*\*Task|\*\*User Note:|$)", "", snippet_text, flags=re.DOTALL)
+                    snippet_text = re.sub(r"=== MAIN DOCUMENT ===.*?(?=\*\*Question:\*\*|\*\*Task|\*\*User Note:|$)", "", snippet_text, flags=re.DOTALL)
+                    if "<div" in snippet_text and "<table" in snippet_text:
+                        snippet_text = re.sub(r"<[^>]+>", " ", snippet_text)
+                        snippet_text = re.sub(r"(?:^|\n)>\s*(?=\n|$)", "", snippet_text)
+                    snippet_text = snippet_text.strip()
+                
                 if not snippet_text:
                     return JSONResponse({"success": False, "error": "No text provided"})
                     
@@ -5800,6 +5832,12 @@ Please answer the question based ONLY on the context provided above (including t
                                             s_text = re.sub(r"^\[View Croissant JSON-LD Data\].*?</button>\s*", "", s_data, flags=re.DOTALL|re.IGNORECASE)
                                             s_text = re.sub(r"\s*---\s*\*Source Document:\* \[View Original\].*$", "", s_text, flags=re.DOTALL|re.IGNORECASE)
                                             s_text = re.sub(r"\s*---\s*\*\*Digital Signature:\*\*.*$", "", s_text, flags=re.DOTALL|re.IGNORECASE)
+                                            # Strip accidental embedded === MAIN DOCUMENT === dumps and HTML markup
+                                            s_text = re.sub(r"\*\*Context:\*\*\s*>\s*=== MAIN DOCUMENT ===.*?(?=\*\*Question:\*\*|\*\*Task|\*\*User Note:|$)", "", s_text, flags=re.DOTALL)
+                                            s_text = re.sub(r"=== MAIN DOCUMENT ===.*?(?=\*\*Question:\*\*|\*\*Task|\*\*User Note:|$)", "", s_text, flags=re.DOTALL)
+                                            if "<div" in s_text and "<table" in s_text:
+                                                s_text = re.sub(r"<[^>]+>", " ", s_text)
+                                                s_text = re.sub(r"(?:^|\n)>\s*(?=\n|$)", "", s_text)
                                             item["annotationText"] = s_text.strip()
                                         except Exception as e:
                                             item["annotationTextError"] = str(e)

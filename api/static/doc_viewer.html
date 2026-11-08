@@ -973,7 +973,11 @@
                 modalContent.appendChild(modalBody);
                 
                 const currentQA = `**Question:** ${question}\n\n**Answer by ${modelUsed}:**\n${answer}`;
-                const fullQA_for_save = `**Context:**\n> ${originalContext.replace(/\n/g, '\n> ')}\n\n` + 
+                // Avoid polluting snippet annotations with the entire bloated main document context
+                const cleanContext = (originalContext && !originalContext.includes('=== MAIN DOCUMENT ===') && originalContext.length < 500) 
+                    ? `**Context:**\n> ${originalContext.replace(/\n/g, '\n> ')}\n\n` 
+                    : '';
+                const fullQA_for_save = cleanContext + 
                     (historyQA.length > 0 ? `=== PREVIOUS Q&A ===\n${historyQA.join('\n\n---\n\n')}\n\n=== CURRENT Q&A ===\n` : '') + 
                     currentQA;
                 
