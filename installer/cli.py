@@ -220,38 +220,100 @@ def step_2_download_dump(repo_dir: str, profile_config: dict = None):
     dest_folder = os.path.abspath(dest_folder)
     ensure_directory_writable(dest_folder)
 
-    # Helper function to download a file with progress bar
-    def download_file(url: str, out_path: str):
-        req = urllib.request.Request(url)
-        if username:
-            auth_str = f"{username}:{password}"
-            encoded_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
-            req.add_header("Authorization", f"Basic {encoded_auth}")
+    # Helper function to download a file with progress bar, resume support, and retries
+    def download_file(url: str, out_path: str, max_retries: int = 5):
+        # 1. Fetch remote file size via HEAD or zero-range GET
+        remote_size = None
+        try:
+            head_req = urllib.request.Request(url)
+            head_req.get_method = lambda: "HEAD"
+            if username:
+                auth_str = f"{username}:{password}"
+                head_req.add_header("Authorization", f"Basic {base64.b64encode(auth_str.encode()).decode('ascii')}")
+            with urllib.request.urlopen(head_req, timeout=15) as head_resp:
+                cl = head_resp.headers.get("Content-Length")
+                if cl and cl.isdigit():
+                    remote_size = int(cl)
+        except Exception:
+            remote_size = None
 
-        with urllib.request.urlopen(req, timeout=300) as resp:
-            total_size = resp.headers.get("Content-Length")
-            total_bytes = int(total_size) if total_size and total_size.isdigit() else 0
-            downloaded = 0
-            block_size = 1048576  # 1MB
-            t0 = time.time()
-            with open(out_path, "wb") as out_fp:
-                while True:
-                    chunk = resp.read(block_size)
-                    if not chunk:
-                        break
-                    out_fp.write(chunk)
-                    downloaded += len(chunk)
-                    if total_bytes > 0:
-                        pct = (downloaded / total_bytes) * 100.0
-                        mb_down = downloaded / (1024 * 1024)
-                        mb_tot = total_bytes / (1024 * 1024)
-                        sys.stdout.write(f"\r  Downloading: {mb_down:.1f}MB / {mb_tot:.1f}MB ({pct:.1f}%)")
+        # 2. Check if file is already completely downloaded
+        if os.path.exists(out_path):
+            existing_size = os.path.getsize(out_path)
+            if remote_size is not None and existing_size == remote_size and remote_size > 0:
+                log_success(f"File '{os.path.basename(out_path)}' is already completely downloaded ({existing_size / (1024*1024):.1f}MB). Skipping.")
+                return
+            elif remote_size is None and existing_size > 0:
+                pass  # Cannot verify full size, will verify with Range
+
+        for attempt in range(1, max_retries + 1):
+            downloaded = os.path.getsize(out_path) if os.path.exists(out_path) else 0
+
+            # If remote_size is known and we reached it
+            if remote_size is not None and downloaded >= remote_size and remote_size > 0:
+                log_success(f"File '{os.path.basename(out_path)}' verified complete ({downloaded / (1024*1024):.1f}MB).")
+                return
+
+            req = urllib.request.Request(url)
+            if username:
+                auth_str = f"{username}:{password}"
+                encoded_auth = base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
+                req.add_header("Authorization", f"Basic {encoded_auth}")
+
+            if downloaded > 0:
+                req.add_header("Range", f"bytes={downloaded}-")
+                log_info(f"Resuming download from byte {downloaded} ({downloaded / (1024*1024):.1f}MB)...")
+
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    status = getattr(resp, "status", 200)
+                    cl = resp.headers.get("Content-Length")
+                    stream_length = int(cl) if cl and cl.isdigit() else 0
+
+                    if status == 206:
+                        # Partial content: server accepts range resume
+                        write_mode = "ab"
+                        total_bytes = downloaded + stream_length
                     else:
-                        mb_down = downloaded / (1024 * 1024)
-                        sys.stdout.write(f"\r  Downloading: {mb_down:.1f}MB")
-                    sys.stdout.flush()
-            elapsed = time.time() - t0
-            print(f"\n[+] Download completed in {elapsed:.1f}s.")
+                        # Full content returned (no resume or start from 0)
+                        write_mode = "wb"
+                        downloaded = 0
+                        total_bytes = stream_length
+
+                    if remote_size is None and total_bytes > 0:
+                        remote_size = total_bytes
+
+                    block_size = 1048576  # 1MB
+                    t0 = time.time()
+                    with open(out_path, write_mode) as out_fp:
+                        while True:
+                            chunk = resp.read(block_size)
+                            if not chunk:
+                                break
+                            out_fp.write(chunk)
+                            downloaded += len(chunk)
+                            if total_bytes > 0:
+                                pct = (downloaded / total_bytes) * 100.0
+                                mb_down = downloaded / (1024 * 1024)
+                                mb_tot = total_bytes / (1024 * 1024)
+                                sys.stdout.write(f"\r  Downloading: {mb_down:.1f}MB / {mb_tot:.1f}MB ({pct:.1f}%)")
+                            else:
+                                mb_down = downloaded / (1024 * 1024)
+                                sys.stdout.write(f"\r  Downloading: {mb_down:.1f}MB")
+                            sys.stdout.flush()
+
+                    elapsed = time.time() - t0
+                    print(f"\n[+] Download completed in {elapsed:.1f}s.")
+                    return  # Success!
+
+            except Exception as e:
+                log_warn(f"Download attempt {attempt}/{max_retries} interrupted: {e}")
+                if attempt < max_retries:
+                    wait_time = min(attempt * 3, 15)
+                    log_info(f"Retrying download in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    raise e
 
     # Check if download_url is a directory listing (e.g. ends with / or /dumps)
     is_directory = False

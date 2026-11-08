@@ -47,8 +47,8 @@ def authenticate_dumps_user(credentials: HTTPBasicCredentials = Depends(security
         )
     return credentials.username
 
-@app.get("/dumps/{filepath:path}")
-async def get_dump_file(filepath: str, user: str = Depends(authenticate_dumps_user)):
+@app.api_route("/dumps/{filepath:path}", methods=["GET", "HEAD"])
+async def get_dump_file(filepath: str, request: Request, user: str = Depends(authenticate_dumps_user)):
     """Serves protected dump files or an HTML directory listing with Basic Auth."""
     full_path = os.path.abspath(os.path.join(DUMPS_DIR, filepath)) if filepath else DUMPS_DIR
     
@@ -101,11 +101,52 @@ async def get_dump_file(filepath: str, user: str = Depends(authenticate_dumps_us
         html_lines.append("</table></body></html>")
         return HTMLResponse(content="\n".join(html_lines))
 
-    return FileResponse(path=full_path, filename=os.path.basename(full_path))
+    # Support HTTP Range requests for resuming large downloads
+    file_size = os.path.getsize(full_path)
+    range_header = request.headers.get("range")
+    if range_header and range_header.startswith("bytes="):
+        try:
+            byte_range = range_header[6:].strip()
+            parts = byte_range.split("-")
+            start = int(parts[0]) if parts[0] else 0
+            end = int(parts[1]) if len(parts) > 1 and parts[1] else file_size - 1
+            if start >= file_size or end >= file_size or start > end:
+                raise HTTPException(status_code=416, detail="Range Not Satisfiable")
+            content_length = end - start + 1
 
-@app.get("/dumps")
-async def get_dumps_root(user: str = Depends(authenticate_dumps_user)):
-    return await get_dump_file("", user=user)
+            def iterfile():
+                with open(full_path, "rb") as f:
+                    f.seek(start)
+                    remaining = content_length
+                    chunk_sz = 1048576  # 1MB
+                    while remaining > 0:
+                        read_bytes = min(remaining, chunk_sz)
+                        data = f.read(read_bytes)
+                        if not data:
+                            break
+                        remaining -= len(data)
+                        yield data
+
+            headers = {
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(content_length),
+                "Content-Disposition": f'attachment; filename="{os.path.basename(full_path)}"'
+            }
+            from starlette.responses import StreamingResponse
+            return StreamingResponse(iterfile(), status_code=206, headers=headers, media_type="application/octet-stream")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    response = FileResponse(path=full_path, filename=os.path.basename(full_path))
+    response.headers["Accept-Ranges"] = "bytes"
+    return response
+
+@app.api_route("/dumps", methods=["GET", "HEAD"])
+async def get_dumps_root(request: Request, user: str = Depends(authenticate_dumps_user)):
+    return await get_dump_file("", request=request, user=user)
 
 
 
