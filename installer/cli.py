@@ -1153,31 +1153,55 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
 
                 ingested = 0
                 batch = []
+                batch_size = 200
                 with open(jsonl_file, "r", encoding="utf-8") as f:
                     for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
                         doc = json.loads(line)
                         idx = doc.get("_index")
                         doc_id = doc.get("_id")
                         src = doc.get("_source", {})
                         batch.append(json.dumps({"index": {"_index": idx, "_id": doc_id}}))
                         batch.append(json.dumps(src))
-                        if len(batch) >= 1000:
+                        if len(batch) >= batch_size * 2:
                             payload = "\n".join(batch) + "\n"
-                            req = urllib.request.Request(f"{es_url}/_bulk", data=payload.encode("utf-8"), headers={"Content-Type": "application/x-ndjson"})
-                            with urllib.request.urlopen(req, timeout=30):
-                                pass
+                            # Retry bulk request up to 3 times with generous timeout
+                            for b_att in range(3):
+                                try:
+                                    req = urllib.request.Request(f"{es_url}/_bulk", data=payload.encode("utf-8"), headers={"Content-Type": "application/x-ndjson"})
+                                    with urllib.request.urlopen(req, timeout=120):
+                                        pass
+                                    break
+                                except Exception as be:
+                                    if b_att == 2:
+                                        log_warn(f"Warning: Bulk batch failed after 3 attempts: {be}")
+                                    else:
+                                        time.sleep(2)
                             ingested += len(batch) // 2
                             batch = []
                 if batch:
                     payload = "\n".join(batch) + "\n"
-                    req = urllib.request.Request(f"{es_url}/_bulk", data=payload.encode("utf-8"), headers={"Content-Type": "application/x-ndjson"})
-                    with urllib.request.urlopen(req, timeout=30):
-                        pass
+                    for b_att in range(3):
+                        try:
+                            req = urllib.request.Request(f"{es_url}/_bulk", data=payload.encode("utf-8"), headers={"Content-Type": "application/x-ndjson"})
+                            with urllib.request.urlopen(req, timeout=120):
+                                pass
+                            break
+                        except Exception as be:
+                            if b_att == 2:
+                                log_warn(f"Warning: Final bulk batch failed after 3 attempts: {be}")
+                            else:
+                                time.sleep(2)
                     ingested += len(batch) // 2
                 
                 # Refresh ES
-                req = urllib.request.Request(f"{es_url}/_refresh", data=b"", headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=10):
+                try:
+                    req = urllib.request.Request(f"{es_url}/_refresh", data=b"", headers={"Content-Type": "application/json"})
+                    with urllib.request.urlopen(req, timeout=30):
+                        pass
+                except Exception:
                     pass
                 log_success(f"Ingested {ingested} restored documents into Elasticsearch.")
             except Exception as es_err:
