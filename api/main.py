@@ -517,7 +517,7 @@ async def process_dspace(url: str):
     return croissant
 
 @app.post("/api/generic/process")
-async def process_generic(url: str = None):
+async def process_generic(url: str = None, vision: bool = False):
     import asyncio
     import re
     from fastapi import HTTPException
@@ -531,6 +531,8 @@ async def process_generic(url: str = None):
         script_path = "convertors/url_to_croissant.py"
         
     cmd = ["python3", script_path, url, "--elastic"]
+    if vision:
+        cmd.append("--computer-vision")
     
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -564,7 +566,7 @@ async def process_generic(url: str = None):
     return {"status": "success", "redirect_url": redirect_url}
 
 @app.post("/api/dataverse/process")
-async def process_dataverse(callback: str = None, url: str = None, siteUrl: str = None, datasetPid: str = None):
+async def process_dataverse(callback: str = None, url: str = None, siteUrl: str = None, datasetPid: str = None, vision: bool = False):
     import base64
     import requests
     import asyncio
@@ -611,6 +613,8 @@ async def process_dataverse(callback: str = None, url: str = None, siteUrl: str 
             script_path = "convertors/url_to_croissant.py"
             
         cmd = ["python3", script_path, dataset_url, "--elastic"]
+        if vision:
+            cmd.append("--computer-vision")
         
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -773,6 +777,31 @@ def get_user_info_from_odrl(request=None):
 
 
 
+def check_palefire_enabled():
+    import os
+    if os.environ.get("PALEFIRE", "").lower() in ("true", "1", "yes"):
+        return True
+    profile_name = os.environ.get("PROFILE_NAME", "")
+    candidates = []
+    if profile_name:
+        candidates.append(f"profiles/{profile_name}.env")
+        candidates.append(f"/app/profiles/{profile_name}.env")
+    candidates.extend(["profiles/asknowmuseum.env", "/app/profiles/asknowmuseum.env"])
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("#"): continue
+                        if line.startswith("PALEFIRE="):
+                            val = line.split("=", 1)[1].strip().strip("\"'").lower()
+                            return val in ("true", "1", "yes")
+            except Exception:
+                pass
+    return False
+
+
 def render_html_template(file_path: str, request=None, auth_status=None):
     import os
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -788,6 +817,9 @@ def render_html_template(file_path: str, request=None, auth_status=None):
     
     html = html.replace('{{VAULT_LOGO_HTML}}', logo_html)
     html = html.replace('{{VAULT_FOOTER_HTML}}', footer_html)
+    
+    palefire_display = "flex" if check_palefire_enabled() else "none"
+    html = html.replace('{{PALEFIRE_DISPLAY}}', palefire_display)
     
     if '{{LOGIN_BUTTON_HTML}}' in html and request:
         try:
@@ -1041,7 +1073,7 @@ async def proxy_vault_approve(request: Request, es_id: str):
 async def get_vault_file(filename: str):
     minio_base = os.environ.get("MINIO_GLOBAL_HOST", "").strip().rstrip("/") or os.environ.get("MINIO_URL", "http://minio:9000")
     
-    if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".gz") and not filename.endswith(".csv"):
+    if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".json") and not filename.endswith(".gz") and not filename.endswith(".csv"):
         filename += ".md"
         
     from minio import Minio
@@ -2105,6 +2137,30 @@ async def api_collections_proxy(request: Request):
             return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
+
+@app.api_route("/spatial-query", methods=["POST", "GET"])
+async def proxy_spatial_query(request: Request):
+    """Proxy spatial queries to palefire-api."""
+    import httpx
+    from fastapi import Response, HTTPException
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    body = await request.body()
+    
+    palefire_url = os.environ.get("PALEFIRE_API_URL", "http://palefire-api:8000/spatial-query")
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            resp = await client.request(
+                request.method,
+                palefire_url,
+                headers=headers,
+                params=dict(request.query_params),
+                content=body
+            )
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to reach Palefire spatial query service: {str(e)}")
+
 
 
 

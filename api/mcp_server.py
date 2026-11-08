@@ -377,6 +377,31 @@ def get_user_info_from_odrl(request=None):
 
 
 
+def check_palefire_enabled():
+    import os
+    if os.environ.get("PALEFIRE", "").lower() in ("true", "1", "yes"):
+        return True
+    profile_name = os.environ.get("PROFILE_NAME", "")
+    candidates = []
+    if profile_name:
+        candidates.append(f"profiles/{profile_name}.env")
+        candidates.append(f"/app/profiles/{profile_name}.env")
+    candidates.extend(["profiles/asknowmuseum.env", "/app/profiles/asknowmuseum.env"])
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("#"): continue
+                        if line.startswith("PALEFIRE="):
+                            val = line.split("=", 1)[1].strip().strip("\"'").lower()
+                            return val in ("true", "1", "yes")
+            except Exception:
+                pass
+    return False
+
+
 def render_html_template(file_path: str, request=None, auth_status=None):
     import os
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -392,6 +417,9 @@ def render_html_template(file_path: str, request=None, auth_status=None):
     
     html = html.replace('{{VAULT_LOGO_HTML}}', logo_html)
     html = html.replace('{{VAULT_FOOTER_HTML}}', footer_html)
+    
+    palefire_display = "flex" if check_palefire_enabled() else "none"
+    html = html.replace('{{PALEFIRE_DISPLAY}}', palefire_display)
     
     if '{{LOGIN_BUTTON_HTML}}' in html and request:
         try:
@@ -2289,6 +2317,80 @@ async def update_vault_document(target_id: str, referenced_ids: list[str], new_c
         return [types.TextContent(type="text", text=f"Successfully created new version in vault as {new_id}")]
     except Exception as e:
         return [types.TextContent(type="text", text=f"Error updating vault document: {str(e)}")]
+
+async def spatial_query_dataset(
+    dataset_id_or_url: str,
+    location_name: str = None,
+    page: int = None,
+    lat: float = None,
+    lon: float = None,
+    file_name: str = None,
+    country_code: str = "HN"
+) -> list[types.TextContent]:
+    """Execute a spatial query against a dataset / vault document using GeoNames, GeoPandas, and Datamaps."""
+    import httpx, json, re, os
+    try:
+        # Resolve doc_id from url or id
+        doc_id = dataset_id_or_url.strip()
+        m = re.search(r"([a-zA-Z0-9_-]{16,})", doc_id)
+        if m:
+            clean_doc_id = m.group(1)
+        else:
+            clean_doc_id = doc_id
+
+        palefire_url = os.environ.get("PALEFIRE_API_URL", "http://palefire-api:8000/spatial-query")
+        payload = {
+            "doc_id": clean_doc_id,
+            "country_code": country_code
+        }
+        if location_name:
+            payload["location_name"] = location_name
+        if page is not None:
+            payload["page"] = page
+        if lat is not None and lon is not None:
+            payload["lat"] = lat
+            payload["lon"] = lon
+        if file_name:
+            payload["file_name"] = file_name
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(palefire_url, json=payload)
+            if resp.status_code != 200:
+                return [types.TextContent(type="text", text=f"Spatial query failed with status {resp.status_code}: {resp.text}")]
+            
+            res_data = resp.json()
+            
+            # Format comprehensive answer with full provenance
+            lines = []
+            lines.append(f"### Spatial Query Result for {location_name or f'({lat}, {lon})'}\n")
+            lines.append(f"- **Dataset / Vault Document**: [{clean_doc_id}](https://ai.now.museum/vault/doc/{clean_doc_id})")
+            lines.append(f"- **Croissant JSON-LD**: [Metadata](https://ai.now.museum/vault/{clean_doc_id}.jsonld)")
+            lines.append(f"- **Target Report File**: [{res_data.get('file_name')}]({res_data.get('file_url')})")
+            
+            res_loc = res_data.get("resolved_location", {})
+            lines.append(f"- **Resolved Coordinates**: {res_loc.get('lat')}, {res_loc.get('lon')} ({res_loc.get('name')}, source: `{res_loc.get('source')}`)")
+            lines.append(f"- **Matched Department (GeoPandas)**: **{res_data.get('matched_department')}**\n")
+            
+            pts = res_data.get("data_points", [])
+            if pts:
+                lines.append("#### Observations & Data Points\n")
+                lines.append("| Department | Map Panel | Variable | Observation / Value | Color | Anomaly Range |")
+                lines.append("|---|---|---|---|---|---|")
+                for pt in pts:
+                    lines.append(f"| {pt.get('Location')} | {pt.get('Side')} | {pt.get('Variable')} | **{pt.get('Value')}** | {pt.get('Color')} | {pt.get('Anomaly')} |")
+                
+                lines.append("\n#### Legend & Calibration Provenance\n")
+                for pt in pts:
+                    leg = pt.get("Legend")
+                    if leg:
+                        lines.append(f"- **{pt.get('Side').capitalize()} Map Legend**: `{leg}`")
+            else:
+                lines.append("No specific data points found for this department in the report.")
+                
+            return [types.TextContent(type="text", text="\n".join(lines))]
+    except Exception as e:
+        return [types.TextContent(type="text", text=f"Error executing spatial query: {str(e)}")]
+
 
 async def read_croissant_file(dataset_id_or_url: str, file_name: str) -> list[types.TextContent]:
     import httpx, json
@@ -4530,6 +4632,16 @@ Here is detailed information about how every tool works:
             dataset_id_or_url=arguments.get("dataset_id_or_url"),
             file_name=arguments.get("file_name")
         )
+    elif name == "spatial_query_dataset":
+        return await spatial_query_dataset(
+            dataset_id_or_url=arguments.get("dataset_id_or_url") or arguments.get("doc_id") or "",
+            location_name=arguments.get("location_name"),
+            page=arguments.get("page"),
+            lat=arguments.get("lat"),
+            lon=arguments.get("lon"),
+            file_name=arguments.get("file_name"),
+            country_code=arguments.get("country_code", "HN")
+        )
     elif name == "read_direct_file":
         file_url = arguments.get("url") or arguments.get("file_url") or arguments.get("filename") or arguments.get("id") or ""
         return await read_direct_file(url=file_url, plan=arguments.get("plan"))
@@ -4819,6 +4931,23 @@ async def list_tools() -> list[types.Tool]:
                 "properties": {
                     "dataset_id_or_url": {"type": "string", "description": "The dataset ID or URL."},
                     "file_name": {"type": "string", "description": "The name or URL of the file to read (from the dataset's distribution)."}
+                }
+            }
+        ),
+        types.Tool(
+            name="spatial_query_dataset",
+            description="Execute a geographic spatial query on a dataset or vault document to find observations (e.g. accumulated rainfall, temperature anomaly) for a town, municipality, or coordinates using GeoNames geocoding and GeoPandas department resolution with full provenance.",
+            inputSchema={
+                "type": "object",
+                "required": ["dataset_id_or_url"],
+                "properties": {
+                    "dataset_id_or_url": {"type": "string", "description": "The dataset ID, URL, or Vault document ID (e.g. '7FOuEOKGMJrGQFnbIdErKQ')."},
+                    "location_name": {"type": "string", "description": "Name of the location, municipality, or place to query (e.g. 'Sico', 'Tegucigalpa')."},
+                    "page": {"type": "integer", "description": "Report page number (e.g. 10 for July rainfall). Optional."},
+                    "file_name": {"type": "string", "description": "Specific report file name (e.g. 'heatmap_report_page_10.csv'). Optional."},
+                    "lat": {"type": "number", "description": "Latitude coordinate if known. Optional."},
+                    "lon": {"type": "number", "description": "Longitude coordinate if known. Optional."},
+                    "country_code": {"type": "string", "description": "Country code (default 'HN'). Optional."}
                 }
             }
         ),
@@ -5798,7 +5927,7 @@ Please answer the question based ONLY on the context provided above (including t
 
         async def proxy_vault(request):
             filename = request.path_params["filename"]
-            if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".gz") and not filename.endswith(".csv"):
+            if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".json") and not filename.endswith(".gz") and not filename.endswith(".csv"):
                 filename += ".md"
             minio_base = get_minio_base_url()
             from minio import Minio
@@ -6188,6 +6317,27 @@ Please answer the question based ONLY on the context provided above (including t
             )
             return PlainTextResponse(robots_content, media_type="text/plain; charset=utf-8")
             
+        async def proxy_mcp_spatial_query(request):
+            """Proxy spatial query requests to palefire-api."""
+            import httpx
+            from starlette.responses import Response, JSONResponse
+            body = await request.body()
+            headers = dict(request.headers)
+            headers.pop("host", None)
+            palefire_url = os.environ.get("PALEFIRE_API_URL", "http://palefire-api:8000/spatial-query")
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                try:
+                    resp = await client.request(
+                        request.method,
+                        palefire_url,
+                        headers=headers,
+                        params=dict(request.query_params),
+                        content=body
+                    )
+                    return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+                except Exception as e:
+                    return JSONResponse({"error": f"Failed to reach Palefire spatial query service: {str(e)}"}, status_code=502)
+
         async def export_to_cdif(request):
             """
             Export a dataset file (from URL or file query parameter) to CDIF (DDI-CDI JSON-LD)
@@ -10934,6 +11084,7 @@ Instructions:
             direct_url = request.query_params.get("url")
             dataset_pid = request.query_params.get("datasetPid")
             site_url_param = request.query_params.get("siteUrl")
+            vision_param = request.query_params.get("vision", "").lower() in ("true", "1", "yes")
             
             if not callback and not direct_url and not dataset_pid:
                 return JSONResponse({"detail": "Missing callback, url, or datasetPid parameter"}, status_code=400)
@@ -10975,6 +11126,8 @@ Instructions:
                     script_path = "convertors/url_to_croissant.py"
                     
                 cmd = ["python3", script_path, dataset_url, "--elastic"]
+                if vision_param:
+                    cmd.append("--computer-vision")
                 
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -13433,6 +13586,7 @@ Output a JSON object with:
             from starlette.responses import JSONResponse
             
             url = request.query_params.get("url")
+            vision_param = request.query_params.get("vision", "").lower() in ("true", "1", "yes")
             
             if not url:
                 return JSONResponse({"detail": "Missing url parameter"}, status_code=400)
@@ -13443,6 +13597,8 @@ Output a JSON object with:
                     script_path = "convertors/url_to_croissant.py"
                     
                 cmd = ["python3", script_path, url, "--elastic"]
+                if vision_param:
+                    cmd.append("--computer-vision")
                 
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -13557,6 +13713,8 @@ Output a JSON object with:
                 Route("/robots.txt", endpoint=view_robots_txt, methods=["GET"]),
                 Route("/export", endpoint=export_to_cdif, methods=["GET", "POST"]),
                 Route("/api/export", endpoint=export_to_cdif, methods=["GET", "POST"]),
+                Route("/spatial-query", endpoint=proxy_mcp_spatial_query, methods=["GET", "POST"]),
+                Route("/api/spatial-query", endpoint=proxy_mcp_spatial_query, methods=["GET", "POST"]),
                 Route("/vault/doc/{es_id}", endpoint=vault_es_doc_html),
                 Route("/vault/doc/{es_id}/annotations", endpoint=vault_es_doc_html),
                 Route("/vault/history", endpoint=vault_get_history, methods=["GET"]),

@@ -1330,10 +1330,14 @@
         <div style="background: var(--bg-color); padding: 20px; border-radius: 8px; width: 400px; max-width: 90%; border: 1px solid var(--border-color);">
             <h3 style="margin-top: 0; color: var(--text-color);">Add Resource</h3>
             <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-color);">Enter the URL of the resource you want to ingest:</p>
-            <input type="text" id="add-resource-input" placeholder="https://..." style="width: 100%; padding: 8px; margin-bottom: 15px; border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; background: var(--panel-bg); color: var(--text-color); font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') document.getElementById('add-resource-submit').click()">
+            <input type="text" id="add-resource-input" placeholder="https://..." style="width: 100%; padding: 8px; margin-bottom: 12px; border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; background: var(--panel-bg); color: var(--text-color); font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') document.getElementById('add-resource-submit').click()">
+            <label id="add-resource-vision-label" style="display: {{PALEFIRE_DISPLAY}}; align-items: center; gap: 8px; margin-bottom: 15px; font-size: 0.85rem; color: var(--text-color); cursor: pointer; user-select: none;">
+                <input type="checkbox" id="add-resource-vision" style="cursor: pointer; width: 15px; height: 15px;">
+                <span>Use Computer Vision</span>
+            </label>
             <div style="display: flex; justify-content: flex-end; gap: 10px;">
                 <button onclick="document.getElementById('add-resource-modal').style.display='none'" class="theme-toggle">Cancel</button>
-                <button id="add-resource-submit" onclick="var url = document.getElementById('add-resource-input').value; if(url) window.location.href='/dataverse?url=' + encodeURIComponent(url);" style="background-color: #006bb3; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
+                <button id="add-resource-submit" onclick="var url = document.getElementById('add-resource-input').value; var cv = document.getElementById('add-resource-vision').checked; if(url) window.location.href='/dataverse?url=' + encodeURIComponent(url) + (cv ? '&vision=true' : '');" style="background-color: #006bb3; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
             </div>
         </div>
     </div>
