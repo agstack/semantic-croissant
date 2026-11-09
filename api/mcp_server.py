@@ -180,6 +180,9 @@ def get_elasticsearch_lookup_urls() -> list[str]:
 
 def get_minio_base_url() -> str:
     """Returns the primary MinIO base endpoint (considering MINIO_GLOBAL_HOST, MINIO_URL)."""
+    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+    if in_docker:
+        return "http://minio:9000"
     minio_global = os.environ.get("MINIO_GLOBAL_HOST", "").strip().rstrip("/")
     if minio_global:
         if not (minio_global.startswith("http://") or minio_global.startswith("https://")):
@@ -195,19 +198,25 @@ def get_minio_lookup_urls() -> list[str]:
     urls = []
     nodes = get_nodes_config()
     profile_name = os.environ.get("PROFILE_NAME", "").strip().lower()
+    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+
+    # In docker, the local container service name is http://minio:9000
+    if in_docker:
+        urls.append("http://minio:9000")
 
     # 0. MINIO_GLOBAL_HOST takes priority if provided
     minio_global = os.environ.get("MINIO_GLOBAL_HOST", "").strip().rstrip("/")
     if minio_global:
         if not (minio_global.startswith("http://") or minio_global.startswith("https://")):
             minio_global = f"http://{minio_global}"
-        if minio_global not in urls:
+        if in_docker and any(h in minio_global for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+            pass
+        elif minio_global not in urls:
             urls.append(minio_global)
 
     # 1. Profile-specific MinIO settings from nodes.conf / env
-    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
     if in_docker:
-        container_minio = get_minio_base_url().rstrip("/")
+        container_minio = "http://minio:9000"
         if container_minio not in urls:
             urls.append(container_minio)
     elif profile_name and profile_name in nodes:
@@ -225,6 +234,8 @@ def get_minio_lookup_urls() -> list[str]:
             urls.append(minio_u)
 
     local_minio = os.environ.get("MINIO_URL", "").rstrip("/")
+    if in_docker and any(h in local_minio for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+        local_minio = "http://minio:9000"
     if local_minio and local_minio not in urls:
         urls.append(local_minio)
 

@@ -27,6 +27,10 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
 OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "")
 OLLAMA_HEADERS = {"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {}
 ELASTICSEARCH_URL = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200")
+# Inside Docker, if ELASTICSEARCH_URL is pointing to localhost, redirect to http://elasticsearch:9200
+_in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+if _in_docker and any(h in ELASTICSEARCH_URL for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+    ELASTICSEARCH_URL = "http://elasticsearch:9200"
 MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "localhost")
 OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:31b-cloud")
 MODEL_NAME = os.environ.get("MODEL_NAME") or os.environ.get("MODEL") or OLLAMA_DEFAULT_MODEL
@@ -1307,6 +1311,8 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
     # Upload to Vault if MinIO is configured
     try:
         minio_url = os.environ.get("MINIO_URL", "http://minio:9000")
+        if _in_docker and any(h in minio_url for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+            minio_url = "http://minio:9000"
         minio_user = os.environ.get("MINIO_ROOT_USER", "minioadmin")
         minio_pass = os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin")
         if minio_url:
@@ -1839,6 +1845,8 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
         # Upload to Vault if MinIO is configured
         try:
             minio_url = os.environ.get("MINIO_URL", "http://minio:9000")
+            if _in_docker and any(h in minio_url for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+                minio_url = "http://minio:9000"
             minio_user = os.environ.get("MINIO_ROOT_USER", "minioadmin")
             minio_pass = os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin")
             if minio_url:
