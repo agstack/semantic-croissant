@@ -102,23 +102,34 @@ def get_elasticsearch_lookup_urls() -> list[str]:
     """
     Returns an ordered list of Elasticsearch base URLs to query.
     Supports ES_GLOBAL_HOST, profile-specific settings, and fallback nodes.
+    Inside Docker, translates localhost / 127.0.0.1 references to http://elasticsearch:9200
+    or host.docker.internal / direct service name.
     """
     urls = []
     nodes = get_nodes_config()
     profile_name = os.environ.get("PROFILE_NAME", "").strip().lower()
     in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
 
+    # In docker, the local container service name is http://elasticsearch:9200
+    if in_docker:
+        urls.append("http://elasticsearch:9200")
+
     # 0. ES_GLOBAL_HOST takes priority if provided
     es_global = os.environ.get("ES_GLOBAL_HOST", "").strip().rstrip("/")
     if es_global:
         if not (es_global.startswith("http://") or es_global.startswith("https://")):
             es_global = f"http://{es_global}"
-        if es_global not in urls:
+        if in_docker and any(h in es_global for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+            # When inside docker, localhost refers to this container, not the elasticsearch container
+            pass
+        elif es_global not in urls:
             urls.append(es_global)
 
     # 1. Profile-specific elastic settings from nodes.conf
     container_es = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
-    if in_docker and container_es not in urls:
+    if in_docker and any(h in container_es for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+        container_es = "http://elasticsearch:9200"
+    if container_es not in urls:
         urls.append(container_es)
 
     if profile_name and profile_name in nodes:
