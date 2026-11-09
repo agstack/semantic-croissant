@@ -19,12 +19,135 @@ app.add_middleware(
 )
 
 from fastapi.staticfiles import StaticFiles
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.responses import FileResponse, HTMLResponse
+import secrets
 import os
 
 if os.path.exists("/app/static"):
     app.mount("/static", StaticFiles(directory="/app/static"), name="static")
 elif os.path.exists("api/static"):
     app.mount("/static", StaticFiles(directory="api/static"), name="static")
+
+# Protected /dumps file distribution
+DUMPS_DIR = "/app/dumps" if os.path.exists("/app/dumps") else os.path.abspath("dumps")
+DUMPS_USER = os.environ.get("DUMPS_USER", "admin")
+DUMPS_PASSWORD = os.environ.get("DUMPS_PASSWORD", "croissant2026")
+security = HTTPBasic()
+
+def authenticate_dumps_user(credentials: HTTPBasicCredentials = Depends(security)):
+    is_correct_username = secrets.compare_digest(credentials.username.encode("utf-8"), DUMPS_USER.encode("utf-8"))
+    is_correct_password = secrets.compare_digest(credentials.password.encode("utf-8"), DUMPS_PASSWORD.encode("utf-8"))
+    if not (is_correct_username and is_correct_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+@app.api_route("/dumps/{filepath:path}", methods=["GET", "HEAD"])
+async def get_dump_file(filepath: str, request: Request, user: str = Depends(authenticate_dumps_user)):
+    """Serves protected dump files or an HTML directory listing with Basic Auth."""
+    full_path = os.path.abspath(os.path.join(DUMPS_DIR, filepath)) if filepath else DUMPS_DIR
+    
+    # Path traversal protection
+    if not full_path.startswith(os.path.abspath(DUMPS_DIR)):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    if not os.path.exists(full_path):
+        raise HTTPException(status_code=404, detail="File or directory not found")
+
+    if os.path.isdir(full_path):
+        entries = sorted(os.listdir(full_path))
+        html_lines = [
+            "<!DOCTYPE html>",
+            "<html><head><meta charset='utf-8'><title>Semantic Croissant Protected Dumps</title>",
+            "<style>body{font-family:sans-serif;margin:40px;background:#f8fafc;color:#1e293b}a{color:#2563eb;text-decoration:none}a:hover{text-decoration:underline}table{width:100%;max-width:900px;border-collapse:collapse;margin-top:20px}th,td{padding:10px 14px;border-bottom:1px solid #e2e8f0;text-align:left}th{background:#e2e8f0}</style>",
+            "</head><body>",
+            f"<h2>Index of /dumps/{filepath}</h2>",
+            "<p>Authenticated as: <b>" + str(user) + "</b></p>",
+            "<table><tr><th>Name</th><th>Size</th><th>Last Modified</th></tr>"
+        ]
+        if filepath:
+            parent = "/".join(filepath.rstrip("/").split("/")[:-1])
+            html_lines.append(f"<tr><td><a href='/dumps/{parent}'>📁 .. (parent directory)</a></td><td>-</td><td>-</td></tr>")
+        
+        for e in entries:
+            e_path = os.path.join(full_path, e)
+            e_rel = os.path.join(filepath, e).lstrip("/")
+            is_dir = os.path.isdir(e_path)
+            size_str = "-"
+            if not is_dir:
+                try:
+                    size_b = os.path.getsize(e_path)
+                    if size_b >= 1024 * 1024 * 1024:
+                        size_str = f"{size_b / (1024**3):.2f} GB"
+                    elif size_b >= 1024 * 1024:
+                        size_str = f"{size_b / (1024**2):.2f} MB"
+                    elif size_b >= 1024:
+                        size_str = f"{size_b / 1024:.2f} KB"
+                    else:
+                        size_str = f"{size_b} B"
+                except OSError:
+                    pass
+            try:
+                mtime_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(e_path)))
+            except OSError:
+                mtime_str = "-"
+            icon = "📁 " if is_dir else "📄 "
+            html_lines.append(f"<tr><td><a href='/dumps/{e_rel}'>{icon}{e}</a></td><td>{size_str}</td><td>{mtime_str}</td></tr>")
+        html_lines.append("</table></body></html>")
+        return HTMLResponse(content="\n".join(html_lines))
+
+    # Support HTTP Range requests for resuming large downloads
+    file_size = os.path.getsize(full_path)
+    range_header = request.headers.get("range")
+    if range_header and range_header.startswith("bytes="):
+        try:
+            byte_range = range_header[6:].strip()
+            parts = byte_range.split("-")
+            start = int(parts[0]) if parts[0] else 0
+            end = int(parts[1]) if len(parts) > 1 and parts[1] else file_size - 1
+            if start >= file_size or end >= file_size or start > end:
+                raise HTTPException(status_code=416, detail="Range Not Satisfiable")
+            content_length = end - start + 1
+
+            def iterfile():
+                with open(full_path, "rb") as f:
+                    f.seek(start)
+                    remaining = content_length
+                    chunk_sz = 1048576  # 1MB
+                    while remaining > 0:
+                        read_bytes = min(remaining, chunk_sz)
+                        data = f.read(read_bytes)
+                        if not data:
+                            break
+                        remaining -= len(data)
+                        yield data
+
+            headers = {
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(content_length),
+                "Content-Disposition": f'attachment; filename="{os.path.basename(full_path)}"'
+            }
+            from starlette.responses import StreamingResponse
+            return StreamingResponse(iterfile(), status_code=206, headers=headers, media_type="application/octet-stream")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    response = FileResponse(path=full_path, filename=os.path.basename(full_path))
+    response.headers["Accept-Ranges"] = "bytes"
+    return response
+
+@app.api_route("/dumps", methods=["GET", "HEAD"])
+async def get_dumps_root(request: Request, user: str = Depends(authenticate_dumps_user)):
+    return await get_dump_file("", request=request, user=user)
+
 
 
 DATA_DIR = "/data"
@@ -394,7 +517,7 @@ async def process_dspace(url: str):
     return croissant
 
 @app.post("/api/generic/process")
-async def process_generic(url: str = None):
+async def process_generic(url: str = None, vision: bool = False):
     import asyncio
     import re
     from fastapi import HTTPException
@@ -408,6 +531,8 @@ async def process_generic(url: str = None):
         script_path = "convertors/url_to_croissant.py"
         
     cmd = ["python3", script_path, url, "--elastic"]
+    if vision:
+        cmd.append("--computer-vision")
     
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -441,7 +566,7 @@ async def process_generic(url: str = None):
     return {"status": "success", "redirect_url": redirect_url}
 
 @app.post("/api/dataverse/process")
-async def process_dataverse(callback: str = None, url: str = None, siteUrl: str = None, datasetPid: str = None):
+async def process_dataverse(callback: str = None, url: str = None, siteUrl: str = None, datasetPid: str = None, vision: bool = False):
     import base64
     import requests
     import asyncio
@@ -488,6 +613,8 @@ async def process_dataverse(callback: str = None, url: str = None, siteUrl: str 
             script_path = "convertors/url_to_croissant.py"
             
         cmd = ["python3", script_path, dataset_url, "--elastic"]
+        if vision:
+            cmd.append("--computer-vision")
         
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -650,6 +777,31 @@ def get_user_info_from_odrl(request=None):
 
 
 
+def check_palefire_enabled():
+    import os
+    if os.environ.get("PALEFIRE", "").lower() in ("true", "1", "yes"):
+        return True
+    profile_name = os.environ.get("PROFILE_NAME", "")
+    candidates = []
+    if profile_name:
+        candidates.append(f"profiles/{profile_name}.env")
+        candidates.append(f"/app/profiles/{profile_name}.env")
+    candidates.extend(["profiles/asknowmuseum.env", "/app/profiles/asknowmuseum.env"])
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("#"): continue
+                        if line.startswith("PALEFIRE="):
+                            val = line.split("=", 1)[1].strip().strip("\"'").lower()
+                            return val in ("true", "1", "yes")
+            except Exception:
+                pass
+    return False
+
+
 def render_html_template(file_path: str, request=None, auth_status=None):
     import os
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -665,6 +817,9 @@ def render_html_template(file_path: str, request=None, auth_status=None):
     
     html = html.replace('{{VAULT_LOGO_HTML}}', logo_html)
     html = html.replace('{{VAULT_FOOTER_HTML}}', footer_html)
+    
+    palefire_display = "flex" if check_palefire_enabled() else "none"
+    html = html.replace('{{PALEFIRE_DISPLAY}}', palefire_display)
     
     if '{{LOGIN_BUTTON_HTML}}' in html and request:
         try:
@@ -916,9 +1071,9 @@ async def proxy_vault_approve(request: Request, es_id: str):
 
 @app.get("/vault/{filename:path}")
 async def get_vault_file(filename: str):
-    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+    minio_base = os.environ.get("MINIO_GLOBAL_HOST", "").strip().rstrip("/") or os.environ.get("MINIO_URL", "http://minio:9000")
     
-    if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".gz") and not filename.endswith(".csv"):
+    if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".json") and not filename.endswith(".gz") and not filename.endswith(".csv"):
         filename += ".md"
         
     from minio import Minio
@@ -1982,6 +2137,30 @@ async def api_collections_proxy(request: Request):
             return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
+
+@app.api_route("/spatial-query", methods=["POST", "GET"])
+async def proxy_spatial_query(request: Request):
+    """Proxy spatial queries to palefire-api."""
+    import httpx
+    from fastapi import Response, HTTPException
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    body = await request.body()
+    
+    palefire_url = os.environ.get("PALEFIRE_API_URL", "http://palefire-api:8000/spatial-query")
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            resp = await client.request(
+                request.method,
+                palefire_url,
+                headers=headers,
+                params=dict(request.query_params),
+                content=body
+            )
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to reach Palefire spatial query service: {str(e)}")
+
 
 
 

@@ -27,6 +27,10 @@ OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
 OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY", "")
 OLLAMA_HEADERS = {"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {}
 ELASTICSEARCH_URL = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200")
+# Inside Docker, if ELASTICSEARCH_URL is pointing to localhost, redirect to http://elasticsearch:9200
+_in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+if _in_docker and any(h in ELASTICSEARCH_URL for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+    ELASTICSEARCH_URL = "http://elasticsearch:9200"
 MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "localhost")
 OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:31b-cloud")
 MODEL_NAME = os.environ.get("MODEL_NAME") or os.environ.get("MODEL") or OLLAMA_DEFAULT_MODEL
@@ -255,7 +259,7 @@ def resolve_direct_url(url):
             print(f"  -> Could not resolve Google redirect for {url}: {e}")
     return url
 
-def fetch_url_markdown(url, traverse=False):
+def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
     url = resolve_direct_url(url)
     if "github.com" in url and "api.github.com" not in url:
         parsed = urllib.parse.urlparse(url)
@@ -326,6 +330,93 @@ def fetch_url_markdown(url, traverse=False):
                     extracted = page.get_text()
                     if extracted:
                         text += extracted + "\n\n"
+                    
+                if use_computer_vision:
+                    print("Running Computer Vision extraction on PDF with Palefire...")
+                    cv_done = False
+                    palefire_url = os.environ.get("PALEFIRE_API_URL", "http://10.147.18.24:8000/parse-url")
+                    try:
+                        print(f"Calling Palefire API service at {palefire_url}...")
+                        vision_model = os.environ.get("VISION_MODEL", "gemma4:31b-cloud")
+                        resp = requests.post(
+                            palefire_url,
+                            json={
+                                "url": url,
+                                "vision_extract": True,
+                                "vision_model": vision_model
+                            },
+                            timeout=600
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            episodes = data.get("episodes", [])
+                            cv_text_blocks = []
+                            for ep in episodes:
+                                if isinstance(ep, dict):
+                                    cnt = ep.get("content", {})
+                                    analysis = cnt.get("analysis", "") if isinstance(cnt, dict) else str(cnt)
+                                    src = cnt.get("source_file", "") if isinstance(cnt, dict) else ""
+                                    if analysis:
+                                        cv_text_blocks.append(f"### Visual Analysis ({src})\n{analysis}")
+                            if cv_text_blocks:
+                                text += "\n\n## Computer Vision Extracted Insights & Maps\n\n" + "\n\n".join(cv_text_blocks) + "\n"
+                                print(f"Successfully added {len(cv_text_blocks)} visual analysis blocks from Palefire API.")
+                                cv_done = True
+                            elif data.get("text"):
+                                # If palefire returned full text with CV integrated
+                                if "## Computer Vision" in data.get("text", ""):
+                                    text = data["text"]
+                                    cv_done = True
+                        else:
+                            print(f"Palefire API returned status {resp.status_code}: {resp.text[:200]}")
+                    except Exception as e_api:
+                        print(f"Palefire API call failed: {e_api}")
+
+                    if not cv_done:
+                        print("Fallback: Attempting local Palefire CV script execution...")
+                        try:
+                            import tempfile, subprocess
+                            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+                                tmp_pdf.write(pdf_bytes)
+                                tmp_pdf_path = tmp_pdf.name
+                            
+                            out_ep_file = tmp_pdf_path + "_episodes.json"
+                            palefire_cv_script = os.path.abspath(os.path.join(os.path.dirname(__file__), "../palefire/extract_computer_vision.py"))
+                            if not os.path.exists(palefire_cv_script):
+                                palefire_cv_script = "palefire/extract_computer_vision.py"
+                                
+                            cv_cmd = [
+                                "python3", palefire_cv_script,
+                                "--pdf", tmp_pdf_path,
+                                "--vision-model", os.environ.get("VISION_MODEL", "gemma4:31b-cloud"),
+                                "--output", out_ep_file
+                            ]
+                            print(f"Executing: {' '.join(cv_cmd)}")
+                            subprocess.run(cv_cmd, check=True, timeout=600)
+                            
+                            if os.path.exists(out_ep_file):
+                                with open(out_ep_file, 'r', encoding='utf-8') as f_ep:
+                                    episodes = json.load(f_ep)
+                                cv_text_blocks = []
+                                for ep in episodes:
+                                    if isinstance(ep, dict):
+                                        cnt = ep.get("content", {})
+                                        analysis = cnt.get("analysis", "") if isinstance(cnt, dict) else str(cnt)
+                                        src = cnt.get("source_file", "") if isinstance(cnt, dict) else ""
+                                        if analysis:
+                                            cv_text_blocks.append(f"### Visual Analysis ({src})\n{analysis}")
+                                if cv_text_blocks:
+                                    text += "\n\n## Computer Vision Extracted Insights & Maps\n\n" + "\n\n".join(cv_text_blocks) + "\n"
+                                try:
+                                    os.unlink(out_ep_file)
+                                except Exception:
+                                    pass
+                            try:
+                                os.unlink(tmp_pdf_path)
+                            except Exception:
+                                pass
+                        except Exception as e_cv:
+                            print(f"Warning: Local computer vision extraction failed: {e_cv}")
                     
                 meta = {
                     "name": url.split('/')[-1] or "PDF Document",
@@ -1118,7 +1209,7 @@ def generate_markdown_from_jsonld(data):
     return "\n".join(md)
 
 
-def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, user_name=None, user_email=None, index=False, elastic=False, expert="/expert/croissant", upload_gdrive=False, upload_gdrive_folder=None, translate=False):
+def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, user_name=None, user_email=None, index=False, elastic=False, expert="/expert/croissant", upload_gdrive=False, upload_gdrive_folder=None, translate=False, use_computer_vision=False):
     url = resolve_direct_url(url)
     direct_jsonld = check_dataverse_direct_export(url)
     if not direct_jsonld:
@@ -1139,7 +1230,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
     sibling_pages = []
     
     if not markdown_data:
-        result = fetch_url_markdown(url, traverse)
+        result = fetch_url_markdown(url, traverse, use_computer_vision=use_computer_vision)
         if len(result) == 4:
             markdown_data, extracted_meta, sibling_pages, page_meta = result
         elif len(result) == 3:
@@ -1220,6 +1311,8 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
     # Upload to Vault if MinIO is configured
     try:
         minio_url = os.environ.get("MINIO_URL", "http://minio:9000")
+        if _in_docker and any(h in minio_url for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+            minio_url = "http://minio:9000"
         minio_user = os.environ.get("MINIO_ROOT_USER", "minioadmin")
         minio_pass = os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin")
         if minio_url:
@@ -1752,6 +1845,8 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
         # Upload to Vault if MinIO is configured
         try:
             minio_url = os.environ.get("MINIO_URL", "http://minio:9000")
+            if _in_docker and any(h in minio_url for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+                minio_url = "http://minio:9000"
             minio_user = os.environ.get("MINIO_ROOT_USER", "minioadmin")
             minio_pass = os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin")
             if minio_url:
@@ -2038,6 +2133,7 @@ if __name__ == "__main__":
     parser.add_argument("--upload-gdrive", action="store_true", help="Upload resulting files to Google Drive using Service Account")
     parser.add_argument("--upload-gdrive-folder", type=str, help="Specific Google Drive folder ID to upload to (bypasses name search)")
     parser.add_argument("--is-file", action="store_true", help="Treat the input URL as a local file to describe (bypasses URL list reading)")
+    parser.add_argument("--computer-vision", "--cv", action="store_true", help="Use Computer Vision to extract charts, maps, and tables from PDFs")
     args = parser.parse_args()
     
     if args.index:
@@ -2114,7 +2210,7 @@ if __name__ == "__main__":
         for i, target_url in enumerate(urls_to_process, 1):
             print(f"\n[{i}/{len(urls_to_process)}] Processing file URL: {target_url}")
             try:
-                convert_to_croissant(target_url, args.slice, args.traverse, args.reingest, args.user_name, args.user_email, args.index_ollama, args.elastic, args.expert, getattr(args, "upload_gdrive", False), getattr(args, "upload_gdrive_folder", None), getattr(args, "translate", False))
+                convert_to_croissant(target_url, args.slice, args.traverse, args.reingest, args.user_name, args.user_email, args.index_ollama, args.elastic, args.expert, getattr(args, "upload_gdrive", False), getattr(args, "upload_gdrive_folder", None), getattr(args, "translate", False), getattr(args, "computer_vision", False))
             except Exception as e:
                 print(f"Failed processing {target_url}: {e}")
 
@@ -2122,4 +2218,4 @@ if __name__ == "__main__":
     elif "docs.google.com/spreadsheets" in args.url:
         process_spreadsheet(args.url, args.slice, args.traverse, args.reingest, args.user_name, args.user_email, args.index_ollama, args.elastic, args.expert, getattr(args, "upload_gdrive", False), getattr(args, "upload_gdrive_folder", None), getattr(args, "translate", False))
     else:
-        convert_to_croissant(args.url, args.slice, args.traverse, args.reingest, args.user_name, args.user_email, args.index_ollama, args.elastic, args.expert, getattr(args, "upload_gdrive", False), getattr(args, "upload_gdrive_folder", None), getattr(args, "translate", False))
+        convert_to_croissant(args.url, args.slice, args.traverse, args.reingest, args.user_name, args.user_email, args.index_ollama, args.elastic, args.expert, getattr(args, "upload_gdrive", False), getattr(args, "upload_gdrive_folder", None), getattr(args, "translate", False), getattr(args, "computer_vision", False))

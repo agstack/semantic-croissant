@@ -5,14 +5,14 @@ services:
       - ${PROFILE_NAME:-croissant-live}
     image: docker.io/library/busybox
     command:
-      ["sh", "-c", "chown -R 65534:0 /data/server && chown -R 65534:0 /data/ui && chown -R 1000:0 /data/es && chown -R 1000:0 /data/minio"]
+      ["sh", "-c", "chown -R 65534:0 /data/server && chown -R 65534:0 /data/ui && chown -R 1000:0 /data/es && chown -R 65532:65532 /data/minio"]
     stop_grace_period: 0s
     restart: "no"
     volumes:
       - ${VOLUME_DIR:-./qlever-tests/volumes}/${PROFILE_NAME:-croissant-live}/server:/data/server
       - ${VOLUME_DIR:-./qlever-tests/volumes}/${PROFILE_NAME:-croissant-live}/ui:/data/ui
-      - ${VOLUME_DIR:-./volumes}/${PROFILE_NAME:-croissant-live}/es:/data/es
-      - ${VOLUME_DIR:-./volumes}/${PROFILE_NAME:-croissant-live}/minio:/data/minio
+      - ./volumes/${PROFILE_NAME:-croissant-live}/es:/data/es
+      - ./volumes/${PROFILE_NAME:-croissant-live}/minio:/data/minio
 
   server:
     container_name: ${PROFILE_NAME:-croissant-live}-server
@@ -29,8 +29,8 @@ services:
     env_file:
       - ./profiles/${PROFILE_NAME:-croissant-live}.env
     environment:
-      - INDEXING=true
-      - FORCE_INDEXING=true
+      - INDEXING=${INDEXING:-false}
+      - FORCE_INDEXING=${FORCE_INDEXING:-false}
     volumes:
       - ${VOLUME_DIR:-./qlever-tests/volumes}/${PROFILE_NAME:-croissant-live}/server:/data
       - ${DATA_DIR:-./qlever-tests/data}:/raw_data:ro
@@ -56,15 +56,20 @@ services:
     profiles:
       - ${PROFILE_NAME:-croissant-live}
     image: docker.elastic.co/elasticsearch/elasticsearch:8.14.3
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    env_file:
+      - ./profiles/${PROFILE_NAME:-croissant-live}.env
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
       - xpack.security.http.ssl.enabled=false
-      - ES_JAVA_OPTS=-Xms2g -Xmx4g
+      - ES_JAVA_OPTS=${ES_JAVA_OPTS:--Xms2g -Xmx4g}
     ports:
       - "${ES_PORT:-9200}:9200"
     volumes:
-      - ${VOLUME_DIR:-./volumes}/${PROFILE_NAME:-croissant-live}/es:/usr/share/elasticsearch/data
+      - ./volumes/${PROFILE_NAME:-croissant-live}/es:/usr/share/elasticsearch/data
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -qv '\"status\":\"red\"'"]
       interval: 15s
@@ -82,7 +87,12 @@ services:
     env_file:
       - ./profiles/${PROFILE_NAME:-croissant-live}.env
     environment:
-      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://elasticsearch:9200}
+      - ES_GLOBAL_HOST=${ES_GLOBAL_HOST:-}
+      - QLEVER_GLOBAL_HOST=${QLEVER_GLOBAL_HOST:-}
+      - QLEVER_URL=${QLEVER_URL:-http://server:7011}
+      - MINIO_GLOBAL_HOST=${MINIO_GLOBAL_HOST:-}
+      - MINIO_URL=${MINIO_URL:-http://minio:9000}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./hips:/app/hips:ro
@@ -106,6 +116,8 @@ services:
       - ./credentials.json:/app/credentials.json:ro
       - ./nodes.conf:/app/nodes.conf:ro
       - ./profiles:/app/profiles:ro
+      - ./dumps:/app/dumps:ro
+      - ./dumps:/app/dumps:ro
     depends_on:
       - server
       - elasticsearch
@@ -124,7 +136,12 @@ services:
     environment:
       - API_BASE=http://api:8000
       - MCP_TRANSPORT=sse
-      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://elasticsearch:9200}
+      - ES_GLOBAL_HOST=${ES_GLOBAL_HOST:-}
+      - QLEVER_GLOBAL_HOST=${QLEVER_GLOBAL_HOST:-}
+      - QLEVER_URL=${QLEVER_URL:-http://server:7011}
+      - MINIO_GLOBAL_HOST=${MINIO_GLOBAL_HOST:-}
+      - MINIO_URL=${MINIO_URL:-http://minio:9000}
       - CDIF_CONVERTER_URL=${CDIF_CONVERTER_URL:-http://converters:8000}
       - CDIF_SERVICE=${CDIF_SERVICE:-http://converters:8000}
       - DDI_CDI_SERVICE=${DDI_CDI_SERVICE:-http://ddicdi:8000}
@@ -148,6 +165,7 @@ services:
       - ./credentials.json:/app/credentials.json:ro
       - ./nodes.conf:/app/nodes.conf:ro
       - ./profiles:/app/profiles:ro
+      - ./dumps:/app/dumps:ro
     depends_on:
       - api
       - elasticsearch
@@ -165,12 +183,14 @@ services:
       - MINIO_ROOT_PASSWORD=minioadmin
     command: server /data --console-address ":9001"
     volumes:
-      - ${VOLUME_DIR:-./volumes}/${PROFILE_NAME:-croissant-live}/minio:/data
+      - ./volumes/${PROFILE_NAME:-croissant-live}/minio:/data
 
   converters:
     container_name: ${PROFILE_NAME:-croissant-live}-converters
     profiles:
       - ${PROFILE_NAME:-croissant-live}
+    image: ${PROFILE_NAME:-croissant-live}-converters
+    pull_policy: never
     build:
       context: ./tools/converters
       dockerfile: Dockerfile

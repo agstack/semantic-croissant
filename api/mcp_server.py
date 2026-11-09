@@ -1,4 +1,5 @@
 import sys
+import asyncio
 import anyio
 import click
 import httpx
@@ -55,7 +56,7 @@ def get_nodes_config() -> dict:
     if not nodes:
         local_pname = os.environ.get("PROFILE_NAME", "default")
         es_default = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200")
-        minio_default = os.environ.get("MINIO_URL", "http://minio:9000")
+        minio_default = get_minio_base_url()
         ip_default = os.environ.get("IP", "localhost")
         nodes[local_pname] = {
             "host": HOST,
@@ -67,19 +68,68 @@ def get_nodes_config() -> dict:
         }
     return nodes
 
+def get_qlever_lookup_urls() -> list[str]:
+    """
+    Returns an ordered list of QLever SPARQL base URLs to query.
+    Supports QLEVER_GLOBAL_HOST, QLEVER_URL, and fallback nodes.
+    """
+    urls = []
+    # 0. QLEVER_GLOBAL_HOST takes priority if provided
+    q_global = os.environ.get("QLEVER_GLOBAL_HOST", "").strip().rstrip("/")
+    if q_global:
+        if not (q_global.startswith("http://") or q_global.startswith("https://")):
+            q_global = f"http://{q_global}"
+        if q_global not in urls:
+            urls.append(q_global)
+
+    # 1. Local or configured QLEVER_URL
+    q_url = os.environ.get("QLEVER_URL", "").strip().rstrip("/")
+    if q_url:
+        if not (q_url.startswith("http://") or q_url.startswith("https://")):
+            q_url = f"http://{q_url}"
+        if q_url not in urls:
+            urls.append(q_url)
+
+    # 2. In docker default to http://server:7011
+    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+    default_q = "http://server:7011" if in_docker else "http://localhost:7011"
+    if default_q not in urls:
+        urls.append(default_q)
+
+    return urls
+
 def get_elasticsearch_lookup_urls() -> list[str]:
     """
     Returns an ordered list of Elasticsearch base URLs to query.
-    If PROFILE_NAME is set, prioritizes the elasticsearch settings for that profile from nodes.conf.
+    Supports ES_GLOBAL_HOST, profile-specific settings, and fallback nodes.
+    Inside Docker, translates localhost / 127.0.0.1 references to http://elasticsearch:9200
+    or host.docker.internal / direct service name.
     """
     urls = []
     nodes = get_nodes_config()
     profile_name = os.environ.get("PROFILE_NAME", "").strip().lower()
+    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+
+    # In docker, the local container service name is http://elasticsearch:9200
+    if in_docker:
+        urls.append("http://elasticsearch:9200")
+
+    # 0. ES_GLOBAL_HOST takes priority if provided
+    es_global = os.environ.get("ES_GLOBAL_HOST", "").strip().rstrip("/")
+    if es_global:
+        if not (es_global.startswith("http://") or es_global.startswith("https://")):
+            es_global = f"http://{es_global}"
+        if in_docker and any(h in es_global for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+            # When inside docker, localhost refers to this container, not the elasticsearch container
+            pass
+        elif es_global not in urls:
+            urls.append(es_global)
 
     # 1. Profile-specific elastic settings from nodes.conf
-    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
     container_es = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
-    if in_docker and container_es not in urls:
+    if in_docker and any(h in container_es for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+        container_es = "http://elasticsearch:9200"
+    if container_es not in urls:
         urls.append(container_es)
 
     if profile_name and profile_name in nodes:
@@ -128,19 +178,45 @@ def get_elasticsearch_lookup_urls() -> list[str]:
 
     return urls or (["http://elasticsearch:9200"] if in_docker else ["http://localhost:9200"])
 
+def get_minio_base_url() -> str:
+    """Returns the primary MinIO base endpoint (considering MINIO_GLOBAL_HOST, MINIO_URL)."""
+    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+    if in_docker:
+        return "http://minio:9000"
+    minio_global = os.environ.get("MINIO_GLOBAL_HOST", "").strip().rstrip("/")
+    if minio_global:
+        if not (minio_global.startswith("http://") or minio_global.startswith("https://")):
+            return f"http://{minio_global}"
+        return minio_global
+    return os.environ.get("MINIO_URL", "http://minio:9000").rstrip("/")
+
 def get_minio_lookup_urls() -> list[str]:
     """
     Returns an ordered list of MinIO base endpoints to query across all known nodes.
-    Prioritizes the local profile's MinIO endpoint.
+    Supports MINIO_GLOBAL_HOST, profile settings, and fallback nodes.
     """
     urls = []
     nodes = get_nodes_config()
     profile_name = os.environ.get("PROFILE_NAME", "").strip().lower()
+    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+
+    # In docker, the local container service name is http://minio:9000
+    if in_docker:
+        urls.append("http://minio:9000")
+
+    # 0. MINIO_GLOBAL_HOST takes priority if provided
+    minio_global = os.environ.get("MINIO_GLOBAL_HOST", "").strip().rstrip("/")
+    if minio_global:
+        if not (minio_global.startswith("http://") or minio_global.startswith("https://")):
+            minio_global = f"http://{minio_global}"
+        if in_docker and any(h in minio_global for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+            pass
+        elif minio_global not in urls:
+            urls.append(minio_global)
 
     # 1. Profile-specific MinIO settings from nodes.conf / env
-    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
     if in_docker:
-        container_minio = os.environ.get("MINIO_URL", "http://minio:9000").rstrip("/")
+        container_minio = "http://minio:9000"
         if container_minio not in urls:
             urls.append(container_minio)
     elif profile_name and profile_name in nodes:
@@ -158,6 +234,8 @@ def get_minio_lookup_urls() -> list[str]:
             urls.append(minio_u)
 
     local_minio = os.environ.get("MINIO_URL", "").rstrip("/")
+    if in_docker and any(h in local_minio for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+        local_minio = "http://minio:9000"
     if local_minio and local_minio not in urls:
         urls.append(local_minio)
 
@@ -321,6 +399,31 @@ def get_user_info_from_odrl(request=None):
 
 
 
+def check_palefire_enabled():
+    import os
+    if os.environ.get("PALEFIRE", "").lower() in ("true", "1", "yes"):
+        return True
+    profile_name = os.environ.get("PROFILE_NAME", "")
+    candidates = []
+    if profile_name:
+        candidates.append(f"profiles/{profile_name}.env")
+        candidates.append(f"/app/profiles/{profile_name}.env")
+    candidates.extend(["profiles/asknowmuseum.env", "/app/profiles/asknowmuseum.env"])
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("#"): continue
+                        if line.startswith("PALEFIRE="):
+                            val = line.split("=", 1)[1].strip().strip("\"'").lower()
+                            return val in ("true", "1", "yes")
+            except Exception:
+                pass
+    return False
+
+
 def render_html_template(file_path: str, request=None, auth_status=None):
     import os
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -336,6 +439,9 @@ def render_html_template(file_path: str, request=None, auth_status=None):
     
     html = html.replace('{{VAULT_LOGO_HTML}}', logo_html)
     html = html.replace('{{VAULT_FOOTER_HTML}}', footer_html)
+    
+    palefire_display = "flex" if check_palefire_enabled() else "none"
+    html = html.replace('{{PALEFIRE_DISPLAY}}', palefire_display)
     
     if '{{LOGIN_BUTTON_HTML}}' in html and request:
         try:
@@ -808,7 +914,7 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
                     "query": {
                         "query_string": {
                             "query": q_str,
-                            "fields": ["_full_text", "_markdown_text", "name", "description", "schema:name", "schema:description", "title", "dcterms:title", "dsDescription.dsDescriptionValue", "citation:dsDescriptionValue", "label", "keywords", "*"]
+                            "fields": ["_full_text", "_markdown_text", "name", "description", "schema:name", "schema:description", "title", "dcterms:title", "dsDescription.dsDescriptionValue", "citation:dsDescriptionValue", "label", "keywords"]
                         }
                     }
                 }
@@ -1187,7 +1293,7 @@ async def list_vault_documents(prefix: str = "") -> list[types.TextContent]:
     import os
     from minio import Minio
     
-    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+    minio_base = get_minio_base_url()
     endpoint = minio_base.replace("http://", "").replace("https://", "")
     
     try:
@@ -1219,7 +1325,7 @@ async def verify_document_provenance(filename: str) -> list[types.TextContent]:
     import os, json
     from minio import Minio
     
-    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+    minio_base = get_minio_base_url()
     endpoint = minio_base.replace("http://", "").replace("https://", "")
     
     import urllib.parse
@@ -1351,7 +1457,7 @@ async def store_in_vault(content: str, prefix: str = "custom", jsonld_payload: s
     filename = f"{base_name}{file_ext}"
     json_filename = f"{base_name}.jsonld"
 
-    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+    minio_base = get_minio_base_url()
     endpoint = minio_base.replace("http://", "").replace("https://", "")
     
     try:
@@ -1980,7 +2086,7 @@ async def update_vault_document(target_id: str, referenced_ids: list[str], new_c
     import sys, datetime, io, os, json, re, hashlib, asyncio
     from minio import Minio
     
-    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+    minio_base = get_minio_base_url()
     endpoint = minio_base.replace("http://", "").replace("https://", "")
     
     try:
@@ -2086,9 +2192,31 @@ async def update_vault_document(target_id: str, referenced_ids: list[str], new_c
         # 3. Use new jsonld if provided, else original
         final_jsonld = json.loads(new_jsonld) if new_jsonld is not None else original_jsonld
         
-        # 4. Generate new version ID
+        # 4. Generate new version ID and update versioning metadata
         # We update the original document's metadata in-place
         new_id = target_id
+        
+        # Track version increment
+        try:
+            curr_ver = final_jsonld.get("version")
+            if curr_ver is not None:
+                if isinstance(curr_ver, (int, float)):
+                    final_jsonld["version"] = round(float(curr_ver) + 0.1, 1)
+                elif isinstance(curr_ver, str):
+                    # Parse version string like "1.0", "1.1", or "1"
+                    m_ver = re.match(r"^(\d+)(?:\.(\d+))?$", curr_ver.strip())
+                    if m_ver:
+                        major = int(m_ver.group(1))
+                        minor = int(m_ver.group(2) or 0) + 1
+                        final_jsonld["version"] = f"{major}.{minor}"
+                    else:
+                        final_jsonld["version"] = f"{curr_ver}.1"
+            else:
+                final_jsonld["version"] = "1.1"
+        except Exception:
+            final_jsonld["version"] = "1.1"
+            
+        final_jsonld["dateModified"] = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         
         # 5. Build isBasedOn list
         if "isBasedOn" not in final_jsonld:
@@ -2212,6 +2340,83 @@ async def update_vault_document(target_id: str, referenced_ids: list[str], new_c
     except Exception as e:
         return [types.TextContent(type="text", text=f"Error updating vault document: {str(e)}")]
 
+async def spatial_query_dataset(
+    dataset_id_or_url: str,
+    location_name: str = None,
+    page: int = None,
+    lat: float = None,
+    lon: float = None,
+    file_name: str = None,
+    country_code: str = "HN"
+) -> list[types.TextContent]:
+    """Execute a spatial query against a dataset / vault document using GeoNames, GeoPandas, and Datamaps."""
+    import httpx, json, re, os
+    try:
+        # Resolve doc_id from url or id
+        doc_id = dataset_id_or_url.strip()
+        m = re.search(r"([a-zA-Z0-9_-]{16,})", doc_id)
+        if m:
+            clean_doc_id = m.group(1)
+        else:
+            clean_doc_id = doc_id
+
+        palefire_url = os.environ.get("PALEFIRE_API_URL", "http://palefire-api:8000/spatial-query")
+        payload = {
+            "doc_id": clean_doc_id,
+            "country_code": country_code
+        }
+        if location_name:
+            payload["location_name"] = location_name
+        if page is not None:
+            payload["page"] = page
+        if lat is not None and lon is not None:
+            payload["lat"] = lat
+            payload["lon"] = lon
+        if file_name:
+            payload["file_name"] = file_name
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(palefire_url, json=payload)
+            if resp.status_code != 200:
+                return [types.TextContent(type="text", text=f"Spatial query failed with status {resp.status_code}: {resp.text}")]
+            
+            res_data = resp.json()
+            
+            # Format comprehensive answer with full provenance
+            lines = []
+            lines.append(f"### Spatial Query Result for {location_name or f'({lat}, {lon})'}\n")
+            lines.append(f"- **Dataset / Vault Document**: [{clean_doc_id}](https://ai.now.museum/vault/doc/{clean_doc_id})")
+            lines.append(f"- **Croissant JSON-LD**: [Metadata](https://ai.now.museum/vault/{clean_doc_id}.jsonld)")
+            lines.append(f"- **Target Report File**: [{res_data.get('file_name')}]({res_data.get('file_url')})")
+            
+            res_loc = res_data.get("resolved_location", {})
+            lines.append(f"- **Resolved Coordinates**: {res_loc.get('lat')}, {res_loc.get('lon')} ({res_loc.get('name')}, source: `{res_loc.get('source')}`)")
+            lines.append(f"- **Matched Department (GeoPandas)**: **{res_data.get('matched_department')}**\n")
+            
+            pts = res_data.get("data_points", [])
+            if pts:
+                lines.append("#### Observations & Data Points\n")
+                lines.append("| Department | Page | Year | Map Panel | Variable | Observation / Value | Color | Anomaly Range |")
+                lines.append("|---|---|---|---|---|---|---|---|")
+                for pt in pts:
+                    side_str = f"{pt.get('Side', '').capitalize()} panel" if pt.get('Side') else ""
+                    page_val = pt.get('Page')
+                    page_str = f"Page {page_val:02d}" if page_val is not None else "N/A"
+                    lines.append(f"| {pt.get('Location')} | **{page_str}** | **{pt.get('Year', 'N/A')}** | {side_str} | {pt.get('Variable')} | **{pt.get('Value')}** | {pt.get('Color')} | {pt.get('Anomaly')} |")
+                
+                lines.append("\n#### Legend & Calibration Provenance\n")
+                for pt in pts:
+                    leg = pt.get("Legend")
+                    if leg:
+                        lines.append(f"- **{pt.get('Side').capitalize()} Map Legend**: `{leg}`")
+            else:
+                lines.append("No specific data points found for this department in the report.")
+                
+            return [types.TextContent(type="text", text="\n".join(lines))]
+    except Exception as e:
+        return [types.TextContent(type="text", text=f"Error executing spatial query: {str(e)}")]
+
+
 async def read_croissant_file(dataset_id_or_url: str, file_name: str) -> list[types.TextContent]:
     import httpx, json
     try:
@@ -2309,7 +2514,7 @@ async def read_direct_file(url: str, plan: str = None) -> list[types.TextContent
 
             # Check MinIO cache for CDIF JSON-LD
             try:
-                minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                minio_base = get_minio_base_url()
                 minio_endpoint = minio_base.replace("http://", "").replace("https://", "")
                 lookup_file = plan_target_file or url
                 vault_cache_key = f"cdif_cache_{hashlib.sha256((lookup_file + (plan_target_doi or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
@@ -2656,7 +2861,7 @@ async def get_cdif_summary(url_or_id: str) -> list[types.TextContent]:
             # Check 2: MinIO vault cache
             if not cdif_doc and target_file:
                 try:
-                    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                    minio_base = get_minio_base_url()
                     minio_endpoint = minio_base.replace("http://", "").replace("https://", "")
                     vault_cache_key = f"cdif_cache_{hashlib.sha256((target_file + (target_doi or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
                     from minio import Minio
@@ -4073,7 +4278,7 @@ async def finalize_keyfigures(csv_content: str, file_path: str = "") -> list[typ
                     if csv_hash:
                         from minio import Minio
                         import os, io
-                        minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                        minio_base = get_minio_base_url()
                         endpoint = minio_base.replace("http://", "").replace("https://", "")
                         client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
                         try:
@@ -4158,7 +4363,7 @@ async def extract_keyfigures_tool(file_path: str = None, text_content: str = Non
         try:
             from minio import Minio
             import os, io
-            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+            minio_base = get_minio_base_url()
             endpoint = minio_base.replace("http://", "").replace("https://", "")
             client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
             if not client.bucket_exists("vault"):
@@ -4300,6 +4505,11 @@ SYSTEM INSTRUCTION FOR LLM - Navigation Guide:
 13. If the user asks to "Answer this question based on the datasets in collection <ID>: <query>", use the 'get_collection_documents' tool with the given collection ID to get the metadata of the datasets in that collection. Then, answer the user's question using that retrieved information.
 
 14. If the user asks to read or analyze files from a dataset or vault document (e.g., "Read files...", "Read files from vault <ID>"), you MUST use the 'read_croissant_file' tool. Pass the dataset's ID, DOI, or vault URL as 'dataset_id_or_url', and pass the specific file name as 'file_name'. DO NOT use 'read_direct_file' or 'read_vault_article' for dataset files. Only use 'read_direct_file' if the user provides a direct raw file URL.
+
+15. If being asked about a location, municipality, or coordinates in a dataset (e.g., "Check rainfall in <coordinates>", "What was rainfall in <town>"):
+   - ALWAYS use the 'spatial_query_dataset' tool.
+   - ALWAYS state the Year associated with each observation or period if present.
+   - If left and right panels are present in the report or map layout, ALWAYS explicitly state on which panel ('left panel' or 'right panel') the observation is recorded.
 """
     return [types.TextContent(type="text", text=text)]
 
@@ -4344,6 +4554,11 @@ Here is detailed information about how every tool works:
 13. If the user asks to "Answer this question based on the datasets in collection <ID>: <query>", use the 'get_collection_documents' tool with the given collection ID to get the metadata of the datasets in that collection. Then, answer the user's question using that retrieved information.
 
 14. If the user asks to read or analyze files from a dataset or vault document (e.g., "Read files...", "Read files from vault <ID>"), you MUST use the 'read_croissant_file' tool. Pass the dataset's ID, DOI, or vault URL as 'dataset_id_or_url', and pass the specific file name as 'file_name'. DO NOT use 'read_direct_file' or 'read_vault_article' for dataset files. Only use 'read_direct_file' if the user provides a direct raw file URL.
+
+15. If being asked about a location, municipality, or coordinates in a dataset (e.g., "Check rainfall in <coordinates>", "What was rainfall in <town>"):
+   - ALWAYS use the 'spatial_query_dataset' tool.
+   - ALWAYS state the Year associated with each observation or period if present.
+   - If left and right panels are present in the report or map layout, ALWAYS explicitly state on which panel ('left panel' or 'right panel') the observation is recorded.
 """
         return [types.TextContent(type="text", text=guidance)]
     elif name == "search_web":
@@ -4451,6 +4666,16 @@ Here is detailed information about how every tool works:
         return await read_croissant_file(
             dataset_id_or_url=arguments.get("dataset_id_or_url"),
             file_name=arguments.get("file_name")
+        )
+    elif name == "spatial_query_dataset":
+        return await spatial_query_dataset(
+            dataset_id_or_url=arguments.get("dataset_id_or_url") or arguments.get("doc_id") or "",
+            location_name=arguments.get("location_name"),
+            page=arguments.get("page"),
+            lat=arguments.get("lat"),
+            lon=arguments.get("lon"),
+            file_name=arguments.get("file_name"),
+            country_code=arguments.get("country_code", "HN")
         )
     elif name == "read_direct_file":
         file_url = arguments.get("url") or arguments.get("file_url") or arguments.get("filename") or arguments.get("id") or ""
@@ -4741,6 +4966,23 @@ async def list_tools() -> list[types.Tool]:
                 "properties": {
                     "dataset_id_or_url": {"type": "string", "description": "The dataset ID or URL."},
                     "file_name": {"type": "string", "description": "The name or URL of the file to read (from the dataset's distribution)."}
+                }
+            }
+        ),
+        types.Tool(
+            name="spatial_query_dataset",
+            description="Execute a geographic spatial query on a dataset or vault document to find observations (e.g. accumulated rainfall, temperature anomaly) for a town, municipality, or coordinates using GeoNames geocoding and GeoPandas department resolution with full provenance.",
+            inputSchema={
+                "type": "object",
+                "required": ["dataset_id_or_url"],
+                "properties": {
+                    "dataset_id_or_url": {"type": "string", "description": "The dataset ID, URL, or Vault document ID (e.g. '7FOuEOKGMJrGQFnbIdErKQ')."},
+                    "location_name": {"type": "string", "description": "Name of the location, municipality, or place to query (e.g. 'Sico', 'Tegucigalpa')."},
+                    "page": {"type": "integer", "description": "Report page number (e.g. 10 for July rainfall). Optional."},
+                    "file_name": {"type": "string", "description": "Specific report file name (e.g. 'heatmap_report_page_10.csv'). Optional."},
+                    "lat": {"type": "number", "description": "Latitude coordinate if known. Optional."},
+                    "lon": {"type": "number", "description": "Longitude coordinate if known. Optional."},
+                    "country_code": {"type": "string", "description": "Country code (default 'HN'). Optional."}
                 }
             }
         ),
@@ -5114,6 +5356,91 @@ def main(port: int, transport: str) -> int:
             if not os.path.exists(path): path = "api/static/logo.png"
             return FileResponse(path)
 
+        async def serve_dumps(request):
+            import os
+            import secrets
+            import base64
+            import time
+            from starlette.responses import Response, HTMLResponse, FileResponse
+
+            dumps_user = os.environ.get("DUMPS_USER", "admin")
+            dumps_pass = os.environ.get("DUMPS_PASSWORD", "croissant2026")
+
+            auth_header = request.headers.get("Authorization")
+            authenticated = False
+            username = None
+            if auth_header and auth_header.startswith("Basic "):
+                try:
+                    decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+                    u, p = decoded.split(":", 1)
+                    if secrets.compare_digest(u.encode("utf-8"), dumps_user.encode("utf-8")) and \
+                       secrets.compare_digest(p.encode("utf-8"), dumps_pass.encode("utf-8")):
+                        authenticated = True
+                        username = u
+                except Exception:
+                    pass
+
+            if not authenticated:
+                return Response(
+                    "Unauthorized",
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="Semantic Croissant Protected Dumps"'}
+                )
+
+            dumps_dir = "/app/dumps" if os.path.exists("/app/dumps") else os.path.abspath("dumps")
+            filepath = request.path_params.get("filepath", "").strip("/")
+            full_path = os.path.abspath(os.path.join(dumps_dir, filepath)) if filepath else os.path.abspath(dumps_dir)
+
+            if not full_path.startswith(os.path.abspath(dumps_dir)):
+                return Response("Access denied", status_code=403)
+
+            if not os.path.exists(full_path):
+                return Response("File or directory not found", status_code=404)
+
+            if os.path.isdir(full_path):
+                entries = sorted(os.listdir(full_path))
+                html_lines = [
+                    "<!DOCTYPE html>",
+                    "<html><head><meta charset='utf-8'><title>Semantic Croissant Protected Dumps</title>",
+                    "<style>body{font-family:sans-serif;margin:40px;background:#f8fafc;color:#1e293b}a{color:#2563eb;text-decoration:none}a:hover{text-decoration:underline}table{width:100%;max-width:900px;border-collapse:collapse;margin-top:20px}th,td{padding:10px 14px;border-bottom:1px solid #e2e8f0;text-align:left}th{background:#e2e8f0}</style>",
+                    "</head><body>",
+                    f"<h2>Index of /dumps/{filepath}</h2>",
+                    "<p>Authenticated as: <b>" + str(username) + "</b></p>",
+                    "<table><tr><th>Name</th><th>Size</th><th>Last Modified</th></tr>"
+                ]
+                if filepath:
+                    parent = "/".join(filepath.rstrip("/").split("/")[:-1])
+                    html_lines.append(f"<tr><td><a href='/dumps/{parent}'>📁 .. (parent directory)</a></td><td>-</td><td>-</td></tr>")
+
+                for e in entries:
+                    e_path = os.path.join(full_path, e)
+                    e_rel = os.path.join(filepath, e).lstrip("/")
+                    is_dir = os.path.isdir(e_path)
+                    size_str = "-"
+                    if not is_dir:
+                        try:
+                            size_b = os.path.getsize(e_path)
+                            if size_b >= 1024 * 1024 * 1024:
+                                size_str = f"{size_b / (1024**3):.2f} GB"
+                            elif size_b >= 1024 * 1024:
+                                size_str = f"{size_b / (1024**2):.2f} MB"
+                            elif size_b >= 1024:
+                                size_str = f"{size_b / 1024:.2f} KB"
+                            else:
+                                size_str = f"{size_b} B"
+                        except OSError:
+                            pass
+                    try:
+                        mtime_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(e_path)))
+                    except OSError:
+                        mtime_str = "-"
+                    icon = "📁 " if is_dir else "📄 "
+                    html_lines.append(f"<tr><td><a href='/dumps/{e_rel}'>{icon}{e}</a></td><td>{size_str}</td><td>{mtime_str}</td></tr>")
+                html_lines.append("</table></body></html>")
+                return HTMLResponse(content="\n".join(html_lines))
+
+            return FileResponse(path=full_path, filename=os.path.basename(full_path))
+
         async def index(request):
             import os
             from starlette.responses import HTMLResponse
@@ -5179,7 +5506,7 @@ def main(port: int, transport: str) -> int:
             
             if not success:
                 # Try MinIO fallback
-                minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                minio_base = get_minio_base_url()
                 try:
                     from minio import Minio
                     import io
@@ -5338,9 +5665,7 @@ Please answer the question based ONLY on the context provided above (including t
                 def run_agent():
                     env = os.environ.copy()
                     env["MCP_URL"] = "http://localhost:7070/sse"
-                    ollama_h = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-                    if "10.147.18.24" in ollama_h or "ollama:11434" in ollama_h:
-                        ollama_h = "http://10.147.18.82:11435"
+                    ollama_h = os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444")
                     env["OLLAMA_HOST"] = ollama_h
                     env["MODEL"] = model_name
                     env["OLLAMA_TOKEN"] = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
@@ -5379,16 +5704,18 @@ Please answer the question based ONLY on the context provided above (including t
 
         async def vault_models(request):
             import os, httpx
-            ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
+            ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444")
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY")
             headers = {}
             if ollama_token:
                 headers["Authorization"] = f"Bearer {ollama_token}"
             try:
                 import json
-                endpoints = ["http://10.147.18.82:11435"]
-                if ollama_host and ollama_host not in endpoints:
+                endpoints = []
+                if ollama_host:
                     endpoints.append(ollama_host)
+                if "http://10.147.18.82:11435" not in endpoints:
+                    endpoints.append("http://10.147.18.82:11435")
                 cfg_candidates = ["gateway_config.json", os.path.join(os.path.dirname(__file__), "gateway_config.json")]
                 for cfg_file in cfg_candidates:
                     if os.path.exists(cfg_file):
@@ -5443,6 +5770,16 @@ Please answer the question based ONLY on the context provided above (including t
                 note_text = (data.get("note") or "").strip()
                 model_used = data.get("model")
                 
+                # Sanitize snippet_text to strip accidental recursive dumps of the main document or raw HTML
+                if snippet_text:
+                    import re
+                    snippet_text = re.sub(r"\*\*Context:\*\*\s*>\s*=== MAIN DOCUMENT ===.*?(?=\*\*Question:\*\*|\*\*Task|\*\*User Note:|$)", "", snippet_text, flags=re.DOTALL)
+                    snippet_text = re.sub(r"=== MAIN DOCUMENT ===.*?(?=\*\*Question:\*\*|\*\*Task|\*\*User Note:|$)", "", snippet_text, flags=re.DOTALL)
+                    if "<div" in snippet_text and "<table" in snippet_text:
+                        snippet_text = re.sub(r"<[^>]+>", " ", snippet_text)
+                        snippet_text = re.sub(r"(?:^|\n)>\s*(?=\n|$)", "", snippet_text)
+                    snippet_text = snippet_text.strip()
+                
                 if not snippet_text:
                     return JSONResponse({"success": False, "error": "No text provided"})
                     
@@ -5452,7 +5789,7 @@ Please answer the question based ONLY on the context provided above (including t
                 
                 import datetime, json, re, os
                 # We fetch the original JSON-LD to get the creator/model
-                minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                minio_base = get_minio_base_url()
                 current_host = os.environ.get("HOST", HOST)
                 if not current_host.startswith("http"):
                     current_host = f"https://{current_host}"
@@ -5625,9 +5962,9 @@ Please answer the question based ONLY on the context provided above (including t
 
         async def proxy_vault(request):
             filename = request.path_params["filename"]
-            if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".gz") and not filename.endswith(".csv"):
+            if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".json") and not filename.endswith(".gz") and not filename.endswith(".csv"):
                 filename += ".md"
-            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+            minio_base = get_minio_base_url()
             from minio import Minio
             from datetime import timedelta
             endpoint = minio_base.replace("http://", "").replace("https://", "")
@@ -5659,6 +5996,12 @@ Please answer the question based ONLY on the context provided above (including t
                                             s_text = re.sub(r"^\[View Croissant JSON-LD Data\].*?</button>\s*", "", s_data, flags=re.DOTALL|re.IGNORECASE)
                                             s_text = re.sub(r"\s*---\s*\*Source Document:\* \[View Original\].*$", "", s_text, flags=re.DOTALL|re.IGNORECASE)
                                             s_text = re.sub(r"\s*---\s*\*\*Digital Signature:\*\*.*$", "", s_text, flags=re.DOTALL|re.IGNORECASE)
+                                            # Strip accidental embedded === MAIN DOCUMENT === dumps and HTML markup
+                                            s_text = re.sub(r"\*\*Context:\*\*\s*>\s*=== MAIN DOCUMENT ===.*?(?=\*\*Question:\*\*|\*\*Task|\*\*User Note:|$)", "", s_text, flags=re.DOTALL)
+                                            s_text = re.sub(r"=== MAIN DOCUMENT ===.*?(?=\*\*Question:\*\*|\*\*Task|\*\*User Note:|$)", "", s_text, flags=re.DOTALL)
+                                            if "<div" in s_text and "<table" in s_text:
+                                                s_text = re.sub(r"<[^>]+>", " ", s_text)
+                                                s_text = re.sub(r"(?:^|\n)>\s*(?=\n|$)", "", s_text)
                                             item["annotationText"] = s_text.strip()
                                         except Exception as e:
                                             item["annotationTextError"] = str(e)
@@ -6009,6 +6352,27 @@ Please answer the question based ONLY on the context provided above (including t
             )
             return PlainTextResponse(robots_content, media_type="text/plain; charset=utf-8")
             
+        async def proxy_mcp_spatial_query(request):
+            """Proxy spatial query requests to palefire-api."""
+            import httpx
+            from starlette.responses import Response, JSONResponse
+            body = await request.body()
+            headers = dict(request.headers)
+            headers.pop("host", None)
+            palefire_url = os.environ.get("PALEFIRE_API_URL", "http://palefire-api:8000/spatial-query")
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                try:
+                    resp = await client.request(
+                        request.method,
+                        palefire_url,
+                        headers=headers,
+                        params=dict(request.query_params),
+                        content=body
+                    )
+                    return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+                except Exception as e:
+                    return JSONResponse({"error": f"Failed to reach Palefire spatial query service: {str(e)}"}, status_code=502)
+
         async def export_to_cdif(request):
             """
             Export a dataset file (from URL or file query parameter) to CDIF (DDI-CDI JSON-LD)
@@ -6186,134 +6550,53 @@ Please answer the question based ONLY on the context provided above (including t
 
             if not raw_file_param and not raw_url_param and (q_param or cid_param or request.query_params.get("variables") == "true"):
                 # Handle filtered variable index export as full CDIF 1.1 Dataset conforming to schema
-                es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
-
-                # Fetch variables matching query
-                tokens = [t.lower() for t in re.split(r"\s+", q_param) if t and t.lower() not in ["and", "or", "&"]]
+                # Directly reuse the variables retrieved and normalized by api_variable_index_data for 100% parity
                 all_variables = []
                 unique_files = set()
-                try:
-                    async with httpx.AsyncClient(timeout=25.0) as es_var_client:
-                        # 1. Search cdif index
-                        cdif_must = []
-                        if tokens:
-                            for t in tokens:
-                                cdif_must.append({
-                                    "bool": {
-                                        "should": [
-                                            {"match": {"cdif_jsonld.DDICDIModels.name": {"query": t, "boost": 3}}},
-                                            {"match": {"cdif_jsonld.DDICDIModels.displayLabel": {"query": t, "boost": 2}}},
-                                            {"match": {"cdif_jsonld.DDICDIModels.dct:description": {"query": t, "boost": 1}}},
-                                            {"match": {"file_name": {"query": t, "boost": 1}}}
-                                        ]
-                                    }
-                                })
-                        cdif_q = {"bool": {"must": cdif_must}} if cdif_must else {"match_all": {}}
-                        r_cdif = await es_var_client.post(
-                            f"{es_url}/cdif/_search",
-                            json={
-                                "query": cdif_q,
-                                "size": 1000,
-                                "_source": ["file_name", "file_url", "dataset_url", "dataset_id", "title", "cdif_export_url", "cdif_jsonld"]
-                            }
-                        )
-                        if r_cdif.status_code == 200:
-                            for hit in r_cdif.json().get("hits", {}).get("hits", []):
-                                src = hit.get("_source", {})
-                                fn = src.get("file_name", "")
-                                fu = src.get("file_url", "")
-                                du = src.get("dataset_url", "")
-                                dt = src.get("title", "")
-                                c_export = src.get("cdif_export_url", "")
-                                c_json = src.get("cdif_jsonld", {})
-                                for m in c_json.get("DDICDIModels", []):
-                                    if isinstance(m, dict) and ("InstanceVariable" in str(m.get("@type", "")) or "PropertyValue" in str(m.get("@type", ""))):
-                                        vname = m.get("schema:name") or m.get("name") or m.get("@id", "")
-                                        vname = str(vname).lstrip("#").strip()
-                                        if not vname: continue
-                                        all_variables.append({
-                                            "name": vname,
-                                            "label": m.get("schema:description") or m.get("displayLabel") or vname,
-                                            "type": str(m.get("cdif:physicalDataType") or m.get("physicalDataType") or "string").replace("xsd:", ""),
-                                            "desc": m.get("schema:description") or m.get("dct:description") or "",
-                                            "unit": m.get("schema:unitText") or m.get("unitText") or "",
-                                            "file_name": fn,
-                                            "file_url": fu,
-                                            "dataset_title": dt,
-                                            "dataset_url": du,
-                                            "cdif_url": c_export
-                                        })
-                                        if fn: unique_files.add(fn)
 
-                        # 2. Search dataverse / croissant dataset recordSet fields
-                        if tokens:
-                            ds_must = []
-                            for t in tokens:
-                                ds_must.append({
-                                    "bool": {
-                                        "should": [
-                                            {"match": {"recordSet.field.name": {"query": t, "boost": 3}}},
-                                            {"match": {"recordSet.field.description": {"query": t, "boost": 2}}},
-                                            {"match": {"title": {"query": t, "boost": 1}}},
-                                            {"match": {"name": {"query": t, "boost": 1}}}
-                                        ]
-                                    }
-                                })
-                            r_ds = await es_var_client.post(
-                                f"{es_url}/*,-.*,-collections,-history,-groups,-cdif/_search",
-                                json={
-                                    "query": {"bool": {"must": ds_must}},
-                                    "size": 50,
-                                    "_source": ["name", "title", "url", "_source_url", "distribution", "recordSet"]
-                                }
-                            )
-                            if r_ds.status_code == 200:
-                                for dh in r_ds.json().get("hits", {}).get("hits", []):
-                                    dsrc = dh.get("_source", {})
-                                    d_name = dsrc.get("name") or dsrc.get("title") or ""
-                                    d_url = dsrc.get("url") or dsrc.get("_source_url") or ""
-                                    rs_list = dsrc.get("recordSet", [])
-                                    for rs in (rs_list if isinstance(rs_list, list) else [rs_list]):
-                                        if not isinstance(rs, dict): continue
-                                        for fld in rs.get("field", []):
-                                            if not isinstance(fld, dict): continue
-                                            fname = str(fld.get("name") or "")
-                                            fdesc = str(fld.get("description") or fname)
-                                            ftype = str(fld.get("dataType") or "sc:Float")
-                                            all_variables.append({
-                                                "name": fname,
-                                                "label": fname,
-                                                "type": ftype,
-                                                "desc": fdesc,
-                                                "unit": "",
-                                                "file_name": rs.get("name", "Dataset RecordSet"),
-                                                "file_url": "",
-                                                "dataset_title": d_name,
-                                                "dataset_url": d_url,
-                                                "cdif_url": f"{base_host}/export?ds={urllib.parse.quote(d_url, safe='')}" if d_url else ""
-                                            })
-                                            if rs.get("name"): unique_files.add(rs.get("name"))
+                try:
+                    var_resp = await api_variable_index_data(request)
+                    if hasattr(var_resp, "body"):
+                        var_data = json.loads(var_resp.body.decode("utf-8"))
+                        raw_vars = var_data.get("variables", [])
+                        raw_files = var_data.get("files", [])
+                        for f in raw_files:
+                            fname = f.get("file_name") or f.get("file_url") or f.get("dataset_title")
+                            if fname:
+                                unique_files.add(fname)
+                        for rv in raw_vars:
+                            v_name = rv.get("variable_name") or rv.get("name") or ""
+                            v_label = rv.get("display_label") or rv.get("label") or v_name
+                            v_desc = rv.get("description") or rv.get("desc") or v_label
+                            v_type = rv.get("data_type") or rv.get("type") or "unspecified"
+                            v_unit = rv.get("unit") or ""
+                            v_fname = rv.get("file_name") or ""
+                            v_furl = rv.get("file_url") or ""
+                            v_dtitle = rv.get("dataset_title") or ""
+                            v_durl = rv.get("dataset_url") or ""
+                            v_cdif = rv.get("cdif_export_url") or ""
+
+                            fn_key = v_fname or v_furl or v_dtitle
+                            if fn_key:
+                                unique_files.add(fn_key)
+
+                            all_variables.append({
+                                "name": v_name,
+                                "label": v_label,
+                                "type": v_type,
+                                "desc": v_desc,
+                                "unit": v_unit,
+                                "file_name": v_fname,
+                                "file_url": v_furl,
+                                "dataset_title": v_dtitle,
+                                "dataset_url": v_durl,
+                                "cdif_url": v_cdif
+                            })
                 except Exception as var_fetch_err:
                     print(f"Error fetching variables for export: {var_fetch_err}", file=sys.stderr)
 
-                # Filter tokens
-                if tokens:
-                    filtered = []
-                    for v in all_variables:
-                        hay = f"{v.get('name', '')} {v.get('label', '')} {v.get('desc', '')} {v.get('dataset_title', '')}".lower()
-                        if all(t in hay for t in tokens):
-                            filtered.append(v)
-                    all_variables = filtered
-
-                # Deduplicate by (name, file_name, dataset_title)
-                seen_vars = set()
-                deduped_vars = []
-                for v in all_variables:
-                    vk = (v.get("name"), v.get("file_name"), v.get("dataset_title"))
-                    if vk not in seen_vars:
-                        seen_vars.add(vk)
-                        deduped_vars.append(v)
-                all_variables = deduped_vars
+                # Keep all variables matching api_variable_index_data results (307 variables)
+                # without over-deduplicating across multiple tables or sub-measurements
 
                 # Build CDIF 1.1 structure matching the standard format
                 context = {
@@ -6554,7 +6837,7 @@ Please answer the question based ONLY on the context provided above (including t
             if "localhost:8082" in cdif_converter_url or "127.0.0.1:8082" in cdif_converter_url:
                 cdif_converter_url = "http://converters:8000"
 
-            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+            minio_base = get_minio_base_url()
             minio_endpoint = minio_base.replace("http://", "").replace("https://", "")
             cache_prefix = "ddicdi" if is_ddi_cdi else "cdif_v2"
             vault_cache_key = f"{cache_prefix}_cache_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:20]}.jsonld"
@@ -7928,7 +8211,7 @@ Please answer the question based ONLY on the context provided above (including t
                 if media_type == "text/markdown" and isinstance(md_text, str) and request.url.path.startswith("/vault/print"):
                     import json, re
                     try:
-                        minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                        minio_base = get_minio_base_url()
                         from minio import Minio
                         endpoint = minio_base.replace("http://", "").replace("https://", "")
                         m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
@@ -7978,7 +8261,7 @@ Please answer the question based ONLY on the context provided above (including t
 
         async def proxy_downloads(request):
             filename = request.path_params["filename"]
-            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+            minio_base = get_minio_base_url()
             from minio import Minio
             from datetime import timedelta
             endpoint = minio_base.replace("http://", "").replace("https://", "")
@@ -8501,7 +8784,7 @@ Please answer the question based ONLY on the context provided above (including t
         # Collections Endpoints
         def get_minio_client():
             import os
-            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+            minio_base = get_minio_base_url()
             from minio import Minio
             endpoint = minio_base.replace("http://", "").replace("https://", "")
             return Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
@@ -8530,28 +8813,60 @@ Please answer the question based ONLY on the context provided above (including t
             
         async def api_collections_get(request):
             from starlette.responses import JSONResponse
-            import json
+            import json, httpx
             try:
-                m_client = get_minio_client()
-                if not m_client.bucket_exists("collections"):
-                    m_client.make_bucket("collections")
-                objects = m_client.list_objects("collections")
                 cols = []
                 user = get_user_info_from_odrl(request)
                 user_did = user.get("did") if user else None
-                for obj in objects:
-                    if obj.object_name.endswith(".json"):
-                        resp = m_client.get_object("collections", obj.object_name)
-                        col = json.loads(resp.read().decode("utf-8"))
-                        resp.close()
-                        resp.release_conn()
-                        
-                        is_private = col.get("is_private", False)
-                        owner = col.get("owner", None)
-                        if is_private and not check_user_access(owner, user):
-                            continue
-                            
-                        cols.append(col)
+                seen_ids = set()
+
+                # 1. Read from MinIO
+                try:
+                    m_client = get_minio_client()
+                    if not m_client.bucket_exists("collections"):
+                        m_client.make_bucket("collections")
+                    objects = m_client.list_objects("collections")
+                    for obj in objects:
+                        if obj.object_name.endswith(".json"):
+                            try:
+                                resp = m_client.get_object("collections", obj.object_name)
+                                col = json.loads(resp.read().decode("utf-8"))
+                                resp.close()
+                                resp.release_conn()
+                                is_private = col.get("is_private", False)
+                                owner = col.get("owner", None)
+                                if is_private and not check_user_access(owner, user):
+                                    continue
+                                cid = col.get("id") or obj.object_name.replace(".json", "")
+                                if cid not in seen_ids:
+                                    seen_ids.add(cid)
+                                    cols.append(col)
+                            except Exception:
+                                pass
+                except Exception as me:
+                    print(f"Warning: MinIO list_objects('collections') error: {me}", file=sys.stderr)
+
+                # 2. Also read from Elasticsearch so collections in ES (e.g. from ES_GLOBAL_HOST) are discovered
+                es_nodes = get_elasticsearch_lookup_urls()
+                for es_url in es_nodes:
+                    try:
+                        async with httpx.AsyncClient(timeout=10.0) as client:
+                            resp = await client.post(f"{es_url}/collections/_search", json={"query": {"match_all": {}}, "size": 1000})
+                            if resp.status_code == 200:
+                                hits = resp.json().get("hits", {}).get("hits", [])
+                                for h in hits:
+                                    col = h.get("_source", {})
+                                    cid = col.get("id") or h.get("_id")
+                                    if cid and cid not in seen_ids:
+                                        is_private = col.get("is_private", False)
+                                        owner = col.get("owner", None)
+                                        if is_private and not check_user_access(owner, user):
+                                            continue
+                                        seen_ids.add(cid)
+                                        cols.append(col)
+                    except Exception:
+                        pass
+
                 return JSONResponse({"collections": cols})
             except Exception as e:
                 import traceback
@@ -8758,7 +9073,7 @@ Please answer the question based ONLY on the context provided above (including t
                             "query": {
                                 "query_string": {
                                     "query": es_query,
-                                    "fields": ["_full_text", "_markdown_text", "name", "description", "schema:name", "schema:description", "title", "dcterms:title", "dsDescription.dsDescriptionValue", "citation:dsDescriptionValue", "*"]
+                                    "fields": ["_full_text", "_markdown_text", "name", "description", "schema:name", "schema:description", "title", "dcterms:title", "dsDescription.dsDescriptionValue", "citation:dsDescriptionValue", "label", "keywords"]
                                 }
                             }
                         }
@@ -8807,49 +9122,99 @@ Please answer the question based ONLY on the context provided above (including t
 
         async def api_collections_get_single(request):
             from starlette.responses import JSONResponse
-            import json
+            import json, httpx
             try:
                 cid = request.path_params["id"]
-                m_client = get_minio_client()
+                col_data = None
+
+                # 1. Try MinIO
                 try:
+                    m_client = get_minio_client()
                     resp = m_client.get_object("collections", f"{cid}.json")
                     col_data = json.loads(resp.read().decode("utf-8"))
                     resp.close()
                     resp.release_conn()
-                    
-                    is_private = col_data.get("is_private", False)
-                    if is_private:
-                        user = get_user_info_from_odrl(request)
-                        user_did = user.get("did") if user else None
-                        if not check_user_access(col_data.get("owner"), user):
-                            return JSONResponse({"error": "Forbidden: You do not have access to this private collection"}, status_code=403)
-                            
-                    return JSONResponse(col_data)
                 except Exception:
+                    col_data = None
+
+                # 2. Fallback to Elasticsearch (including ES_GLOBAL_HOST)
+                if not col_data:
+                    es_nodes = get_elasticsearch_lookup_urls()
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        for es_url in es_nodes:
+                            try:
+                                r = await client.get(f"{es_url}/collections/_doc/{cid}")
+                                if r.status_code == 200:
+                                    col_data = r.json().get("_source", {})
+                                    if col_data:
+                                        # Also sync back into local MinIO for fast subsequent reads
+                                        try:
+                                            m_client = get_minio_client()
+                                            if not m_client.bucket_exists("collections"):
+                                                m_client.make_bucket("collections")
+                                            b_data = json.dumps(col_data).encode("utf-8")
+                                            import io
+                                            m_client.put_object("collections", f"{cid}.json", io.BytesIO(b_data), len(b_data), content_type="application/json")
+                                        except Exception:
+                                            pass
+                                        break
+                            except Exception:
+                                pass
+
+                if not col_data:
                     return JSONResponse({"error": "Collection not found"}, status_code=404)
+
+                is_private = col_data.get("is_private", False)
+                if is_private:
+                    user = get_user_info_from_odrl(request)
+                    user_did = user.get("did") if user else None
+                    if not check_user_access(col_data.get("owner"), user):
+                        return JSONResponse({"error": "Forbidden: You do not have access to this private collection"}, status_code=403)
+
+                return JSONResponse(col_data)
             except Exception as e:
                 return JSONResponse({"error": str(e)}, status_code=500)
-                
+
         async def api_collections_get_resolved(request):
             from starlette.responses import JSONResponse
             import json, httpx, re
             try:
                 cid = request.path_params["id"]
-                m_client = get_minio_client()
+                col_data = None
+
+                # 1. Try MinIO
                 try:
+                    m_client = get_minio_client()
                     resp = m_client.get_object("collections", f"{cid}.json")
                     col_data = json.loads(resp.read().decode("utf-8"))
                     resp.close()
                     resp.release_conn()
-                    
-                    is_private = col_data.get("is_private", False)
-                    if is_private:
-                        user = get_user_info_from_odrl(request)
-                        user_did = user.get("did") if user else None
-                        if not check_user_access(col_data.get("owner"), user):
-                            return JSONResponse({"error": "Forbidden: You do not have access to this private collection"}, status_code=403)
                 except Exception:
+                    col_data = None
+
+                # 2. Fallback to Elasticsearch (including ES_GLOBAL_HOST)
+                if not col_data:
+                    es_nodes = get_elasticsearch_lookup_urls()
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        for es_url in es_nodes:
+                            try:
+                                r = await client.get(f"{es_url}/collections/_doc/{cid}")
+                                if r.status_code == 200:
+                                    col_data = r.json().get("_source", {})
+                                    if col_data:
+                                        break
+                            except Exception:
+                                pass
+
+                if not col_data:
                     return JSONResponse({"error": "Collection not found"}, status_code=404)
+
+                is_private = col_data.get("is_private", False)
+                if is_private:
+                    user = get_user_info_from_odrl(request)
+                    user_did = user.get("did") if user else None
+                    if not check_user_access(col_data.get("owner"), user):
+                        return JSONResponse({"error": "Forbidden: You do not have access to this private collection"}, status_code=403)
                 
                 items = list(col_data.get("items", []))
                 
@@ -9728,33 +10093,48 @@ Please answer the question based ONLY on the context provided above (including t
                 "results": results
             })
 
-        async def update_collection_variables_cache(cid: str, es_url: str):
+        async def update_collection_variables_cache(cid: str, es_url: str = None):
             """
             Background updater that scans all CDIF records for a collection, computes accurate
             population-wide variable totals (numeric, text/other, files), extracts the first 100
             variables, and stores the summary in the Elasticsearch 'cache' index under
-            'collection_variables_{cid}'.
+            'collection_variables_{cid}'. Iterates through get_elasticsearch_lookup_urls() to ensure
+            robust connectivity in all deployment environments.
             """
             import httpx, json, sys, time
             try:
-                # Mark updating status in cache doc if it exists
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    try:
-                        await client.post(
-                            f"{es_url}/cache/_update/collection_variables_{cid}",
-                            json={"doc": {"is_updating": True}},
-                            headers={"Content-Type": "application/json"}
-                        )
-                    except Exception:
-                        pass
+                es_candidates = [es_url] if es_url else get_elasticsearch_lookup_urls()
+                target_es = None
+                raw_hits = []
+                col_items = []
 
-                    col_items = []
-                    try:
-                        c_resp = await client.get(f"{es_url}/collections/_doc/{cid}", timeout=5.0)
-                        if c_resp.status_code == 200:
-                            col_items = c_resp.json().get("_source", {}).get("items", []) or []
-                    except Exception:
-                        pass
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    # Find working ES node and fetch collection items
+                    for cand_url in es_candidates:
+                        if not cand_url:
+                            continue
+                        try:
+                            c_resp = await client.get(f"{cand_url}/collections/_doc/{cid}", timeout=5.0)
+                            if c_resp.status_code == 200:
+                                col_items = c_resp.json().get("_source", {}).get("items", []) or []
+                                target_es = cand_url
+                                break
+                        except Exception:
+                            continue
+
+                    if not target_es and es_candidates:
+                        target_es = es_candidates[0]
+
+                    # Mark updating status in cache doc if it exists
+                    if target_es:
+                        try:
+                            await client.post(
+                                f"{target_es}/cache/_update/collection_variables_{cid}",
+                                json={"doc": {"is_updating": True}},
+                                headers={"Content-Type": "application/json"}
+                            )
+                        except Exception:
+                            pass
 
                     should_clauses = [{"term": {"collection_id": cid}}]
                     if col_items:
@@ -9784,8 +10164,21 @@ Please answer the question based ONLY on the context provided above (including t
                             "cdif_jsonld.distribution"
                         ]
                     }
-                    resp = await client.post(f"{es_url}/cdif/_search", json=payload)
-                    if resp.status_code != 200:
+
+                    # Query cdif index across candidates
+                    for cand_url in ([target_es] if target_es else []) + [u for u in es_candidates if u != target_es]:
+                        if not cand_url:
+                            continue
+                        try:
+                            resp = await client.post(f"{cand_url}/cdif/_search", json=payload, timeout=20.0)
+                            if resp.status_code == 200:
+                                raw_hits = resp.json().get("hits", {}).get("hits", [])
+                                target_es = cand_url
+                                break
+                        except Exception:
+                            continue
+
+                    if not target_es:
                         return
 
                     raw_hits = resp.json().get("hits", {}).get("hits", [])
@@ -9974,7 +10367,8 @@ Please answer the question based ONLY on the context provided above (including t
                         "is_updating": False,
                         "updated_at": int(time.time())
                     }
-                    await client.put(f"{es_url}/cache/_doc/collection_variables_{cid}", json=cache_doc)
+                    if target_es:
+                        await client.put(f"{target_es}/cache/_doc/collection_variables_{cid}", json=cache_doc)
             except Exception as e:
                 print(f"[CollectionVariablesCache] Error updating collection {cid} variables cache: {e}", file=sys.stderr)
 
@@ -9982,11 +10376,10 @@ Please answer the question based ONLY on the context provided above (including t
             """
             Background cache updater trigger for a collection's variables index.
             """
-            import asyncio, os
+            import asyncio
             from starlette.responses import JSONResponse
             cid = request.path_params["id"]
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
-            asyncio.create_task(update_collection_variables_cache(cid, es_url))
+            asyncio.create_task(update_collection_variables_cache(cid))
             return JSONResponse({"status": "ok", "message": f"Collection {cid} variables cache update initiated in background"})
 
         async def api_collections_variables(request):
@@ -9994,62 +10387,77 @@ Please answer the question based ONLY on the context provided above (including t
             Fetches all CDIF variables (InstanceVariable) extracted from tabular files
             for this collection from the Elasticsearch 'cdif' index, leveraging the
             Elasticsearch 'cache' index for instantaneous (<200ms) statistical KPI responses.
+            Iterates through get_elasticsearch_lookup_urls() like api_collections_get_single.
             """
             from starlette.responses import JSONResponse
-            import json, httpx, os, asyncio, time
+            import json, httpx, asyncio, time
 
             cid = request.path_params["id"]
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_candidates = get_elasticsearch_lookup_urls()
             
             limit_param = request.query_params.get("limit")
             limit = int(limit_param) if limit_param and limit_param.isdigit() else None
             offset_param = request.query_params.get("offset")
             offset = int(offset_param) if offset_param and offset_param.isdigit() else 0
 
-            # 1. Fast Cache Hit from Elasticsearch 'cache' index
+            # 1. Fast Cache Hit from Elasticsearch 'cache' index across candidate nodes
             if offset == 0:
-                try:
-                    async with httpx.AsyncClient(timeout=4.0) as cache_client:
-                        cache_res = await cache_client.get(f"{es_url}/cache/_doc/collection_variables_{cid}")
-                        if cache_res.status_code == 200:
-                            c_data = cache_res.json().get("_source", {})
-                            cached_vars = c_data.get("first_100_variables", [])
-                            if limit is not None:
-                                cached_vars = cached_vars[:limit]
-                            num_val = c_data.get("numeric_variables", c_data.get("total_numeric", 0))
-                            other_val = c_data.get("text_other_variables", c_data.get("total_other", 0))
-                            
-                            # Trigger background refresh if stale (> 5 minutes) or requested
-                            if time.time() - c_data.get("updated_at", 0) > 300:
-                                asyncio.create_task(update_collection_variables_cache(cid, es_url))
+                for es_url in es_candidates:
+                    if not es_url:
+                        continue
+                    try:
+                        async with httpx.AsyncClient(timeout=4.0) as cache_client:
+                            cache_res = await cache_client.get(f"{es_url}/cache/_doc/collection_variables_{cid}")
+                            if cache_res.status_code == 200:
+                                c_data = cache_res.json().get("_source", {})
+                                cached_vars = c_data.get("first_100_variables", [])
+                                if limit is not None:
+                                    cached_vars = cached_vars[:limit]
+                                num_val = c_data.get("numeric_variables", c_data.get("total_numeric", 0))
+                                other_val = c_data.get("text_other_variables", c_data.get("total_other", 0))
+                                
+                                # Trigger background refresh if stale (> 5 minutes) or requested
+                                if time.time() - c_data.get("updated_at", 0) > 300:
+                                    asyncio.create_task(update_collection_variables_cache(cid, es_url))
 
-                            return JSONResponse({
-                                "collection_id": cid,
-                                "total_files": c_data.get("total_files", 0),
-                                "total_variables": c_data.get("total_variables", len(cached_vars)),
-                                "total_numeric": num_val,
-                                "total_other": other_val,
-                                "numeric_variables": num_val,
-                                "text_other_variables": other_val,
-                                "variables": cached_vars,
-                                "files": c_data.get("files", []),
-                                "has_more": c_data.get("total_variables", 0) > len(cached_vars),
-                                "cached": True,
-                                "is_updating": c_data.get("is_updating", False)
-                            })
-                except Exception as cache_err:
-                    print(f"[CollectionVariablesCache] Note: could not load from cache index: {cache_err}", file=sys.stderr)
+                                return JSONResponse({
+                                    "collection_id": cid,
+                                    "total_files": c_data.get("total_files", 0),
+                                    "total_variables": c_data.get("total_variables", len(cached_vars)),
+                                    "total_numeric": num_val,
+                                    "total_other": other_val,
+                                    "numeric_variables": num_val,
+                                    "text_other_variables": other_val,
+                                    "variables": cached_vars,
+                                    "files": c_data.get("files", []),
+                                    "has_more": c_data.get("total_variables", 0) > len(cached_vars),
+                                    "cached": True,
+                                    "is_updating": c_data.get("is_updating", False)
+                                })
+                    except Exception as cache_err:
+                        pass
 
             try:
                 # Query ES 'cdif' index for this collection with selective fields
                 col_items = []
+                target_es = None
+                raw_hits = []
+
                 async with httpx.AsyncClient(timeout=30.0) as client:
-                    try:
-                        c_resp = await client.get(f"{es_url}/collections/_doc/{cid}", timeout=5.0)
-                        if c_resp.status_code == 200:
-                            col_items = c_resp.json().get("_source", {}).get("items", []) or []
-                    except Exception:
-                        pass
+                    for es_url in es_candidates:
+                        if not es_url:
+                            continue
+                        try:
+                            c_resp = await client.get(f"{es_url}/collections/_doc/{cid}", timeout=5.0)
+                            if c_resp.status_code == 200:
+                                col_items = c_resp.json().get("_source", {}).get("items", []) or []
+                                target_es = es_url
+                                break
+                        except Exception:
+                            continue
+
+                    if not target_es and es_candidates:
+                        target_es = es_candidates[0]
 
                     should_clauses = [{"term": {"collection_id": cid}}]
                     if col_items:
@@ -10079,8 +10487,20 @@ Please answer the question based ONLY on the context provided above (including t
                             "cdif_jsonld.distribution"
                         ]
                     }
-                    resp = await client.post(f"{es_url}/cdif/_search", json=payload)
-                    if resp.status_code != 200:
+
+                    for cand_url in ([target_es] if target_es else []) + [u for u in es_candidates if u != target_es]:
+                        if not cand_url:
+                            continue
+                        try:
+                            resp = await client.post(f"{cand_url}/cdif/_search", json=payload, timeout=20.0)
+                            if resp.status_code == 200:
+                                raw_hits = resp.json().get("hits", {}).get("hits", [])
+                                target_es = cand_url
+                                break
+                        except Exception:
+                            continue
+
+                    if not target_es:
                         return JSONResponse({"collection_id": cid, "total_files": 0, "total_variables": 0, "variables": [], "files": []})
 
                     raw_hits = resp.json().get("hits", {}).get("hits", [])
@@ -10105,10 +10525,10 @@ Please answer the question based ONLY on the context provided above (including t
                     # Batch fetch dataset names and spatialCoverage from croissant,trump,dataverse indices for all unique dataset_ids
                     unique_dids = list(set(h.get("_source", {}).get("dataset_id") for h in hits if h.get("_source", {}).get("dataset_id")))
                     dataset_meta = {}
-                    if unique_dids:
+                    if unique_dids and target_es:
                         try:
                             ds_resp = await client.post(
-                                f"{es_url}/*,-.*,-collections,-history,-groups,-cdif/_search",
+                                f"{target_es}/*,-.*,-collections,-history,-groups,-cdif/_search",
                                 json={
                                     "query": {"ids": {"values": unique_dids}},
                                     "size": len(unique_dids),
@@ -10368,17 +10788,26 @@ Please answer the question based ONLY on the context provided above (including t
                 return JSONResponse({"answer": "Please provide a question about the variables."})
 
             # Retrieve cached or extracted variables from ES cdif index
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_candidates = get_elasticsearch_lookup_urls()
             all_vars = []
             try:
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     col_items = []
-                    try:
-                        c_resp = await client.get(f"{es_url}/collections/_doc/{cid}", timeout=5.0)
-                        if c_resp.status_code == 200:
-                            col_items = c_resp.json().get("_source", {}).get("items", []) or []
-                    except Exception:
-                        pass
+                    target_es = None
+                    for cand_url in es_candidates:
+                        if not cand_url:
+                            continue
+                        try:
+                            c_resp = await client.get(f"{cand_url}/collections/_doc/{cid}", timeout=5.0)
+                            if c_resp.status_code == 200:
+                                col_items = c_resp.json().get("_source", {}).get("items", []) or []
+                                target_es = cand_url
+                                break
+                        except Exception:
+                            continue
+
+                    if not target_es and es_candidates:
+                        target_es = es_candidates[0]
 
                     should_clauses = [{"term": {"collection_id": cid}}]
                     if col_items:
@@ -10405,9 +10834,20 @@ Please answer the question based ONLY on the context provided above (including t
                             "cdif_jsonld.variableMeasured"
                         ]
                     }
-                    resp = await client.post(f"{es_url}/cdif/_search", json=payload)
-                    if resp.status_code == 200:
-                        hits = resp.json().get("hits", {}).get("hits", [])
+
+                    hits = []
+                    for cand_url in ([target_es] if target_es else []) + [u for u in es_candidates if u != target_es]:
+                        if not cand_url:
+                            continue
+                        try:
+                            resp = await client.post(f"{cand_url}/cdif/_search", json=payload, timeout=20.0)
+                            if resp.status_code == 200:
+                                hits = resp.json().get("hits", {}).get("hits", [])
+                                break
+                        except Exception:
+                            continue
+
+                    if hits:
                         for h in hits:
                             src = h.get("_source", {})
                             fname = src.get("file_name", "")
@@ -10754,6 +11194,7 @@ Instructions:
             direct_url = request.query_params.get("url")
             dataset_pid = request.query_params.get("datasetPid")
             site_url_param = request.query_params.get("siteUrl")
+            vision_param = request.query_params.get("vision", "").lower() in ("true", "1", "yes")
             
             if not callback and not direct_url and not dataset_pid:
                 return JSONResponse({"detail": "Missing callback, url, or datasetPid parameter"}, status_code=400)
@@ -10795,6 +11236,8 @@ Instructions:
                     script_path = "convertors/url_to_croissant.py"
                     
                 cmd = ["python3", script_path, dataset_url, "--elastic"]
+                if vision_param:
+                    cmd.append("--computer-vision")
                 
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -11282,7 +11725,7 @@ Instructions:
                 return JSONResponse({"error": f"Evaluation error: {str(e)}"}, status_code=500)
 
 
-        async def update_variables_index_cache(es_url: str):
+        async def update_variables_index_cache(es_url: str = None):
             """
             Background task that scans CDIF records in Elasticsearch and updates the 'cache' index
             with fresh totals (total_files, total_variables, total_numeric, total_other)
@@ -11290,7 +11733,19 @@ Instructions:
             """
             import httpx, json, sys, time
             try:
-                print("[VariablesCache] Background cache refresh started...", file=sys.stderr)
+                if not es_url:
+                    for cand in get_elasticsearch_lookup_urls():
+                        try:
+                            async with httpx.AsyncClient(timeout=3.0) as chk:
+                                r = await chk.get(f"{cand}/cdif/_count")
+                                if r.status_code == 200:
+                                    es_url = cand
+                                    break
+                        except Exception:
+                            continue
+                if not es_url:
+                    es_url = get_elasticsearch_lookup_urls()[0]
+                print(f"[VariablesCache] Background cache refresh started with {es_url}...", file=sys.stderr)
                 async with httpx.AsyncClient(timeout=180.0) as client:
                     try:
                         await client.post(
@@ -11304,7 +11759,7 @@ Instructions:
                     cnt_resp = await client.post(f"{es_url}/cdif/_count")
                     total_docs = cnt_resp.json().get("count", 0) if cnt_resp.status_code == 200 else 0
 
-                    sample_size = min(total_docs, 10000) if total_docs > 0 else 10000
+                    sample_size = min(total_docs, 300) if total_docs > 0 else 300
                     payload = {
                         "query": {"match_all": {}},
                         "size": sample_size,
@@ -11314,15 +11769,21 @@ Instructions:
                             "cdif_jsonld.DDICDIModels.@id",
                             "cdif_jsonld.DDICDIModels.@type",
                             "cdif_jsonld.DDICDIModels.name",
-                            "cdif_jsonld.DDICDIModels.displayLabel",
-                            "cdif_jsonld.DDICDIModels.physicalDataType",
+                            "cdif_jsonld.DDICDIModels.displayLabel.locationVariant.entryValue",
+                            "cdif_jsonld.DDICDIModels.physicalDataType.entryValue",
                             "cdif_jsonld.DDICDIModels.dct:description",
-                            "cdif_jsonld.DDICDIModels.definition",
+                            "cdif_jsonld.DDICDIModels.definition.content",
                             "cdif_jsonld.DDICDIModels.schema:unitText",
-                            "cdif_jsonld.schema:variableMeasured",
-                            "cdif_jsonld.variableMeasured",
-                            "cdif_jsonld.schema:distribution",
-                            "cdif_jsonld.distribution"
+                            "cdif_jsonld.schema:variableMeasured.@id",
+                            "cdif_jsonld.schema:variableMeasured.@type",
+                            "cdif_jsonld.schema:variableMeasured.schema:name",
+                            "cdif_jsonld.schema:variableMeasured.name",
+                            "cdif_jsonld.schema:variableMeasured.schema:description",
+                            "cdif_jsonld.schema:variableMeasured.description",
+                            "cdif_jsonld.schema:variableMeasured.cdif:physicalDataType",
+                            "cdif_jsonld.schema:variableMeasured.physicalDataType",
+                            "cdif_jsonld.schema:variableMeasured.schema:unitText",
+                            "cdif_jsonld.variableMeasured"
                         ]
                     }
                     resp = await client.post(f"{es_url}/cdif/_search", json=payload)
@@ -11533,8 +11994,7 @@ Instructions:
             """
             import asyncio, os
             from starlette.responses import JSONResponse
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
-            asyncio.create_task(update_variables_index_cache(es_url))
+            asyncio.create_task(update_variables_index_cache())
             return JSONResponse({"status": "ok", "message": "Variables cache update initiated in background"})
 
         async def api_variable_index_data(request):
@@ -11551,10 +12011,21 @@ Instructions:
             offset = int(offset_param) if offset_param and offset_param.isdigit() else 0
             q_param = (request.query_params.get("q") or request.query_params.get("query") or "").strip()
 
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_candidates = get_elasticsearch_lookup_urls()
+            active_es = None
+            for cand in es_candidates:
+                try:
+                    async with httpx.AsyncClient(timeout=3.0) as chk:
+                        r = await chk.get(f"{cand}/cdif/_count")
+                        if r.status_code == 200:
+                            active_es = cand
+                            break
+                except Exception:
+                    continue
+            es_url = active_es or (es_candidates[0] if es_candidates else os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/"))
 
             # Check if cache hit is available for instant response (fast statistical values + first 100 records)
-            if not q_param and offset == 0:
+            if not q_param and offset == 0 and active_es:
                 try:
                     async with httpx.AsyncClient(timeout=4.0) as cache_client:
                         cache_res = await cache_client.get(f"{es_url}/cache/_doc/variables_index_summary")
@@ -11621,22 +12092,35 @@ Instructions:
                 else:
                     es_query = {"match_all": {}}
 
+                clean_re = re.compile(r"[()/\-_]+") if q_param else None
+                # Optimize source fields to avoid transmitting megabytes of redundant metadata
+                source_fields = [
+                    "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url", "collection_id",
+                    "title", "description",
+                    "cdif_jsonld.DDICDIModels.@type",
+                    "cdif_jsonld.DDICDIModels.name",
+                    "cdif_jsonld.DDICDIModels.displayLabel.locationVariant.entryValue",
+                    "cdif_jsonld.DDICDIModels.physicalDataType.entryValue",
+                    "cdif_jsonld.DDICDIModels.dct:description",
+                    "cdif_jsonld.DDICDIModels.definition.content",
+                    "cdif_jsonld.DDICDIModels.schema:unitText",
+                    "cdif_jsonld.schema:variableMeasured.@id",
+                    "cdif_jsonld.schema:variableMeasured.@type",
+                    "cdif_jsonld.schema:variableMeasured.schema:name",
+                    "cdif_jsonld.schema:variableMeasured.name",
+                    "cdif_jsonld.schema:variableMeasured.schema:description",
+                    "cdif_jsonld.schema:variableMeasured.description",
+                    "cdif_jsonld.schema:variableMeasured.cdif:physicalDataType",
+                    "cdif_jsonld.schema:variableMeasured.physicalDataType",
+                    "cdif_jsonld.schema:variableMeasured.schema:unitText",
+                    "cdif_jsonld.variableMeasured"
+                ]
+
+                query_size = 1000 if q_param else (min(limit, 300) if limit else 300)
                 payload = {
                     "query": es_query,
-                    "size": 10000,
-                    "_source": [
-                        "dataset_id", "file_name", "file_url", "dataset_url", "cdif_export_url", "collection_id",
-                        "title", "description",
-                        "cdif_jsonld.DDICDIModels.@type",
-                        "cdif_jsonld.DDICDIModels.name",
-                        "cdif_jsonld.DDICDIModels.displayLabel",
-                        "cdif_jsonld.DDICDIModels.physicalDataType",
-                        "cdif_jsonld.DDICDIModels.dct:description",
-                        "cdif_jsonld.DDICDIModels.definition",
-                        "cdif_jsonld.DDICDIModels.schema:unitText",
-                        "cdif_jsonld.schema:variableMeasured",
-                        "cdif_jsonld.variableMeasured"
-                    ]
+                    "size": query_size,
+                    "_source": source_fields
                 }
                 async with httpx.AsyncClient(timeout=60.0) as client:
                     resp = await client.post(f"{es_url}/cdif/_search", json=payload)
@@ -11732,6 +12216,13 @@ Instructions:
                                                     matched_var_ids.add(v_id)
                                                     matched_var_ids.add(v_id.lstrip("#"))
 
+                        # Compute missing tokens for this document header if query specified
+                        missing_tokens = None
+                        if q_param and tokens:
+                            doc_header = f"{dtitle} {fname}".lower()
+                            doc_header_norm = clean_re.sub(" ", doc_header) if clean_re else doc_header
+                            missing_tokens = [t for t in tokens if t not in doc_header_norm and t not in doc_header]
+
                         models = cdif_json.get("DDICDIModels", [])
                         var_meas = cdif_json.get("schema:variableMeasured") or cdif_json.get("variableMeasured") or []
 
@@ -11745,6 +12236,9 @@ Instructions:
                                 file_var_count += 1
                                 raw_name = m.get("name", {})
                                 var_name = raw_name.get("name", "") if isinstance(raw_name, dict) else str(raw_name or "")
+                                var_name = var_name.lstrip("#").strip()
+                                if not var_name:
+                                    continue
 
                                 raw_disp = m.get("displayLabel", {})
                                 loc_var = raw_disp.get("locationVariant", {}) if isinstance(raw_disp, dict) else {}
@@ -11759,6 +12253,20 @@ Instructions:
                                 if not desc:
                                     raw_def = m.get("definition", {})
                                     desc = raw_def.get("content", "") if isinstance(raw_def, dict) else str(raw_def or "")
+
+                                # Fast pre-filter against missing tokens
+                                if missing_tokens:
+                                    name_l = var_name.lower()
+                                    desc_l = str(desc).lower()
+                                    label_l = str(disp_label).lower()
+                                    matched_all = True
+                                    for t in missing_tokens:
+                                        if t not in name_l and t not in desc_l and t not in label_l:
+                                            if clean_re and (t not in clean_re.sub(" ", name_l) and t not in clean_re.sub(" ", desc_l) and t not in clean_re.sub(" ", label_l)):
+                                                matched_all = False
+                                                break
+                                    if not matched_all:
+                                        continue
 
                                 unit = m.get("schema:unitText") or ""
 
@@ -11800,9 +12308,26 @@ Instructions:
                                     file_var_count += 1
                                     raw_name = vm.get("schema:name") or vm.get("name") or vm.get("@id", "")
                                     var_name = str(raw_name).lstrip("#").strip()
+                                    if not var_name:
+                                        continue
                                     disp_label = str(vm.get("schema:description") or vm.get("description") or var_name).strip()
                                     data_type = str(vm.get("cdif:physicalDataType") or vm.get("physicalDataType") or "unspecified").replace("xsd:", "")
                                     desc = str(vm.get("schema:description") or vm.get("description") or "")
+
+                                    # Fast pre-filter against missing tokens
+                                    if missing_tokens:
+                                        name_l = var_name.lower()
+                                        desc_l = desc.lower()
+                                        label_l = disp_label.lower()
+                                        matched_all = True
+                                        for t in missing_tokens:
+                                            if t not in name_l and t not in desc_l and t not in label_l:
+                                                if clean_re and (t not in clean_re.sub(" ", name_l) and t not in clean_re.sub(" ", desc_l) and t not in clean_re.sub(" ", label_l)):
+                                                    matched_all = False
+                                                    break
+                                        if not matched_all:
+                                            continue
+
                                     unit = str(vm.get("schema:unitText") or vm.get("unitText") or "")
 
                                     var_key = (did, fname, var_name)
@@ -11856,7 +12381,8 @@ Instructions:
                                     "query": ds_query,
                                     "size": 50,
                                     "_source": [
-                                        "name", "title", "url", "_source_url", "distribution",
+                                        "name", "title", "url", "_source_url",
+                                        "distribution.name", "distribution.@id", "distribution.contentUrl",
                                         "recordSet.name", "recordSet.field.name",
                                         "recordSet.field.description", "recordSet.field.dataType",
                                         "recordSet.field.source"
@@ -11941,6 +12467,73 @@ Instructions:
                         except Exception as ds_fallback_err:
                             print(f"Warning: could not search dataset fields: {ds_fallback_err}", file=sys.stderr)
 
+                    if not all_variables:
+                        # Fallback to querying QLever SPARQL for InstanceVariable records
+                        qlever_urls = get_qlever_lookup_urls()
+                        for q_url in qlever_urls:
+                            try:
+                                sparql_limit = limit if (limit and not q_param) else 100
+                                sparql_query = f"""
+                                PREFIX ddicdi: <http://ddialliance.org/Specification/DDI-CDI/1.0/RDF/>
+                                PREFIX schema: <http://schema.org/>
+                                SELECT ?v ?name ?desc ?dtype ?ds ?ds_title ?ds_url ?file_name WHERE {{
+                                  ?v a ddicdi:InstanceVariable .
+                                  OPTIONAL {{ ?v schema:name ?name }}
+                                  OPTIONAL {{ ?v schema:description ?desc }}
+                                  OPTIONAL {{ ?v ddicdi:hasIntendedDataType ?dtype }}
+                                  OPTIONAL {{
+                                    ?ds schema:variableMeasured ?v .
+                                    OPTIONAL {{ ?ds schema:name ?ds_title }}
+                                    OPTIONAL {{ ?ds schema:url ?ds_url }}
+                                  }}
+                                  OPTIONAL {{
+                                    ?file ddicdi:DataStore-has_InstanceVariable ?v .
+                                    OPTIONAL {{ ?file schema:name ?file_name }}
+                                  }}
+                                }} LIMIT {sparql_limit}
+                                """
+                                async with httpx.AsyncClient(timeout=10.0) as q_client:
+                                    q_resp = await q_client.post(
+                                        q_url,
+                                        content=sparql_query,
+                                        headers={"Content-Type": "application/sparql-query", "Accept": "application/sparql-results+json"}
+                                    )
+                                    if q_resp.status_code == 200:
+                                        bindings = q_resp.json().get("results", {}).get("bindings", [])
+                                        for b in bindings:
+                                            v_raw = b.get("name", {}).get("value", "") or b.get("v", {}).get("value", "")
+                                            v_name = v_raw.lstrip("#").strip()
+                                            v_desc = b.get("desc", {}).get("value", "") or v_name
+                                            v_dt_uri = b.get("dtype", {}).get("value", "")
+                                            v_type = v_dt_uri.split("#")[-1] if "#" in v_dt_uri else (v_dt_uri.split("/")[-1] if v_dt_uri else "string")
+                                            ds_uri = b.get("ds", {}).get("value", "")
+                                            ds_title = b.get("ds_title", {}).get("value", "") or ""
+                                            ds_url = b.get("ds_url", {}).get("value", "")
+                                            fname = b.get("file_name", {}).get("value", "")
+                                            if not fname and ds_uri:
+                                                fname = ds_uri.split("file=")[-1].split("&")[0] if "file=" in ds_uri else ""
+                                                fname = urllib.parse.unquote(fname)
+                                            cdif_link = ds_uri or (f"https://{MCP_DOMAIN}/export?q={urllib.parse.quote(v_name)}" if v_name else "")
+                                            
+                                            all_variables.append({
+                                                "variable_name": v_name or "variable",
+                                                "display_label": v_name or "variable",
+                                                "data_type": v_type,
+                                                "description": v_desc,
+                                                "unit": "",
+                                                "file_name": fname or "QLever Graph",
+                                                "file_url": "",
+                                                "dataset_url": ds_url,
+                                                "dataset_id": "",
+                                                "dataset_title": ds_title or "DDI-CDI InstanceVariables",
+                                                "collection_id": "",
+                                                "cdif_export_url": cdif_link
+                                            })
+                                        if all_variables:
+                                            break
+                            except Exception as q_err:
+                                print(f"Warning: could not fetch variables from QLever {q_url}: {q_err}", file=sys.stderr)
+
                     if q_param and tokens:
                         filtered_vars = []
                         for v in all_variables:
@@ -11982,7 +12575,18 @@ Instructions:
             if not query:
                 return JSONResponse({"answer": "Please provide a question about the variables."})
 
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_candidates = get_elasticsearch_lookup_urls()
+            active_es = None
+            for cand in es_candidates:
+                try:
+                    async with httpx.AsyncClient(timeout=3.0) as chk:
+                        r = await chk.get(f"{cand}/cdif/_count")
+                        if r.status_code == 200:
+                            active_es = cand
+                            break
+                except Exception:
+                    continue
+            es_url = active_es or (es_candidates[0] if es_candidates else os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/"))
             payload = {
                 "query": {"match_all": {}},
                 "size": 10000,
@@ -12540,7 +13144,7 @@ Output a JSON object with:
                             import uuid, datetime, io
                             from minio import Minio
                             es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
-                            minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+                            minio_base = get_minio_base_url()
                             endpoint = minio_base.replace("http://", "").replace("https://", "")
                             m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
                             
@@ -13092,6 +13696,7 @@ Output a JSON object with:
             from starlette.responses import JSONResponse
             
             url = request.query_params.get("url")
+            vision_param = request.query_params.get("vision", "").lower() in ("true", "1", "yes")
             
             if not url:
                 return JSONResponse({"detail": "Missing url parameter"}, status_code=400)
@@ -13102,6 +13707,8 @@ Output a JSON object with:
                     script_path = "convertors/url_to_croissant.py"
                     
                 cmd = ["python3", script_path, url, "--elastic"]
+                if vision_param:
+                    cmd.append("--computer-vision")
                 
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -13177,6 +13784,9 @@ Output a JSON object with:
                 Route("/api/variables/explain/save", endpoint=api_variables_explain_save, methods=["POST"]),
                 Route("/api/text/process", endpoint=process_text, methods=["POST"]),
                 Route("/logo.png", endpoint=serve_logo),
+                Route("/dumps", endpoint=serve_dumps, methods=["GET"]),
+                Route("/dumps/", endpoint=serve_dumps, methods=["GET"]),
+                Route("/dumps/{filepath:path}", endpoint=serve_dumps, methods=["GET"]),
                 Route("/", endpoint=index),
                 Route("/sse", endpoint=handle_sse),
 
@@ -13213,6 +13823,8 @@ Output a JSON object with:
                 Route("/robots.txt", endpoint=view_robots_txt, methods=["GET"]),
                 Route("/export", endpoint=export_to_cdif, methods=["GET", "POST"]),
                 Route("/api/export", endpoint=export_to_cdif, methods=["GET", "POST"]),
+                Route("/spatial-query", endpoint=proxy_mcp_spatial_query, methods=["GET", "POST"]),
+                Route("/api/spatial-query", endpoint=proxy_mcp_spatial_query, methods=["GET", "POST"]),
                 Route("/vault/doc/{es_id}", endpoint=vault_es_doc_html),
                 Route("/vault/doc/{es_id}/annotations", endpoint=vault_es_doc_html),
                 Route("/vault/history", endpoint=vault_get_history, methods=["GET"]),
