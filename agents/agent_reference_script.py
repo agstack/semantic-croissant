@@ -13,7 +13,7 @@ with open(CONFIG_PATH, "r", encoding="utf-8") as f:
     config = json.load(f)
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", config.get("OLLAMA_HOST", "http://10.147.18.24:11444"))
-MODEL = os.environ.get("MODEL") or os.environ.get("OLLAMA_DEFAULT_MODEL") or config.get("MODEL") or "gemma4:e4b"
+MODEL = os.environ.get("MODEL") or os.environ.get("OLLAMA_DEFAULT_MODEL") or config.get("MODEL") or "gemma4:e2b"
 OLLAMA_TOKEN = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
 MCP_URL = os.environ.get("MCP_URL", config.get("MCP_URL", "http://localhost:7070/sse"))
 AI_MODEL_OVERRIDE = os.environ.get("AI_MODEL_OVERRIDE", config.get("ai_model_override", "Semantic Croissant AI Agent v.0.1"))

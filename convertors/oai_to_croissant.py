@@ -6,7 +6,7 @@ import urllib.parse
 import os
 from rdflib import Graph
 
-OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL", os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e4b"))
+OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL", os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e2b"))
 MODEL_NAME = os.environ.get("MODEL_NAME") or os.environ.get("MODEL") or OLLAMA_DEFAULT_MODEL
 
 def fetch_oai_ore(doi):

@@ -20,7 +20,7 @@ import os
 API_BASE = os.environ.get("API_BASE", "http://localhost:7013")
 MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "mcp.dev.codata.org")
 HOST = os.environ.get("HOST", f"https://{MCP_DOMAIN}")
-OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e4b")
+OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e2b")
 
 def get_nodes_config() -> dict:
     """
@@ -370,7 +370,7 @@ def render_html_template(file_path: str, request=None, auth_status=None):
     
     html = html.replace('{{VAULT_LOGO_HTML}}', logo_html)
     html = html.replace('{{VAULT_FOOTER_HTML}}', footer_html)
-    default_model = os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e4b")
+    default_model = os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e2b")
     html = html.replace('{{OLLAMA_DEFAULT_MODEL}}', default_model)
     
     if '{{LOGIN_BUTTON_HTML}}' in html and request:
@@ -12359,7 +12359,7 @@ CDIF EXPORT VARIABLES CONTEXT:
             pass
             # Allow user to specify model or default to OLLAMA_DEFAULT_MODEL
             req_model = body.get("model") or body.get("ai_model")
-            model = req_model or os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e4b")
+            model = req_model or os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e2b")
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
 
@@ -12397,7 +12397,7 @@ CDIF EXPORT VARIABLES CONTEXT:
             body = await request.json()
             markdown_content = body.get("markdown") or body.get("content") or ""
             filter_query = body.get("filter", "") or body.get("query", "")
-            model_name = body.get("model") or os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e4b")
+            model_name = body.get("model") or os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e2b")
             variables = body.get("variables", [])
             cdif_export_url = body.get("cdif_export_url") or ""
 

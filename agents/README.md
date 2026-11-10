@@ -16,14 +16,14 @@ Agent settings are managed in `agent.config`. This file controls the target LLM 
 ```json
 {
   "OLLAMA_HOST": "http://10.147.18.82:11435",
-  "MODEL": "gemma4:e4b",
+  "MODEL": "gemma4:e2b",
   "MCP_URL": "http://localhost:7070/sse",
   "ai_model_override": "Semantic Croissant AI Agent v.0.1"
 }
 ```
 
 - `OLLAMA_HOST`: The endpoint for the Ollama inference server.
-- `MODEL`: The specific LLM to use (e.g., `gemma4:e4b`).
+- `MODEL`: The specific LLM to use (e.g., `gemma4:e2b`).
 - `MCP_URL`: The MCP server endpoint (defaults to SSE at port 7070).
 - `ai_model_override`: The signature/attribution string appended to generated Vault datasets.
 
