@@ -5583,6 +5583,14 @@ def main(port: int, transport: str) -> int:
             return JSONResponse({"status": "ok"})
             
         
+        # MinIO helper function
+        def get_minio_client():
+            import os
+            minio_base = get_minio_base_url()
+            from minio import Minio
+            endpoint = minio_base.replace("http://", "").replace("https://", "")
+            return Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
+
         async def vault_ask(request):
             try:
                 data = await request.json()
@@ -5592,24 +5600,125 @@ def main(port: int, transport: str) -> int:
                 file_name = data.get("file_name", "").strip()
                 doc_id = data.get("doc_id", "").strip()
 
+                # If context contains a giant HTML or markdown distribution table with hundreds of rows, condense it
+                if context_text and ('<table class="dist-table">' in context_text or '| File |' in context_text):
+                    try:
+                        # 1. HTML dist-table condensation
+                        if '<table class="dist-table">' in context_text and '</tbody>' in context_text:
+                            start_tbl = context_text.find('<table class="dist-table">')
+                            end_tbody = context_text.find('</tbody>', start_tbl)
+                            if end_tbody != -1:
+                                table_chunk = context_text[start_tbl:end_tbody]
+                                tr_splits = table_chunk.split('<tr>')
+                                if len(tr_splits) > 12:
+                                    header_tr = tr_splits[1]
+                                    top_trs = tr_splits[2:8]
+                                    condensed_html = '<tr>' + header_tr + '<tr>' + '<tr>'.join(top_trs) + f'\n<tr><td colspan="7"><em>... [Truncated: showing first 6 of {len(tr_splits)-2} files in table]</em></td></tr>\n'
+                                    context_text = context_text[:start_tbl] + '<table class="dist-table">' + condensed_html + context_text[end_tbody:]
+
+                        # 2. Markdown table condensation
+                        if '### Files & Distributions' in context_text or '| File |' in context_text:
+                            md_lines = context_text.splitlines()
+                            filtered_lines = []
+                            in_table = False
+                            table_row_count = 0
+                            for line in md_lines:
+                                if line.strip().startswith('| File |') or line.strip().startswith('| **File** |'):
+                                    in_table = True
+                                    table_row_count = 0
+                                    filtered_lines.append(line)
+                                    continue
+                                if in_table:
+                                    if line.strip().startswith('|'):
+                                        table_row_count += 1
+                                        if table_row_count <= 8:  # header + separator + top 6 rows
+                                            filtered_lines.append(line)
+                                        elif table_row_count == 9:
+                                            filtered_lines.append(f"| ... [Remaining table rows truncated: see CROISSANT DATASET FILES SUMMARY for full count] | | | | | | |")
+                                    else:
+                                        in_table = False
+                                        filtered_lines.append(line)
+                                else:
+                                    filtered_lines.append(line)
+                            context_text = "\n".join(filtered_lines)
+                    except Exception as cond_err:
+                        pass
+
+                # If doc_id was not explicitly passed, inspect question, context_text, and file_url for vault doc IDs or .jsonld URLs
+                if not doc_id:
+                    import re
+                    for txt_src in [question, context_text, file_url]:
+                        if txt_src:
+                            m_v = re.search(r'/vault/(?:doc/)?([a-zA-Z0-9_-]{16,})(?:\.jsonld|\.md)?', txt_src)
+                            if m_v:
+                                doc_id = m_v.group(1)
+                                break
+
                 # If doc_id is provided, fetch the full Croissant JSON-LD record and include it in context
+                croissant_doc_dict = None
+                croissant_summary_snippet = ""
                 if doc_id:
                     try:
-                        import httpx
                         clean_id = doc_id.replace(".jsonld", "").replace(".md", "")
-                        # Fetch the full Croissant record from the Vault
-                        m_client = get_minio_client()
+                        # Fetch the full Croissant record from the Vault (try MinIO first, then fallback to local endpoint)
+                        croissant_json = ""
                         try:
+                            m_client = get_minio_client()
                             j_resp = m_client.get_object("vault", f"{clean_id}.jsonld")
                             croissant_json = j_resp.read().decode("utf-8")
                             j_resp.close()
                             j_resp.release_conn()
-                            if croissant_json:
-                                context_text = "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + croissant_json + "\n\n" + context_text
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
+                        except Exception as m_err:
+                            # Fallback via local HTTP if MinIO direct call fails
+                            try:
+                                import urllib.request
+                                with urllib.request.urlopen(f"http://127.0.0.1:7070/vault/doc/raw/{clean_id}.jsonld", timeout=5) as u_resp:
+                                    croissant_json = u_resp.read().decode("utf-8")
+                            except Exception:
+                                pass
+
+                        if croissant_json:
+                            try:
+                                import json
+                                croissant_doc_dict = json.loads(croissant_json)
+                            except Exception:
+                                pass
+
+                            # Build an explicit, high-level summary of the dataset distributions and count
+                            if croissant_doc_dict:
+                                dists_list = croissant_doc_dict.get("distribution") or croissant_doc_dict.get("fileObject") or []
+                                if isinstance(dists_list, list):
+                                    total_files = len(dists_list)
+                                    ext_counts = {}
+                                    sample_names = []
+                                    for d_item in dists_list:
+                                        if isinstance(d_item, dict):
+                                            nm = d_item.get("name", "")
+                                            ext = nm.split(".")[-1].lower() if "." in nm else "other"
+                                            ext_counts[ext] = ext_counts.get(ext, 0) + 1
+                                            if len(sample_names) < 15 and nm:
+                                                sample_names.append(nm)
+                                    ext_summary = ", ".join(f"{k}: {v}" for k, v in sorted(ext_counts.items(), key=lambda x: -x[1]))
+                                    croissant_summary_snippet = (
+                                        f"=== CROISSANT DATASET FILES SUMMARY (Record: {clean_id}) ===\n"
+                                        f"- Total Distribution Files in Dataset: {total_files}\n"
+                                        f"- File Formats Breakdown: {ext_summary}\n"
+                                        f"- Sample Files (first {len(sample_names)}): {', '.join(sample_names)}\n\n"
+                                    )
+
+                                # If distributions list is massive (e.g. hundreds of items), trim the distribution array inside the JSON-LD snippet
+                                # to preserve complete dataset metadata (name, creators, datePublished, license, description) under LLM context limits
+                                jsonld_to_inject = croissant_json
+                                if croissant_doc_dict and isinstance(croissant_doc_dict.get("distribution"), list) and len(croissant_doc_dict["distribution"]) > 15:
+                                    import copy, json
+                                    trimmed_doc = copy.deepcopy(croissant_doc_dict)
+                                    trimmed_doc["distribution"] = trimmed_doc["distribution"][:10]
+                                    trimmed_doc["distribution_note"] = f"Showing first 10 of {total_files} distributions. See CROISSANT DATASET FILES SUMMARY above for complete totals and format breakdown."
+                                    jsonld_to_inject = json.dumps(trimmed_doc, indent=2)
+
+                            context_text = croissant_summary_snippet + "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + jsonld_to_inject + "\n\n" + context_text
+                    except Exception as doc_err:
+                        print(f"Warning: doc_id handling error in vault_ask: {doc_err}")
                 model_name = data.get("model", OLLAMA_DEFAULT_MODEL).strip()
                 if not model_name:
                     model_name = OLLAMA_DEFAULT_MODEL
@@ -5700,6 +5809,146 @@ def main(port: int, transport: str) -> int:
 
                 if file_content_snippet:
                     context_text = context_text + file_content_snippet
+
+                # Fetch and attach CDIF (DDI-CDI) export representation into prompt context
+                try:
+                    import re, json, httpx
+                    cdif_targets = []
+                    # 1. Search for explicit /export? in question, context_text, or file_url
+                    exp_pattern = r'(?:https?://[^\s/]+)?/export\?[^\s\"\'\`<>)]+'
+                    for txt_source in [question, context_text, file_url]:
+                        if txt_source:
+                            matches = re.findall(exp_pattern, txt_source)
+                            for m in matches:
+                                if m not in cdif_targets:
+                                    cdif_targets.append(m)
+
+                    # 2. Check if a specific file_url or file_name matches a distribution in croissant_doc_dict
+                    if croissant_doc_dict and (file_url or file_name or len(cdif_targets) == 0):
+                        dists = croissant_doc_dict.get("distribution", [])
+                        matched_exp = None
+                        if isinstance(dists, list):
+                            for d in dists:
+                                if not isinstance(d, dict):
+                                    continue
+                                d_curl = d.get("contentUrl") or d.get("downloadUrl") or ""
+                                d_name = d.get("name") or ""
+                                exp_id = ""
+                                subj = d.get("subjectOf")
+                                if isinstance(subj, dict) and "/export?" in subj.get("@id", ""):
+                                    exp_id = subj.get("@id")
+                                elif "/export?" in d.get("@id", ""):
+                                    exp_id = d.get("@id")
+
+                                if exp_id:
+                                    # Match against file_url or file_name if present
+                                    if file_url and (file_url in d_curl or d_curl in file_url):
+                                        matched_exp = exp_id
+                                        break
+                                    if file_name and (file_name == d_name or d_name in file_name):
+                                        matched_exp = exp_id
+                                        break
+                                    if not matched_exp:
+                                        # Keep the first distribution's export as candidate
+                                        matched_exp = exp_id
+
+                        if matched_exp and matched_exp not in cdif_targets:
+                            cdif_targets.append(matched_exp)
+
+                    # Fetch CDIF export payloads and append to context
+                    cdif_snippets = []
+                    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as exp_client:
+                        for exp_target in cdif_targets[:3]:  # Limit to up to 3 CDIF exports to prevent context explosion
+                            try:
+                                # Convert to internal endpoint if pointing to localhost or public domain
+                                if exp_target.startswith("/"):
+                                    fetch_url = f"http://127.0.0.1:7070{exp_target}"
+                                elif "export?" in exp_target:
+                                    query_s = exp_target.split("export?", 1)[-1]
+                                    fetch_url = f"http://127.0.0.1:7070/export?{query_s}"
+                                else:
+                                    fetch_url = exp_target
+
+                                resp_cdif = await exp_client.get(fetch_url, headers={"User-Agent": "Claude/QA-Context"})
+                                if resp_cdif.status_code == 200:
+                                    cdif_data = resp_cdif.json()
+                                    models = cdif_data.get("DDICDIModels", [])
+
+                                    # Reconstruct sample tabular rows if present in DDI-CDI microdata
+                                    sample_table_str = ""
+                                    cdif_stat_summary = ""
+                                    if isinstance(models, list):
+                                        ivs = [m for m in models if isinstance(m, dict) and m.get("@type") == "InstanceVariable"]
+                                        col_order = [m.get("name", {}).get("name") if isinstance(m.get("name"), dict) else str(m.get("name", "")) for m in ivs]
+                                        sample_rows = {}
+                                        for m in models:
+                                            if isinstance(m, dict) and m.get("@type") == "InstanceValue":
+                                                dp_id = m.get("isStoredIn")
+                                                content = m.get("content", {})
+                                                val = content.get("content") if isinstance(content, dict) else str(content)
+                                                if dp_id and dp_id.startswith("#dataPoint-"):
+                                                    parts = dp_id.replace("#dataPoint-", "").split("-", 1)
+                                                    if len(parts) == 2:
+                                                        try:
+                                                            r_idx = int(parts[0])
+                                                            var_k = parts[1]
+                                                            sample_rows.setdefault(r_idx, {})[var_k] = val
+                                                        except Exception:
+                                                            pass
+
+                                        rec_count = None
+                                        file_title = cdif_data.get("dct:title") or ""
+                                        for m in models:
+                                            if isinstance(m, dict) and "recordCount" in m:
+                                                rec_count = m.get("recordCount")
+                                                break
+
+                                        total_files_in_archives = 0
+                                        has_file_count_col = "file_count" in col_order
+                                        if has_file_count_col:
+                                            for r_data in sample_rows.values():
+                                                if "file_count" in r_data:
+                                                    try:
+                                                        total_files_in_archives += int(r_data["file_count"])
+                                                    except Exception:
+                                                        pass
+
+                                        stats_lines = []
+                                        stats_lines.append(f"=== CDIF FILE & DATASET SUMMARY ({file_title or exp_target}) ===")
+                                        if rec_count is not None:
+                                            stats_lines.append(f"- Total Tabular Records / Rows in file: {rec_count}")
+                                        if total_files_in_archives > 0:
+                                            stats_lines.append(f"- Total Files listed inside archive records (sample sum): {total_files_in_archives:,}")
+                                        cdif_stat_summary = "\n".join(stats_lines) + "\n\n"
+
+                                        if sample_rows and col_order:
+                                            header = "| " + " | ".join(col_order) + " |"
+                                            sep = "| " + " | ".join(["---"] * len(col_order)) + " |"
+                                            t_lines = [f"\nSample Data Extracted from CDIF ({len(sample_rows)} rows of {rec_count or len(sample_rows)} total):", header, sep]
+                                            for r_i in sorted(sample_rows.keys()):
+                                                r_obj = sample_rows[r_i]
+                                                t_lines.append("| " + " | ".join(str(r_obj.get(c, "")) for c in col_order) + " |")
+                                            sample_table_str = "\n".join(t_lines) + "\n"
+
+                                    # Filter heavy microdata (positions, raw datapoints) to keep schema, variables, and metadata clean
+                                    heavy_types = {
+                                        "DataPoint", "DataPointPosition", "InstanceValue",
+                                        "PhysicalMappingPosition", "ComponentPosition", "TextMapping",
+                                        "SegmentPosition", "Segment", "SubstantiveValueDomain",
+                                        "ValueAndConceptDescription", "MeasureComponent"
+                                    }
+                                    if isinstance(models, list):
+                                        cdif_data["DDICDIModels"] = [m for m in models if isinstance(m, dict) and m.get("@type") not in heavy_types]
+
+                                    cdif_json_str = json.dumps(cdif_data, indent=2)
+                                    cdif_snippets.append(f"{cdif_stat_summary}=== CDIF (DDI-CDI) EXPORT ({exp_target}) ===\n{cdif_json_str}\n{sample_table_str}")
+                            except Exception as exp_err:
+                                print(f"Warning: Failed to fetch CDIF export for QA prompt ({exp_target}): {exp_err}")
+
+                    if cdif_snippets:
+                        context_text = "\n\n".join(cdif_snippets) + "\n\n" + context_text
+                except Exception as ex_cdif:
+                    print(f"Warning: Error processing CDIF export for QA prompt: {ex_cdif}")
                     
                 prompt = f"""Context:
 {context_text}
@@ -5716,7 +5965,7 @@ Please answer the question based ONLY on the context provided above (including t
                 import os
                 
                 if not model_name or model_name in ["default", "llama3.1"]:
-                    model_name = os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:31b"
+                    model_name = os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:e2b"
 
                 def run_agent():
                     env = os.environ.copy()

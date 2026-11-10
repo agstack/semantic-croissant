@@ -1093,11 +1093,12 @@
                             newHistory.push(currentQA);
                         }
                         
+                        const currentDocId = (typeof getDocId === 'function') ? getDocId() : (window.docId || '');
                         try {
                             const res = await fetch('/vault/ask', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ context: fetchContext, question: nextQ, model: modelUsed, doc_id: docId })
+                                body: JSON.stringify({ context: fetchContext, question: nextQ, model: modelUsed, doc_id: currentDocId })
                             });
                             const result = await res.json();
                             document.body.removeChild(modal);
@@ -1160,11 +1161,13 @@
             btnSubmitAsk.disabled = true;
             btnSubmitAsk.textContent = 'Thinking...';
             
+            const currentDocId = (typeof getDocId === 'function') ? getDocId() : (window.docId || '');
+            
             try {
                 const response = await fetch('/vault/ask', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ context: currentSelection, question: question, model: selectedModel, doc_id: docId })
+                    body: JSON.stringify({ context: currentSelection, question: question, model: selectedModel, doc_id: currentDocId })
                 });
                 const result = await response.json();
                 
@@ -2137,11 +2140,12 @@
                         } catch(e) {}
                     }
                     
+                    const currentDocId = (typeof getDocId === 'function') ? getDocId() : (window.docId || '');
                     try {
                         const response = await fetch('/vault/ask', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ context: fullContext, question: question, model: model, doc_id: docId })
+                            body: JSON.stringify({ context: fullContext, question: question, model: model, doc_id: currentDocId })
                         });
                         const result = await response.json();
                         
@@ -3104,6 +3108,7 @@
                 : ('Thinking and running ' + action + ' tool...');
             showQAModal(question, loadingMsg, null, promptContext, [], selectedModel, true);
 
+            const currentDocId = (typeof getDocId === 'function') ? getDocId() : (window.docId || '');
             try {
                 const response = await fetch('/vault/ask', {
                     method: 'POST',
@@ -3115,7 +3120,7 @@
                         file_url: fileUrl,
                         file_name: fileName,
                         action: action,
-                        doc_id: docId
+                        doc_id: currentDocId
                     })
                 });
                 const result = await response.json();
