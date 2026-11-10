@@ -5349,6 +5349,26 @@ def main(port: int, transport: str) -> int:
                 context_text = data.get("context", "").strip()
                 file_url = data.get("file_url", "").strip()
                 file_name = data.get("file_name", "").strip()
+                doc_id = data.get("doc_id", "").strip()
+
+                # If doc_id is provided, fetch the full Croissant JSON-LD record and include it in context
+                if doc_id:
+                    try:
+                        import httpx
+                        clean_id = doc_id.replace(".jsonld", "").replace(".md", "")
+                        # Fetch the full Croissant record from the Vault
+                        m_client = get_minio_client()
+                        try:
+                            j_resp = m_client.get_object("vault", f"{clean_id}.jsonld")
+                            croissant_json = j_resp.read().decode("utf-8")
+                            j_resp.close()
+                            j_resp.release_conn()
+                            if croissant_json:
+                                context_text = "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + croissant_json + "\n\n" + context_text
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
                 model_name = data.get("model", OLLAMA_DEFAULT_MODEL).strip()
                 if not model_name:
                     model_name = OLLAMA_DEFAULT_MODEL

@@ -1093,7 +1093,7 @@
                             const res = await fetch('/vault/ask', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ context: fetchContext, question: nextQ, model: modelUsed })
+                                body: JSON.stringify({ context: fetchContext, question: nextQ, model: modelUsed, doc_id: docId })
                             });
                             const result = await res.json();
                             document.body.removeChild(modal);
@@ -1160,7 +1160,7 @@
                 const response = await fetch('/vault/ask', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ context: currentSelection, question: question, model: selectedModel })
+                    body: JSON.stringify({ context: currentSelection, question: question, model: selectedModel, doc_id: docId })
                 });
                 const result = await response.json();
                 
@@ -2137,7 +2137,7 @@
                         const response = await fetch('/vault/ask', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ context: fullContext, question: question, model: model })
+                            body: JSON.stringify({ context: fullContext, question: question, model: model, doc_id: docId })
                         });
                         const result = await response.json();
                         
@@ -3106,7 +3106,8 @@
                         model: selectedModel,
                         file_url: fileUrl,
                         file_name: fileName,
-                        action: action
+                        action: action,
+                        doc_id: docId
                     })
                 });
                 const result = await response.json();
