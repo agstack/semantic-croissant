@@ -946,7 +946,11 @@
 
         // Reusable Q&A Modal
         function showQAModal(question, answer, errorMsg, originalContext, historyQA = [], modelUsed = 'llama3.1', isGlobalDocAsk = false) {
+            // Remove any existing QA modal before creating a new one
+            document.querySelectorAll('.qa-response-modal').forEach(m => m.remove());
+
             const modal = document.createElement('div');
+            modal.className = 'qa-response-modal';
             modal.style.cssText = "position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 9999;";
             
             const modalContent = document.createElement('div');
@@ -1089,11 +1093,12 @@
                             newHistory.push(currentQA);
                         }
                         
+                        const currentDocId = (typeof getDocId === 'function') ? getDocId() : (window.docId || '');
                         try {
                             const res = await fetch('/vault/ask', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ context: fetchContext, question: nextQ, model: modelUsed })
+                                body: JSON.stringify({ context: fetchContext, question: nextQ, model: modelUsed, doc_id: currentDocId })
                             });
                             const result = await res.json();
                             document.body.removeChild(modal);
@@ -1156,11 +1161,13 @@
             btnSubmitAsk.disabled = true;
             btnSubmitAsk.textContent = 'Thinking...';
             
+            const currentDocId = (typeof getDocId === 'function') ? getDocId() : (window.docId || '');
+            
             try {
                 const response = await fetch('/vault/ask', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ context: currentSelection, question: question, model: selectedModel })
+                    body: JSON.stringify({ context: currentSelection, question: question, model: selectedModel, doc_id: currentDocId })
                 });
                 const result = await response.json();
                 
@@ -2040,25 +2047,27 @@
                     .then(data => {
                         if (data.data && data.data.length > 0) {
                             let models = data.data;
-                            // Prioritize gemma4:31b-cloud first, then other -cloud models, then alphabetical
+                            // Prioritize server configured model or local models first
+                            const envDefault = '{{OLLAMA_DEFAULT_MODEL}}';
                             models.sort((a, b) => {
-                                const aId = (a.id || '').toLowerCase();
-                                const bId = (b.id || '').toLowerCase();
-                                if (aId.includes('gemma4:31b-cloud') || aId.includes('gemma4-31b-cloud') || aId.includes('gemma4-31b:cloud')) return -1;
-                                if (bId.includes('gemma4:31b-cloud') || bId.includes('gemma4-31b-cloud') || bId.includes('gemma4-31b:cloud')) return 1;
-
-                                const aCloud = aId.includes('-cloud');
-                                const bCloud = bId.includes('-cloud');
-                                if (aCloud && !bCloud) return -1;
-                                if (!aCloud && bCloud) return 1;
+                                if (a.id === envDefault) return -1;
+                                if (b.id === envDefault) return 1;
+                                const aCloud = (a.id || '').toLowerCase().includes('-cloud');
+                                const bCloud = (b.id || '').toLowerCase().includes('-cloud');
+                                if (!aCloud && bCloud) return -1;
+                                if (aCloud && !bCloud) return 1;
                                 return a.id.localeCompare(b.id);
                             });
 
-                            // Determine default model
-                            const defaultModel = models.find(m => {
-                                const id = (m.id || '').toLowerCase();
-                                return id.includes('gemma4:31b-cloud') || id.includes('gemma4-31b-cloud') || id.includes('gemma4-31b:cloud');
-                            }) || models.find(m => (m.id || '').toLowerCase().includes('-cloud')) || models[0];
+                            // Determine default model: prioritize server-configured OLLAMA_DEFAULT_MODEL, then first model
+                            const envDefaultModel = '{{OLLAMA_DEFAULT_MODEL}}';
+                            const defaultModel = models.find(m => m.id === envDefaultModel) ||
+                                models.find(m => {
+                                    const id = (m.id || '').toLowerCase();
+                                    return envDefaultModel && !envDefaultModel.startsWith('{{') && id === envDefaultModel.toLowerCase();
+                                }) ||
+                                models.find(m => !m.id.includes('-cloud')) ||
+                                models[0];
                             
                             models.forEach(m => {
                                 const opt = document.createElement('option');
@@ -2131,11 +2140,12 @@
                         } catch(e) {}
                     }
                     
+                    const currentDocId = (typeof getDocId === 'function') ? getDocId() : (window.docId || '');
                     try {
                         const response = await fetch('/vault/ask', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ context: fullContext, question: question, model: model })
+                            body: JSON.stringify({ context: fullContext, question: question, model: model, doc_id: currentDocId })
                         });
                         const result = await response.json();
                         
@@ -3098,6 +3108,7 @@
                 : ('Thinking and running ' + action + ' tool...');
             showQAModal(question, loadingMsg, null, promptContext, [], selectedModel, true);
 
+            const currentDocId = (typeof getDocId === 'function') ? getDocId() : (window.docId || '');
             try {
                 const response = await fetch('/vault/ask', {
                     method: 'POST',
@@ -3108,15 +3119,15 @@
                         model: selectedModel,
                         file_url: fileUrl,
                         file_name: fileName,
-                        action: action
+                        action: action,
+                        doc_id: currentDocId
                     })
                 });
                 const result = await response.json();
 
                 
-                // Remove previous loading modal
-                const oldModal = document.querySelector('div[style*="z-index: 9999"]');
-                if (oldModal) oldModal.remove();
+                // Remove previous loading modal safely
+                document.querySelectorAll('.qa-response-modal').forEach(m => m.remove());
 
                 if (result.success) {
                     showQAModal(question, result.answer, null, promptContext, [], selectedModel, true);
@@ -3124,8 +3135,7 @@
                     showQAModal(question, null, result.error || 'Operation failed', promptContext, [], selectedModel, true);
                 }
             } catch (err) {
-                const oldModal = document.querySelector('div[style*="z-index: 9999"]');
-                if (oldModal) oldModal.remove();
+                document.querySelectorAll('.qa-response-modal').forEach(m => m.remove());
                 showQAModal(question, null, err.message, promptContext, [], selectedModel, true);
             }
         }

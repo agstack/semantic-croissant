@@ -908,32 +908,23 @@
                 const data = await res.json();
                 modelSelect.innerHTML = '';
                 if (data.data && data.data.length > 0) {
-                    // Sort models: prioritize gemma4:31b-cloud first, then other -cloud models, then alphabetical
+                    // Sort models: prioritize configured default model, then local models, then alphabetical
+                    const envDefault = '{{OLLAMA_DEFAULT_MODEL}}';
                     data.data.sort((a, b) => {
-                        const aId = (a.id || '').toLowerCase();
-                        const bId = (b.id || '').toLowerCase();
-                        const aName = (a.display_name || a.id).toLowerCase();
-                        const bName = (b.display_name || b.id).toLowerCase();
-
-                        if (aId.includes('gemma4:31b-cloud') || aId.includes('gemma4-31b-cloud') || aId.includes('gemma4-31b:cloud')) return -1;
-                        if (bId.includes('gemma4:31b-cloud') || bId.includes('gemma4-31b-cloud') || bId.includes('gemma4-31b:cloud')) return 1;
-
-                        const aCloud = aId.includes('-cloud') || aName.includes('-cloud');
-                        const bCloud = bId.includes('-cloud') || bName.includes('-cloud');
-                        if (aCloud && !bCloud) return -1;
-                        if (!aCloud && bCloud) return 1;
-                        return aName.localeCompare(bName);
+                        if (a.id === envDefault) return -1;
+                        if (b.id === envDefault) return 1;
+                        const aCloud = (a.id || '').toLowerCase().includes('-cloud');
+                        const bCloud = (b.id || '').toLowerCase().includes('-cloud');
+                        if (!aCloud && bCloud) return -1;
+                        if (aCloud && !bCloud) return 1;
+                        return (a.display_name || a.id).localeCompare(b.display_name || b.id);
                     });
 
                     // Determine the default model ID
-                    const defaultModel = data.data.find(m => {
-                        const id = (m.id || '').toLowerCase();
-                        return id.includes('gemma4:31b-cloud') || id.includes('gemma4-31b-cloud') || id.includes('gemma4-31b:cloud');
-                    }) || data.data.find(m => {
-                        const id = (m.id || '').toLowerCase();
-                        const name = (m.display_name || '').toLowerCase();
-                        return id.includes('-cloud') || name.includes('-cloud');
-                    }) || data.data[0];
+                    const defaultModel = data.data.find(m => m.id === envDefault) ||
+                        data.data.find(m => m.id === 'gemma4:31b') ||
+                        data.data.find(m => !m.id.includes('-cloud')) ||
+                        data.data[0];
 
                     data.data.forEach(model => {
                         const opt = document.createElement('option');

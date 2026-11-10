@@ -20,7 +20,7 @@ import os
 API_BASE = os.environ.get("API_BASE", "http://localhost:7013")
 MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "mcp.dev.codata.org")
 HOST = os.environ.get("HOST", f"https://{MCP_DOMAIN}")
-OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:31b-cloud"
+OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e2b")
 
 def get_nodes_config() -> dict:
     """
@@ -190,6 +190,38 @@ def get_minio_base_url() -> str:
         return minio_global
     return os.environ.get("MINIO_URL", "http://minio:9000").rstrip("/")
 
+def get_vault_elasticsearch_url() -> str:
+    """
+    Returns the designated Elasticsearch base URL for vault operations.
+    Prioritizes ES_HOST as specified by system configuration.
+    Handles container networking: if running inside Docker and 'localhost' or '127.0.0.1' is specified,
+    rewrites to 'elasticsearch:9200'.
+    """
+    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+    raw_url = os.environ.get("ES_HOST") or os.environ.get("ELASTICSEARCH_URL") or os.environ.get("ES_GLOBAL_HOST") or "http://elasticsearch:9200"
+    raw_url = raw_url.strip().rstrip("/")
+    if in_docker and any(h in raw_url for h in ["http://localhost:", "http://127.0.0.1:", "http://0.0.0.0:"]):
+        import re
+        raw_url = re.sub(r"http://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?", "http://elasticsearch:9200", raw_url)
+    return raw_url
+
+def get_variable_elasticsearch_url() -> str:
+    """
+    Returns the appropriate Elasticsearch base URL for variableindex operations.
+    Handles container networking: if 'localhost' or '127.0.0.1' is specified while
+    running inside Docker, rewrites to 'elasticsearch' (or host docker alias).
+    """
+    in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+    raw_url = os.environ.get("ES_GLOBAL_HOST") or os.environ.get("ELASTICSEARCH_URL") or "http://elasticsearch:9200"
+    raw_url = raw_url.strip().rstrip("/")
+    if in_docker and any(h in raw_url for h in ["http://localhost:", "http://127.0.0.1:", "http://0.0.0.0:"]):
+        import re
+        raw_url = re.sub(r"http://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?", "http://elasticsearch:9200", raw_url)
+    return raw_url
+
+_GLOBAL_COLLECTION_CACHE_UPDATING = set()
+_GLOBAL_VARIABLES_CACHE_UPDATING = False
+
 def get_minio_lookup_urls() -> list[str]:
     """
     Returns an ordered list of MinIO base endpoints to query across all known nodes.
@@ -225,13 +257,14 @@ def get_minio_lookup_urls() -> list[str]:
         if minio_u and minio_u not in urls:
             urls.append(minio_u)
 
-    # 2. Add other nodes
-    for sname, sdata in nodes.items():
-        if sname == profile_name:
-            continue
-        minio_u = sdata.get("minio_url", "").strip().rstrip("/")
-        if minio_u and minio_u not in urls and "localhost" not in minio_u and "127.0.0.1" not in minio_u:
-            urls.append(minio_u)
+    # 2. Only include other nodes if EXT_MINIO is explicitly enabled
+    if os.environ.get("EXT_MINIO"):
+        for sname, sdata in nodes.items():
+            if sname == profile_name:
+                continue
+            minio_u = sdata.get("minio_url", "").strip().rstrip("/")
+            if minio_u and minio_u not in urls and "localhost" not in minio_u and "127.0.0.1" not in minio_u:
+                urls.append(minio_u)
 
     local_minio = os.environ.get("MINIO_URL", "").rstrip("/")
     if in_docker and any(h in local_minio for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
@@ -439,6 +472,8 @@ def render_html_template(file_path: str, request=None, auth_status=None):
     
     html = html.replace('{{VAULT_LOGO_HTML}}', logo_html)
     html = html.replace('{{VAULT_FOOTER_HTML}}', footer_html)
+    default_model = os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e2b")
+    html = html.replace('{{OLLAMA_DEFAULT_MODEL}}', default_model)
     
     palefire_display = "flex" if check_palefire_enabled() else "none"
     html = html.replace('{{PALEFIRE_DISPLAY}}', palefire_display)
@@ -696,7 +731,7 @@ async def search_collections(q: str, limit: int = 10) -> list[types.TextContent]
             HOST_VAL = os.environ.get("HOST", HOST)
             for h in hits:
                 s = h.get("_source", {})
-                md.append(f"- [**{s.get('name', 'Unknown')}**]({HOST_VAL}/groups/{h.get('_id')}) (ID: {h.get('_id')}): {s.get('description', '')}")
+                md.append(f"- [**{s.get('name', 'Unknown')}**]({HOST_VAL}/collections/{h.get('_id')}) (ID: {h.get('_id')}): {s.get('description', '')}")
             return [types.TextContent(type="text", text="\n".join(md))]
     except Exception as e:
         return [types.TextContent(type="text", text=f"Failed to search collections: {str(e)}")]
@@ -1181,32 +1216,31 @@ async def read_vault_article(url_or_filename: str) -> list[types.TextContent]:
         if re.match(r'^[a-f0-9]{16}$', clean_cand) or "/" not in clean_cand:
             raw_doc_id = clean_cand
 
-    # Step 1: Check across all Elasticsearch nodes from nodes.conf if we have a document ID
+    # Step 1: Check Elasticsearch using ES_HOST if we have a document ID
     if raw_doc_id:
         clean_id = raw_doc_id.replace(".md", "").replace(".jsonld", "").replace(".csv", "")
-        es_nodes = get_elasticsearch_lookup_urls()
-        candidate_indices = ["dataverse", "croissant", "trump", "openml", "sshoc", "cdif"]
+        vault_es_url = get_vault_elasticsearch_url()
+        candidate_indices = ["croissant", "dataverse", "openml", "sshoc", "trump", "cdif"]
         
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as es_client:
-            for es_url in es_nodes:
-                doc_source = None
-                for idx_name in candidate_indices:
-                    try:
-                        r = await es_client.get(f"{es_url}/{idx_name}/_doc/{clean_id}")
-                        if r.status_code == 200:
-                            doc_source = r.json().get("_source", {})
-                            break
-                    except Exception:
-                        pass
-                if not doc_source:
-                    try:
-                        r = await es_client.post(f"{es_url}/_all/_search", json={"query": {"term": {"_id": clean_id}}, "size": 1})
-                        if r.status_code == 200:
-                            hits = r.json().get("hits", {}).get("hits", [])
-                            if hits:
-                                doc_source = hits[0].get("_source", {})
-                    except Exception:
-                        pass
+        async with httpx.AsyncClient(timeout=4.0, follow_redirects=True) as es_client:
+            doc_source = None
+            for idx_name in candidate_indices:
+                try:
+                    r = await es_client.get(f"{vault_es_url}/{idx_name}/_doc/{clean_id}", timeout=2.0)
+                    if r.status_code == 200:
+                        doc_source = r.json().get("_source", {})
+                        break
+                except Exception:
+                    pass
+            if not doc_source:
+                try:
+                    r = await es_client.post(f"{vault_es_url}/_all/_search", json={"query": {"term": {"_id": clean_id}}, "size": 1}, timeout=2.0)
+                    if r.status_code == 200:
+                        hits = r.json().get("hits", {}).get("hits", [])
+                        if hits:
+                            doc_source = hits[0].get("_source", {})
+                except Exception:
+                    pass
 
                 if doc_source:
                     md_text = doc_source.get("_markdown_text", None)
@@ -4090,9 +4124,10 @@ async def url_to_croissant(url: str, slice: bool = False, traverse: bool = False
                 cmd.extend(["--user-email", user_email])
                 
         env = os.environ.copy()
-        env["OLLAMA_HOST"] = env.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-        if "ELASTICSEARCH_URL" not in env:
-            env["ELASTICSEARCH_URL"] = "http://localhost:9200"
+        env["OLLAMA_HOST"] = env.get("OLLAMA_HOST", os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444"))
+        vault_es = get_vault_elasticsearch_url()
+        env["ES_HOST"] = vault_es
+        env["ELASTICSEARCH_URL"] = vault_es
         
         # In Docker, __file__ is /app/mcp_server.py and we mount convertors to /app/convertors
         # Locally, __file__ is api/mcp_server.py and convertors is in ..
@@ -5292,6 +5327,7 @@ async def check_authentication() -> str | None:
     help="Transport type. Always defaults to stdio; pass --transport sse to start the HTTP/SSE server.",
 )
 def main(port: int, transport: str) -> int:
+    global _GLOBAL_COLLECTION_CACHE_UPDATING, _GLOBAL_VARIABLES_CACHE_UPDATING
     if not get_odrl_token():
         print("WARNING: ~/.odrl/authorize not found. Please create it using odrl-cli or authenticate on the front page.", flush=True, file=sys.stderr)
     if transport == "sse":
@@ -5462,7 +5498,7 @@ def main(port: int, transport: str) -> int:
             
         async def vault_get_history(request):
             import httpx
-            es_url = "http://elasticsearch:9200"
+            es_url = get_vault_elasticsearch_url()
             query = {
                 "size": 50,
                 "sort": [{"timestamp": {"order": "desc"}}]
@@ -5492,7 +5528,7 @@ def main(port: int, transport: str) -> int:
             if not new_markdown:
                 return JSONResponse({"status": "error", "message": "No markdown provided"}, status_code=400)
             
-            es_url = "http://elasticsearch:9200"
+            es_url = get_vault_elasticsearch_url()
             success = False
             async with httpx.AsyncClient() as client:
                 try:
@@ -5547,6 +5583,14 @@ def main(port: int, transport: str) -> int:
             return JSONResponse({"status": "ok"})
             
         
+        # MinIO helper function
+        def get_minio_client():
+            import os
+            minio_base = get_minio_base_url()
+            from minio import Minio
+            endpoint = minio_base.replace("http://", "").replace("https://", "")
+            return Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
+
         async def vault_ask(request):
             try:
                 data = await request.json()
@@ -5554,6 +5598,128 @@ def main(port: int, transport: str) -> int:
                 context_text = data.get("context", "").strip()
                 file_url = data.get("file_url", "").strip()
                 file_name = data.get("file_name", "").strip()
+                doc_id = data.get("doc_id", "").strip()
+
+                # If context contains a giant HTML or markdown distribution table with hundreds of rows, condense it
+                if context_text and ('<table class="dist-table">' in context_text or '| File |' in context_text):
+                    try:
+                        # 1. HTML dist-table condensation
+                        if '<table class="dist-table">' in context_text and '</tbody>' in context_text:
+                            start_tbl = context_text.find('<table class="dist-table">')
+                            end_tbody = context_text.find('</tbody>', start_tbl)
+                            if end_tbody != -1:
+                                table_chunk = context_text[start_tbl:end_tbody]
+                                tr_splits = table_chunk.split('<tr>')
+                                if len(tr_splits) > 12:
+                                    header_tr = tr_splits[1]
+                                    top_trs = tr_splits[2:8]
+                                    condensed_html = '<tr>' + header_tr + '<tr>' + '<tr>'.join(top_trs) + f'\n<tr><td colspan="7"><em>... [Truncated: showing first 6 of {len(tr_splits)-2} files in table]</em></td></tr>\n'
+                                    context_text = context_text[:start_tbl] + '<table class="dist-table">' + condensed_html + context_text[end_tbody:]
+
+                        # 2. Markdown table condensation
+                        if '### Files & Distributions' in context_text or '| File |' in context_text:
+                            md_lines = context_text.splitlines()
+                            filtered_lines = []
+                            in_table = False
+                            table_row_count = 0
+                            for line in md_lines:
+                                if line.strip().startswith('| File |') or line.strip().startswith('| **File** |'):
+                                    in_table = True
+                                    table_row_count = 0
+                                    filtered_lines.append(line)
+                                    continue
+                                if in_table:
+                                    if line.strip().startswith('|'):
+                                        table_row_count += 1
+                                        if table_row_count <= 8:  # header + separator + top 6 rows
+                                            filtered_lines.append(line)
+                                        elif table_row_count == 9:
+                                            filtered_lines.append(f"| ... [Remaining table rows truncated: see CROISSANT DATASET FILES SUMMARY for full count] | | | | | | |")
+                                    else:
+                                        in_table = False
+                                        filtered_lines.append(line)
+                                else:
+                                    filtered_lines.append(line)
+                            context_text = "\n".join(filtered_lines)
+                    except Exception as cond_err:
+                        pass
+
+                # If doc_id was not explicitly passed, inspect question, context_text, and file_url for vault doc IDs or .jsonld URLs
+                if not doc_id:
+                    import re
+                    for txt_src in [question, context_text, file_url]:
+                        if txt_src:
+                            m_v = re.search(r'/vault/(?:doc/)?([a-zA-Z0-9_-]{16,})(?:\.jsonld|\.md)?', txt_src)
+                            if m_v:
+                                doc_id = m_v.group(1)
+                                break
+
+                # If doc_id is provided, fetch the full Croissant JSON-LD record and include it in context
+                croissant_doc_dict = None
+                croissant_summary_snippet = ""
+                if doc_id:
+                    try:
+                        clean_id = doc_id.replace(".jsonld", "").replace(".md", "")
+                        # Fetch the full Croissant record from the Vault (try MinIO first, then fallback to local endpoint)
+                        croissant_json = ""
+                        try:
+                            m_client = get_minio_client()
+                            j_resp = m_client.get_object("vault", f"{clean_id}.jsonld")
+                            croissant_json = j_resp.read().decode("utf-8")
+                            j_resp.close()
+                            j_resp.release_conn()
+                        except Exception as m_err:
+                            # Fallback via local HTTP if MinIO direct call fails
+                            try:
+                                import urllib.request
+                                with urllib.request.urlopen(f"http://127.0.0.1:7070/vault/doc/raw/{clean_id}.jsonld", timeout=5) as u_resp:
+                                    croissant_json = u_resp.read().decode("utf-8")
+                            except Exception:
+                                pass
+
+                        if croissant_json:
+                            try:
+                                import json
+                                croissant_doc_dict = json.loads(croissant_json)
+                            except Exception:
+                                pass
+
+                            # Build an explicit, high-level summary of the dataset distributions and count
+                            if croissant_doc_dict:
+                                dists_list = croissant_doc_dict.get("distribution") or croissant_doc_dict.get("fileObject") or []
+                                if isinstance(dists_list, list):
+                                    total_files = len(dists_list)
+                                    ext_counts = {}
+                                    sample_names = []
+                                    for d_item in dists_list:
+                                        if isinstance(d_item, dict):
+                                            nm = d_item.get("name", "")
+                                            ext = nm.split(".")[-1].lower() if "." in nm else "other"
+                                            ext_counts[ext] = ext_counts.get(ext, 0) + 1
+                                            if len(sample_names) < 15 and nm:
+                                                sample_names.append(nm)
+                                    ext_summary = ", ".join(f"{k}: {v}" for k, v in sorted(ext_counts.items(), key=lambda x: -x[1]))
+                                    croissant_summary_snippet = (
+                                        f"=== CROISSANT DATASET FILES SUMMARY (Record: {clean_id}) ===\n"
+                                        f"- Total Number of Files / Distributions in Dataset: {total_files}\n"
+                                        f"- File Formats Breakdown: {ext_summary}\n"
+                                        f"- Sample Files (first {len(sample_names)}): {', '.join(sample_names)}\n\n"
+                                    )
+
+                                # If distributions list is massive (e.g. hundreds of items), trim the distribution array inside the JSON-LD snippet
+                                # to preserve complete dataset metadata (name, creators, datePublished, license, description) under LLM context limits
+                                jsonld_to_inject = croissant_json
+                                if croissant_doc_dict and isinstance(croissant_doc_dict.get("distribution"), list) and len(croissant_doc_dict["distribution"]) > 15:
+                                    import copy, json
+                                    trimmed_doc = copy.deepcopy(croissant_doc_dict)
+                                    trimmed_doc["distribution"] = trimmed_doc["distribution"][:10]
+                                    trimmed_doc["distribution_total_count"] = total_files
+                                    trimmed_doc["distribution_note"] = f"CRITICAL: The complete dataset contains {total_files} files in total. Only the first 10 sample files are shown in this array snippet for brevity."
+                                    jsonld_to_inject = json.dumps(trimmed_doc, indent=2)
+
+                            context_text = f"IMPORTANT DATASET OVERVIEW:\n- Total files in dataset: {total_files}\n\n" + croissant_summary_snippet + "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + jsonld_to_inject + "\n\n" + context_text
+                    except Exception as doc_err:
+                        print(f"Warning: doc_id handling error in vault_ask: {doc_err}")
                 model_name = data.get("model", OLLAMA_DEFAULT_MODEL).strip()
                 if not model_name:
                     model_name = OLLAMA_DEFAULT_MODEL
@@ -5644,6 +5810,146 @@ def main(port: int, transport: str) -> int:
 
                 if file_content_snippet:
                     context_text = context_text + file_content_snippet
+
+                # Fetch and attach CDIF (DDI-CDI) export representation into prompt context
+                try:
+                    import re, json, httpx
+                    cdif_targets = []
+                    # 1. Search for explicit /export? in question, context_text, or file_url
+                    exp_pattern = r'(?:https?://[^\s/]+)?/export\?[^\s\"\'\`<>)]+'
+                    for txt_source in [question, context_text, file_url]:
+                        if txt_source:
+                            matches = re.findall(exp_pattern, txt_source)
+                            for m in matches:
+                                if m not in cdif_targets:
+                                    cdif_targets.append(m)
+
+                    # 2. Check if a specific file_url or file_name matches a distribution in croissant_doc_dict
+                    if croissant_doc_dict and (file_url or file_name or len(cdif_targets) == 0):
+                        dists = croissant_doc_dict.get("distribution", [])
+                        matched_exp = None
+                        if isinstance(dists, list):
+                            for d in dists:
+                                if not isinstance(d, dict):
+                                    continue
+                                d_curl = d.get("contentUrl") or d.get("downloadUrl") or ""
+                                d_name = d.get("name") or ""
+                                exp_id = ""
+                                subj = d.get("subjectOf")
+                                if isinstance(subj, dict) and "/export?" in subj.get("@id", ""):
+                                    exp_id = subj.get("@id")
+                                elif "/export?" in d.get("@id", ""):
+                                    exp_id = d.get("@id")
+
+                                if exp_id:
+                                    # Match against file_url or file_name if present
+                                    if file_url and (file_url in d_curl or d_curl in file_url):
+                                        matched_exp = exp_id
+                                        break
+                                    if file_name and (file_name == d_name or d_name in file_name):
+                                        matched_exp = exp_id
+                                        break
+                                    if not matched_exp:
+                                        # Keep the first distribution's export as candidate
+                                        matched_exp = exp_id
+
+                        if matched_exp and matched_exp not in cdif_targets:
+                            cdif_targets.append(matched_exp)
+
+                    # Fetch CDIF export payloads and append to context
+                    cdif_snippets = []
+                    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as exp_client:
+                        for exp_target in cdif_targets[:3]:  # Limit to up to 3 CDIF exports to prevent context explosion
+                            try:
+                                # Convert to internal endpoint if pointing to localhost or public domain
+                                if exp_target.startswith("/"):
+                                    fetch_url = f"http://127.0.0.1:7070{exp_target}"
+                                elif "export?" in exp_target:
+                                    query_s = exp_target.split("export?", 1)[-1]
+                                    fetch_url = f"http://127.0.0.1:7070/export?{query_s}"
+                                else:
+                                    fetch_url = exp_target
+
+                                resp_cdif = await exp_client.get(fetch_url, headers={"User-Agent": "Claude/QA-Context"})
+                                if resp_cdif.status_code == 200:
+                                    cdif_data = resp_cdif.json()
+                                    models = cdif_data.get("DDICDIModels", [])
+
+                                    # Reconstruct sample tabular rows if present in DDI-CDI microdata
+                                    sample_table_str = ""
+                                    cdif_stat_summary = ""
+                                    if isinstance(models, list):
+                                        ivs = [m for m in models if isinstance(m, dict) and m.get("@type") == "InstanceVariable"]
+                                        col_order = [m.get("name", {}).get("name") if isinstance(m.get("name"), dict) else str(m.get("name", "")) for m in ivs]
+                                        sample_rows = {}
+                                        for m in models:
+                                            if isinstance(m, dict) and m.get("@type") == "InstanceValue":
+                                                dp_id = m.get("isStoredIn")
+                                                content = m.get("content", {})
+                                                val = content.get("content") if isinstance(content, dict) else str(content)
+                                                if dp_id and dp_id.startswith("#dataPoint-"):
+                                                    parts = dp_id.replace("#dataPoint-", "").split("-", 1)
+                                                    if len(parts) == 2:
+                                                        try:
+                                                            r_idx = int(parts[0])
+                                                            var_k = parts[1]
+                                                            sample_rows.setdefault(r_idx, {})[var_k] = val
+                                                        except Exception:
+                                                            pass
+
+                                        rec_count = None
+                                        file_title = cdif_data.get("dct:title") or ""
+                                        for m in models:
+                                            if isinstance(m, dict) and "recordCount" in m:
+                                                rec_count = m.get("recordCount")
+                                                break
+
+                                        total_files_in_archives = 0
+                                        has_file_count_col = "file_count" in col_order
+                                        if has_file_count_col:
+                                            for r_data in sample_rows.values():
+                                                if "file_count" in r_data:
+                                                    try:
+                                                        total_files_in_archives += int(r_data["file_count"])
+                                                    except Exception:
+                                                        pass
+
+                                        stats_lines = []
+                                        stats_lines.append(f"=== CDIF FILE & DATASET SUMMARY ({file_title or exp_target}) ===")
+                                        if rec_count is not None:
+                                            stats_lines.append(f"- Total Tabular Records / Rows in file: {rec_count}")
+                                        if total_files_in_archives > 0:
+                                            stats_lines.append(f"- Total Files listed inside archive records (sample sum): {total_files_in_archives:,}")
+                                        cdif_stat_summary = "\n".join(stats_lines) + "\n\n"
+
+                                        if sample_rows and col_order:
+                                            header = "| " + " | ".join(col_order) + " |"
+                                            sep = "| " + " | ".join(["---"] * len(col_order)) + " |"
+                                            t_lines = [f"\nSample Data Extracted from CDIF ({len(sample_rows)} rows of {rec_count or len(sample_rows)} total):", header, sep]
+                                            for r_i in sorted(sample_rows.keys()):
+                                                r_obj = sample_rows[r_i]
+                                                t_lines.append("| " + " | ".join(str(r_obj.get(c, "")) for c in col_order) + " |")
+                                            sample_table_str = "\n".join(t_lines) + "\n"
+
+                                    # Filter heavy microdata (positions, raw datapoints) to keep schema, variables, and metadata clean
+                                    heavy_types = {
+                                        "DataPoint", "DataPointPosition", "InstanceValue",
+                                        "PhysicalMappingPosition", "ComponentPosition", "TextMapping",
+                                        "SegmentPosition", "Segment", "SubstantiveValueDomain",
+                                        "ValueAndConceptDescription", "MeasureComponent"
+                                    }
+                                    if isinstance(models, list):
+                                        cdif_data["DDICDIModels"] = [m for m in models if isinstance(m, dict) and m.get("@type") not in heavy_types]
+
+                                    cdif_json_str = json.dumps(cdif_data, indent=2)
+                                    cdif_snippets.append(f"{cdif_stat_summary}=== CDIF (DDI-CDI) EXPORT ({exp_target}) ===\n{cdif_json_str}\n{sample_table_str}")
+                            except Exception as exp_err:
+                                print(f"Warning: Failed to fetch CDIF export for QA prompt ({exp_target}): {exp_err}")
+
+                    if cdif_snippets:
+                        context_text = "\n\n".join(cdif_snippets) + "\n\n" + context_text
+                except Exception as ex_cdif:
+                    print(f"Warning: Error processing CDIF export for QA prompt: {ex_cdif}")
                     
                 prompt = f"""Context:
 {context_text}
@@ -5659,8 +5965,8 @@ Please answer the question based ONLY on the context provided above (including t
                 import subprocess
                 import os
                 
-                if not model_name or model_name in ["default", "gemma4:e4b", "llama3.1"]:
-                    model_name = "gemma4:31b-cloud"
+                if not model_name or model_name in ["default", "llama3.1"]:
+                    model_name = os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:e2b"
 
                 def run_agent():
                     env = os.environ.copy()
@@ -5711,8 +6017,9 @@ Please answer the question based ONLY on the context provided above (including t
                 headers["Authorization"] = f"Bearer {ollama_token}"
             try:
                 import json
-                endpoints = []
-                if ollama_host:
+                endpoints = ["http://10.147.18.24:11434", "http://10.147.18.24:11444"]
+                if ollama_host and ollama_host not in endpoints:
+                    endpoints.insert(0, ollama_host)
                     endpoints.append(ollama_host)
                 if "http://10.147.18.82:11435" not in endpoints:
                     endpoints.append("http://10.147.18.82:11435")
@@ -6005,36 +6312,34 @@ Please answer the question based ONLY on the context provided above (including t
                                             item["annotationText"] = s_text.strip()
                                         except Exception as e:
                                             item["annotationTextError"] = str(e)
-                        # If the vault JSON-LD lacks distributions or conformsTo, enrich from Elasticsearch
+                        # If the vault JSON-LD lacks distributions or conformsTo, enrich from Elasticsearch using ES_HOST
                         if not jdata.get("distribution") or jdata.get("conformsTo") != "http://mlcommons.org/croissant/1.1":
                             try:
                                 es_id = filename[:-7]
-                                es_nodes = get_elasticsearch_lookup_urls()
-                                candidate_indices = ["sshoc", "dataverse", "croissant", "trump", "openml", "cdif"]
+                                vault_es_url = get_vault_elasticsearch_url()
+                                candidate_indices = ["croissant", "dataverse", "openml", "sshoc", "trump", "cdif"]
                                 import httpx
-                                async with httpx.AsyncClient(timeout=5.0) as es_merge_client:
+                                async with httpx.AsyncClient(timeout=4.0) as es_merge_client:
                                     es_src = None
-                                    for es_url in es_nodes:
-                                        for idx_name in candidate_indices:
-                                            try:
-                                                r_es = await es_merge_client.get(f"{es_url}/{idx_name}/_doc/{es_id}")
-                                                if r_es.status_code == 200:
-                                                    es_src = r_es.json().get("_source", {})
-                                                    break
-                                            except Exception:
-                                                pass
-                                        if es_src:
-                                            break
+                                    for idx_name in candidate_indices:
+                                        try:
+                                            r_es = await es_merge_client.get(f"{vault_es_url}/{idx_name}/_doc/{es_id}", timeout=2.0)
+                                            if r_es.status_code == 200:
+                                                es_src = r_es.json().get("_source", {})
+                                                break
+                                        except Exception:
+                                            pass
+                                    if not es_src:
                                         try:
                                             r_search = await es_merge_client.post(
-                                                f"{es_url}/_search",
-                                                json={"query": {"bool": {"should": [{"term": {"_id": es_id}}, {"term": {"persistentId.keyword": es_id}}, {"term": {"id": es_id}}]}}, "size": 1}
+                                                f"{vault_es_url}/_search",
+                                                json={"query": {"bool": {"should": [{"term": {"_id": es_id}}, {"term": {"persistentId.keyword": es_id}}, {"term": {"id": es_id}}]}}, "size": 1},
+                                                timeout=2.0
                                             )
                                             if r_search.status_code == 200:
                                                 hits = r_search.json().get("hits", {}).get("hits", [])
                                                 if hits:
                                                     es_src = hits[0].get("_source", {})
-                                                    break
                                         except Exception:
                                             pass
 
@@ -8119,32 +8424,35 @@ Please answer the question based ONLY on the context provided above (including t
             md_text = None
             media_type = "text/markdown"
             es_nodes = get_elasticsearch_lookup_urls()
-            candidate_indices = ["dataverse", "croissant", "trump", "openml", "sshoc", "cdif"]
+            vault_es_url = get_vault_elasticsearch_url()
+            if vault_es_url not in es_nodes:
+                es_nodes.insert(0, vault_es_url)
+            candidate_indices = ["croissant", "dataverse", "openml", "sshoc", "trump", "cdif"]
             
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=4.0) as client:
                 try:
                     doc_source = None
                     for es_url in es_nodes:
+                        if doc_source:
+                            break
                         for idx_name in candidate_indices:
                             try:
-                                r = await client.get(f"{es_url}/{idx_name}/_doc/{es_id}")
+                                r = await client.get(f"{es_url}/{idx_name}/_doc/{es_id}", timeout=2.0)
                                 if r.status_code == 200:
                                     doc_source = r.json().get("_source", {})
                                     break
                             except Exception:
                                 pass
-                        if doc_source:
-                            break
-                        # Try generic search by _id across all indices on this node
-                        try:
-                            r = await client.post(f"{es_url}/_all/_search", json={"query": {"term": {"_id": es_id}}, "size": 1})
-                            if r.status_code == 200:
-                                hits = r.json().get("hits", {}).get("hits", [])
-                                if hits:
-                                    doc_source = hits[0].get("_source", {})
-                                    break
-                        except Exception:
-                            pass
+                        if not doc_source:
+                            try:
+                                r = await client.post(f"{es_url}/_search", json={"query": {"ids": {"values": [es_id]}}, "size": 1}, timeout=2.0)
+                                if r.status_code == 200:
+                                    hits = r.json().get("hits", {}).get("hits", [])
+                                    if hits:
+                                        doc_source = hits[0].get("_source", {})
+                                        break
+                            except Exception:
+                                pass
 
                     if doc_source:
                         md_text = doc_source.get("_markdown_text", None)
@@ -8367,9 +8675,11 @@ Please answer the question based ONLY on the context provided above (including t
                 return Response(json.dumps({"detail": "Unauthorized: Invalid API Key"}), status_code=401, media_type="application/json")
                 
             endpoints = config.get("ollama_endpoints", [])
-            env_endpoint = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-            if "http://10.147.18.82:11435" not in endpoints:
-                endpoints.insert(0, "http://10.147.18.82:11435")
+            env_endpoint = os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444")
+            if "http://10.147.18.24:11444" not in endpoints:
+                endpoints.insert(0, "http://10.147.18.24:11444")
+            if "http://10.147.18.24:11434" not in endpoints:
+                endpoints.append("http://10.147.18.24:11434")
             if env_endpoint and env_endpoint not in endpoints:
                 endpoints.append(env_endpoint)
                 
@@ -8585,7 +8895,7 @@ Please answer the question based ONLY on the context provided above (including t
                             if SERVER_USER_INFO:
                                 username = SERVER_USER_INFO.get("preferred_username", SERVER_USER_INFO.get("name", "anonymous"))
                             
-                            es_url = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200").rstrip("/")
+                            es_url = get_vault_elasticsearch_url()
                             es_index = "history"
                             
                             try:
@@ -9369,7 +9679,7 @@ Please answer the question based ONLY on the context provided above (including t
 
                 # Automatically trigger asynchronous background rebuild of variable statistics & CDIF cache
                 try:
-                    es_url_bg = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+                    es_url_bg = get_variable_elasticsearch_url()
                     import asyncio
                     asyncio.create_task(update_collection_variables_cache(cid, es_url_bg))
                 except Exception as bg_cache_err:
@@ -10099,8 +10409,12 @@ Please answer the question based ONLY on the context provided above (including t
             population-wide variable totals (numeric, text/other, files), extracts the first 100
             variables, and stores the summary in the Elasticsearch 'cache' index under
             'collection_variables_{cid}'. Iterates through get_elasticsearch_lookup_urls() to ensure
-            robust connectivity in all deployment environments.
+            robust connectivity in all deployment environments. Protected against duplicate concurrent runs.
             """
+            global _GLOBAL_COLLECTION_CACHE_UPDATING
+            if cid in _GLOBAL_COLLECTION_CACHE_UPDATING:
+                return
+            _GLOBAL_COLLECTION_CACHE_UPDATING.add(cid)
             import httpx, json, sys, time
             try:
                 es_candidates = [es_url] if es_url else get_elasticsearch_lookup_urls()
@@ -10371,6 +10685,8 @@ Please answer the question based ONLY on the context provided above (including t
                         await client.put(f"{target_es}/cache/_doc/collection_variables_{cid}", json=cache_doc)
             except Exception as e:
                 print(f"[CollectionVariablesCache] Error updating collection {cid} variables cache: {e}", file=sys.stderr)
+            finally:
+                _GLOBAL_COLLECTION_CACHE_UPDATING.discard(cid)
 
         async def api_collections_variables_refresh(request):
             """
@@ -10947,9 +11263,9 @@ Instructions:
 3. Include links to the CDIF export where available.
 4. If no exact match is found, highlight the closest related variables and advise how to search or analyze further."""
 
-            ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-            if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
-                ollama_url = "http://10.147.18.82:11435"
+            ollama_url = os.environ.get("OLLAMA_HOST", os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444"))
+            # Keep configured ollama_url
+            pass
             model = os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or OLLAMA_DEFAULT_MODEL
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
@@ -11205,7 +11521,9 @@ Instructions:
                         site_url_param = "https://dataverse.harvard.edu"
                     dataset_url = f"{site_url_param}/dataset.xhtml?persistentId={dataset_pid}"
                 elif direct_url:
-                    dataset_url = direct_url
+                    # Extract pure URL if natural language prefix was passed (e.g. "Test ingest for new documents https://...")
+                    url_match = re.search(r'https?://[^\s<>"]+', direct_url)
+                    dataset_url = url_match.group(0) if url_match else direct_url
                 elif callback:
                     decoded_callback = base64.b64decode(callback).decode('utf-8')
                     response = requests.get(decoded_callback, timeout=15)
@@ -11730,7 +12048,12 @@ Instructions:
             Background task that scans CDIF records in Elasticsearch and updates the 'cache' index
             with fresh totals (total_files, total_variables, total_numeric, total_other)
             and the first 100 variables.
+            Protected by an in-memory lock to avoid redundant concurrent background jobs.
             """
+            global _GLOBAL_VARIABLES_CACHE_UPDATING
+            if _GLOBAL_VARIABLES_CACHE_UPDATING:
+                return
+            _GLOBAL_VARIABLES_CACHE_UPDATING = True
             import httpx, json, sys, time
             try:
                 if not es_url:
@@ -11759,7 +12082,7 @@ Instructions:
                     cnt_resp = await client.post(f"{es_url}/cdif/_count")
                     total_docs = cnt_resp.json().get("count", 0) if cnt_resp.status_code == 200 else 0
 
-                    sample_size = min(total_docs, 300) if total_docs > 0 else 300
+                    sample_size = min(total_docs, 1000) if total_docs > 0 else 1000
                     payload = {
                         "query": {"match_all": {}},
                         "size": sample_size,
@@ -11987,6 +12310,8 @@ Instructions:
                     print(f"[VariablesCache] Cache refreshed successfully: status={save_res.status_code}, files={total_files}, vars={sample_vars}", file=sys.stderr)
             except Exception as e:
                 print(f"[VariablesCache] Error updating variables cache: {e}", file=sys.stderr)
+            finally:
+                _GLOBAL_VARIABLES_CACHE_UPDATING = False
 
         async def api_variable_index_refresh(request):
             """
@@ -12116,14 +12441,26 @@ Instructions:
                     "cdif_jsonld.variableMeasured"
                 ]
 
-                query_size = 1000 if q_param else (min(limit, 300) if limit else 300)
+                query_size = 1000 if q_param else (min(limit, 500) if limit else 500)
                 payload = {
                     "query": es_query,
                     "size": query_size,
                     "_source": source_fields
                 }
                 async with httpx.AsyncClient(timeout=60.0) as client:
-                    resp = await client.post(f"{es_url}/cdif/_search", json=payload)
+                    try:
+                        resp = await client.post(f"{es_url}/cdif/_search", json=payload)
+                    except Exception as es_req_err:
+                        # Fallback to local ES if primary ES failed
+                        local_es = get_vault_elasticsearch_url()
+                        if local_es != es_url:
+                            try:
+                                resp = await client.post(f"{local_es}/cdif/_search", json=payload)
+                            except Exception:
+                                return JSONResponse({"total_files": 0, "total_variables": 0, "variables": [], "files": []})
+                        else:
+                            return JSONResponse({"total_files": 0, "total_variables": 0, "variables": [], "files": []})
+
                     if resp.status_code != 200:
                         return JSONResponse({"total_files": 0, "total_variables": 0, "variables": [], "files": []})
 
@@ -12375,11 +12712,12 @@ Instructions:
                                     }
                                 })
                             ds_query = {"bool": {"must": ds_must}} if ds_must else {"match_all": {}}
+                            target_ds_size = min(limit, 20) if limit is not None else 20
                             ds_search_resp = await client.post(
-                                f"{es_url}/*,-.*,-collections,-history,-groups,-cdif/_search",
+                                f"{es_url}/croissant,dataverse/_search",
                                 json={
                                     "query": ds_query,
-                                    "size": 50,
+                                    "size": target_ds_size,
                                     "_source": [
                                         "name", "title", "url", "_source_url",
                                         "distribution.name", "distribution.@id", "distribution.contentUrl",
@@ -12388,7 +12726,7 @@ Instructions:
                                         "recordSet.field.source"
                                     ]
                                 },
-                                timeout=20.0
+                                timeout=15.0
                             )
 
                             if ds_search_resp.status_code == 200:
@@ -12673,9 +13011,9 @@ Instructions:
 3. Include links to the CDIF export where available.
 4. If no exact match is found, highlight the closest related variables and advise how to search further."""
 
-            ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-            if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
-                ollama_url = "http://10.147.18.82:11435"
+            ollama_url = os.environ.get("OLLAMA_HOST", os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444"))
+            # Keep configured ollama_url
+            pass
             model = os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or OLLAMA_DEFAULT_MODEL
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
@@ -12806,12 +13144,12 @@ CDIF EXPORT VARIABLES CONTEXT:
 
             user_prompt = f"Please explain the filtered CDIF export results. Make it explicit which variables from which topics should be measured in the first place, update Executive Summary & Scientific Overview, and ALWAYS include both a dedicated 'FAIR Recommendations' section and a 'CDIF 1.1 Integration' section (with schema:variableMeasured conceptual mapping and Cross-Linkage / Temporal Join recommendations) in markdown."
 
-            ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-            if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
-                ollama_url = "http://10.147.18.82:11435"
-            # Allow user to specify model or default to gemma4:31b-cloud
+            ollama_url = os.environ.get("OLLAMA_HOST", os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444"))
+            # Keep configured ollama_url
+            pass
+            # Allow user to specify model or default to OLLAMA_DEFAULT_MODEL
             req_model = body.get("model") or body.get("ai_model")
-            model = req_model or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:31b-cloud"
+            model = req_model or os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e2b")
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
 
@@ -12849,7 +13187,7 @@ CDIF EXPORT VARIABLES CONTEXT:
             body = await request.json()
             markdown_content = body.get("markdown") or body.get("content") or ""
             filter_query = body.get("filter", "") or body.get("query", "")
-            model_name = body.get("model") or "gemma4:31b-cloud"
+            model_name = body.get("model") or os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e2b")
             variables = body.get("variables", [])
             cdif_export_url = body.get("cdif_export_url") or ""
 
@@ -13052,9 +13390,9 @@ CDIF EXPORT VARIABLES CONTEXT:
             except Exception:
                 pass
             
-            ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-            if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
-                ollama_url = "http://10.147.18.82:11435"
+            ollama_url = os.environ.get("OLLAMA_HOST", os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444"))
+            # Keep configured ollama_url
+            pass
             model = os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or OLLAMA_DEFAULT_MODEL
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
@@ -13332,9 +13670,9 @@ Output a JSON object with:
             
             system_prompt = f"You are an AI assistant helping users explore user collections and datasets in Semantic Croissant.\nUse the following context about collections and their datasets to answer the user's question:\n\n{context}\n\nIMPORTANT: When listing or referencing collections, format them as Markdown links using their exact URLs (e.g. [Collection Name](URL)). When listing individual datasets, link them using their exact Vault URLs as provided in the context."
             
-            ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-            if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
-                ollama_url = "http://10.147.18.82:11435"
+            ollama_url = os.environ.get("OLLAMA_HOST", os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444"))
+            # Keep configured ollama_url
+            pass
             model = os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or OLLAMA_DEFAULT_MODEL
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}

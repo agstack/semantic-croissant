@@ -9,7 +9,7 @@ import io
 import csv
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-MODEL = "gemma4:e4b"
+MODEL = "gemma4:e2b"
 
 def compute_unf6(content):
     words = sorted(content.split())

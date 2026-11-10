@@ -19,7 +19,7 @@ This guide provides step-by-step instructions for installing and running **Seman
 - **Node.js** (v20+ / v22+) & **npm** *(optional, only if modifying frontends locally)*
 - **Python 3.12+** & **uv** / **pip** *(optional, for running offline pipeline scripts outside Docker)*
 
----
+
 
 ## 2. Server Environment Preparation
 
@@ -137,7 +137,7 @@ IP=0.0.0.0
 
 # LLM / Ollama Backend
 OLLAMA_HOST=http://your-ollama-host:11434
-OLLAMA_DEFAULT_MODEL=gemma4:31b-cloud
+OLLAMA_DEFAULT_MODEL=gemma4:e2b
 
 # Port Allocation (Ensure no port conflicts on the host)
 QLEVER_SERVER_PORT=7011

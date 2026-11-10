@@ -1126,12 +1126,12 @@
                                     <div style="display: inline-flex; align-items: center; gap: 4px; background: #ffffff; padding: 2px 6px; border-radius: 6px; border: 1px solid #86efac;">
                                         <label for="var-qa-model-select" style="font-size: 0.75rem; font-weight: 600; color: #166534; text-transform: uppercase;">Model:</label>
                                         <select id="var-qa-model-select" style="font-size: 0.78rem; padding: 2px 6px; border: 1px solid #bbf7d0; border-radius: 4px; background: #fff; color: #1f2937; outline: none; cursor: pointer;">
-                                            <option value="gemma4:31b-cloud" selected>gemma4:31b-cloud (Default)</option>
+                                            <option value="{{OLLAMA_DEFAULT_MODEL}}" selected>{{OLLAMA_DEFAULT_MODEL}} (Default)</option>
                                             <option value="glm-5.2:cloud">glm-5.2:cloud</option>
                                             <option value="gemma4:12b">gemma4:12b</option>
                                             <option value="cdif-expert:latest">cdif-expert:latest</option>
                                             <option value="odrl-expert:latest">odrl-expert:latest</option>
-                                            <option value="gemma4:e4b">gemma4:e4b</option>
+                                            <option value="gemma4:e2b">gemma4:e2b</option>
                                             <option value="gemma4:31b">gemma4:31b</option>
                                             <option value="deepseek-r1:14b">deepseek-r1:14b</option>
                                             <option value="mistral:latest">mistral:latest</option>
@@ -2196,7 +2196,7 @@
 
         async function rerunCollectionVarQaWithSelectedModel() {
             const modelSelect = document.getElementById('var-qa-model-select');
-            const selectedModel = modelSelect ? modelSelect.value : 'gemma4:31b-cloud';
+            const selectedModel = modelSelect ? modelSelect.value : '{{OLLAMA_DEFAULT_MODEL}}';
             await explainCollectionVariables(selectedModel);
         }
 
@@ -2214,7 +2214,7 @@
             const searchInput = document.getElementById('dash-var-search') || document.getElementById('var-quick-filter');
             const queryStr = searchInput ? searchInput.value.trim() : '';
             const modelSelect = document.getElementById('var-qa-model-select');
-            const selectedModel = modelSelect ? modelSelect.value : 'gemma4:31b-cloud';
+            const selectedModel = modelSelect ? modelSelect.value : '{{OLLAMA_DEFAULT_MODEL}}';
 
             const exportUrl = queryStr
                 ? `https://${window.location.host}/export?q=${encodeURIComponent(queryStr)}`
@@ -2287,7 +2287,7 @@
             }
 
             const modelSelect = document.getElementById('var-qa-model-select');
-            const chosenModel = modelOverride || (modelSelect ? modelSelect.value : 'gemma4:31b-cloud');
+            const chosenModel = modelOverride || (modelSelect ? modelSelect.value : '{{OLLAMA_DEFAULT_MODEL}}');
 
             const resultBox = document.getElementById('var-qa-result');
             const contentBox = document.getElementById('var-qa-content');
