@@ -251,7 +251,7 @@ def fetch_github_repo(url, traverse=False):
     return None
 
 def resolve_direct_url(url):
-    """If url is a Google redirect (e.g. google.com/goto?url=...), resolve to canonical direct destination URL."""
+    """If url is a Google redirect or a vault/doc viewer page, resolve to canonical destination URL."""
     if url and "google.com/goto" in url:
         try:
             r = scraper.get(url, allow_redirects=False, timeout=10)
@@ -261,6 +261,14 @@ def resolve_direct_url(url):
                 return resolved
         except Exception as e:
             print(f"  -> Could not resolve Google redirect for {url}: {e}")
+            
+    # If the URL is a local vault doc viewer URL (/vault/doc/<id>), resolve it to /vault/doc/raw/<id>
+    if url and "/vault/doc/" in url and "/vault/doc/raw/" not in url:
+        parts = url.split("/vault/doc/")
+        doc_id = parts[1].split("?")[0].split("#")[0].rstrip("/")
+        raw_url = parts[0] + "/vault/doc/raw/" + doc_id
+        return raw_url
+
     return url
 
 def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
@@ -459,11 +467,11 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
             else:
                 response.raise_for_status()
 
-        # If local and not HTML, return as raw text directly
-        if is_local and not (html_text.strip().lower().startswith('<!doctype html') or '<html' in html_text.lower() or '<body' in html_text.lower()):
+        # If not HTML (e.g. raw markdown text or text/plain), return as raw text directly
+        if not (html_text.strip().lower().startswith('<!doctype html') or '<html' in html_text.lower() or '<body' in html_text.lower()):
             page_meta = {
                 "@type": "CreativeWork",
-                "name": url.split('/')[-1] or "Local Document",
+                "name": url.split('/')[-1] or "Document",
                 "url": url,
             }
             if traverse:
@@ -1315,6 +1323,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
     # Upload to Vault if MinIO is configured
     try:
         minio_url = os.environ.get("MINIO_URL", "http://minio:9000")
+        _in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
         if _in_docker and any(h in minio_url for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
             minio_url = "http://minio:9000"
         minio_user = os.environ.get("MINIO_ROOT_USER", "minioadmin")
@@ -1849,6 +1858,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
         # Upload to Vault if MinIO is configured
         try:
             minio_url = os.environ.get("MINIO_URL", "http://minio:9000")
+            _in_docker = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
             if _in_docker and any(h in minio_url for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
                 minio_url = "http://minio:9000"
             minio_user = os.environ.get("MINIO_ROOT_USER", "minioadmin")
