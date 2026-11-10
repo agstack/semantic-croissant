@@ -20,7 +20,7 @@ import os
 API_BASE = os.environ.get("API_BASE", "http://localhost:7013")
 MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "mcp.dev.codata.org")
 HOST = os.environ.get("HOST", f"https://{MCP_DOMAIN}")
-OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:31b-cloud"
+OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e4b")
 
 def get_nodes_config() -> dict:
     """
@@ -182,13 +182,14 @@ def get_minio_lookup_urls() -> list[str]:
         if minio_u and minio_u not in urls:
             urls.append(minio_u)
 
-    # 2. Add other nodes
-    for sname, sdata in nodes.items():
-        if sname == profile_name:
-            continue
-        minio_u = sdata.get("minio_url", "").strip().rstrip("/")
-        if minio_u and minio_u not in urls and "localhost" not in minio_u and "127.0.0.1" not in minio_u:
-            urls.append(minio_u)
+    # 2. Only include other nodes if EXT_MINIO is explicitly enabled
+    if os.environ.get("EXT_MINIO"):
+        for sname, sdata in nodes.items():
+            if sname == profile_name:
+                continue
+            minio_u = sdata.get("minio_url", "").strip().rstrip("/")
+            if minio_u and minio_u not in urls and "localhost" not in minio_u and "127.0.0.1" not in minio_u:
+                urls.append(minio_u)
 
     local_minio = os.environ.get("MINIO_URL", "").rstrip("/")
     if local_minio and local_minio not in urls:
@@ -369,6 +370,8 @@ def render_html_template(file_path: str, request=None, auth_status=None):
     
     html = html.replace('{{VAULT_LOGO_HTML}}', logo_html)
     html = html.replace('{{VAULT_FOOTER_HTML}}', footer_html)
+    default_model = os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e4b")
+    html = html.replace('{{OLLAMA_DEFAULT_MODEL}}', default_model)
     
     if '{{LOGIN_BUTTON_HTML}}' in html and request:
         try:
@@ -3917,7 +3920,7 @@ async def url_to_croissant(url: str, slice: bool = False, traverse: bool = False
                 cmd.extend(["--user-email", user_email])
                 
         env = os.environ.copy()
-        env["OLLAMA_HOST"] = env.get("OLLAMA_HOST", "http://10.147.18.82:11435")
+        env["OLLAMA_HOST"] = env.get("OLLAMA_HOST", os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444"))
         vault_es = get_vault_elasticsearch_url()
         env["ES_HOST"] = vault_es
         env["ELASTICSEARCH_URL"] = vault_es
@@ -5451,15 +5454,13 @@ Please answer the question based ONLY on the context provided above (including t
                 import subprocess
                 import os
                 
-                if not model_name or model_name in ["default", "gemma4:e4b", "llama3.1"]:
-                    model_name = os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:31b-cloud"
+                if not model_name or model_name in ["default", "llama3.1"]:
+                    model_name = os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:31b"
 
                 def run_agent():
                     env = os.environ.copy()
                     env["MCP_URL"] = "http://localhost:7070/sse"
-                    ollama_h = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-                    if "10.147.18.24" in ollama_h or "ollama:11434" in ollama_h:
-                        ollama_h = "http://10.147.18.82:11435"
+                    ollama_h = os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444")
                     env["OLLAMA_HOST"] = ollama_h
                     env["MODEL"] = model_name
                     env["OLLAMA_TOKEN"] = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
@@ -5498,14 +5499,14 @@ Please answer the question based ONLY on the context provided above (including t
 
         async def vault_models(request):
             import os, httpx
-            ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
+            ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444")
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY")
             headers = {}
             if ollama_token:
                 headers["Authorization"] = f"Bearer {ollama_token}"
             try:
                 import json
-                endpoints = ["http://10.147.18.82:11435"]
+                endpoints = ["http://10.147.18.24:11444", "http://10.147.18.24:11434", os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444")]
                 if ollama_host and ollama_host not in endpoints:
                     endpoints.append(ollama_host)
                 cfg_candidates = ["gateway_config.json", os.path.join(os.path.dirname(__file__), "gateway_config.json")]
@@ -8116,9 +8117,11 @@ Please answer the question based ONLY on the context provided above (including t
                 return Response(json.dumps({"detail": "Unauthorized: Invalid API Key"}), status_code=401, media_type="application/json")
                 
             endpoints = config.get("ollama_endpoints", [])
-            env_endpoint = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-            if "http://10.147.18.82:11435" not in endpoints:
-                endpoints.insert(0, "http://10.147.18.82:11435")
+            env_endpoint = os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444")
+            if "http://10.147.18.24:11444" not in endpoints:
+                endpoints.insert(0, "http://10.147.18.24:11444")
+            if "http://10.147.18.24:11434" not in endpoints:
+                endpoints.append("http://10.147.18.24:11434")
             if env_endpoint and env_endpoint not in endpoints:
                 endpoints.append(env_endpoint)
                 
@@ -10546,9 +10549,9 @@ Instructions:
 3. Include links to the CDIF export where available.
 4. If no exact match is found, highlight the closest related variables and advise how to search or analyze further."""
 
-            ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-            if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
-                ollama_url = "http://10.147.18.82:11435"
+            ollama_url = os.environ.get("OLLAMA_HOST", os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444"))
+            # Keep configured ollama_url
+            pass
             model = os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or OLLAMA_DEFAULT_MODEL
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
@@ -12191,9 +12194,9 @@ Instructions:
 3. Include links to the CDIF export where available.
 4. If no exact match is found, highlight the closest related variables and advise how to search further."""
 
-            ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-            if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
-                ollama_url = "http://10.147.18.82:11435"
+            ollama_url = os.environ.get("OLLAMA_HOST", os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444"))
+            # Keep configured ollama_url
+            pass
             model = os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or OLLAMA_DEFAULT_MODEL
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
@@ -12324,12 +12327,12 @@ CDIF EXPORT VARIABLES CONTEXT:
 
             user_prompt = f"Please explain the filtered CDIF export results. Make it explicit which variables from which topics should be measured in the first place, update Executive Summary & Scientific Overview, and ALWAYS include both a dedicated 'FAIR Recommendations' section and a 'CDIF 1.1 Integration' section (with schema:variableMeasured conceptual mapping and Cross-Linkage / Temporal Join recommendations) in markdown."
 
-            ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-            if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
-                ollama_url = "http://10.147.18.82:11435"
+            ollama_url = os.environ.get("OLLAMA_HOST", os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444"))
+            # Keep configured ollama_url
+            pass
             # Allow user to specify model or default to OLLAMA_DEFAULT_MODEL
             req_model = body.get("model") or body.get("ai_model")
-            model = req_model or os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:31b-cloud"
+            model = req_model or os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e4b")
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
 
@@ -12367,7 +12370,7 @@ CDIF EXPORT VARIABLES CONTEXT:
             body = await request.json()
             markdown_content = body.get("markdown") or body.get("content") or ""
             filter_query = body.get("filter", "") or body.get("query", "")
-            model_name = body.get("model") or os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:31b-cloud"
+            model_name = body.get("model") or os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e4b")
             variables = body.get("variables", [])
             cdif_export_url = body.get("cdif_export_url") or ""
 
@@ -12570,9 +12573,9 @@ CDIF EXPORT VARIABLES CONTEXT:
             except Exception:
                 pass
             
-            ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-            if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
-                ollama_url = "http://10.147.18.82:11435"
+            ollama_url = os.environ.get("OLLAMA_HOST", os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444"))
+            # Keep configured ollama_url
+            pass
             model = os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or OLLAMA_DEFAULT_MODEL
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
@@ -12850,9 +12853,9 @@ Output a JSON object with:
             
             system_prompt = f"You are an AI assistant helping users explore user collections and datasets in Semantic Croissant.\nUse the following context about collections and their datasets to answer the user's question:\n\n{context}\n\nIMPORTANT: When listing or referencing collections, format them as Markdown links using their exact URLs (e.g. [Collection Name](URL)). When listing individual datasets, link them using their exact Vault URLs as provided in the context."
             
-            ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
-            if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
-                ollama_url = "http://10.147.18.82:11435"
+            ollama_url = os.environ.get("OLLAMA_HOST", os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444"))
+            # Keep configured ollama_url
+            pass
             model = os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or OLLAMA_DEFAULT_MODEL
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}

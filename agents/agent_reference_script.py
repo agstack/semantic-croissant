@@ -12,10 +12,8 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent.co
 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
     config = json.load(f)
 
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", config.get("OLLAMA_HOST", "http://10.147.18.82:11435"))
-if "10.147.18.24" in OLLAMA_HOST or "ollama:11434" in OLLAMA_HOST:
-    OLLAMA_HOST = "http://10.147.18.82:11435"
-MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL", os.environ.get("MODEL", config.get("MODEL", "gemma4:31b-cloud")))
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", config.get("OLLAMA_HOST", "http://10.147.18.24:11444"))
+MODEL = os.environ.get("MODEL") or os.environ.get("OLLAMA_DEFAULT_MODEL") or config.get("MODEL") or "gemma4:e4b"
 OLLAMA_TOKEN = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
 MCP_URL = os.environ.get("MCP_URL", config.get("MCP_URL", "http://localhost:7070/sse"))
 AI_MODEL_OVERRIDE = os.environ.get("AI_MODEL_OVERRIDE", config.get("ai_model_override", "Semantic Croissant AI Agent v.0.1"))
@@ -52,7 +50,7 @@ async def run_agent(query: str, expert: str = "openml", limit: int = 10, save_va
                 {"role": "user", "content": user_prompt}
             ]
             
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=600.0) as client:
                 async def keepalive():
                     try:
                         while True:
@@ -75,14 +73,14 @@ async def run_agent(query: str, expert: str = "openml", limit: int = 10, save_va
                                 "tools": ollama_tools,
                                 "stream": False,
                                 "options": {
-                                    "num_ctx": 65536
+                                    "num_ctx": 8192
                                 }
                             },
                             headers=req_headers
                         )
                     except Exception as e:
                         # Fallback attempt if host fails
-                        fallback_host = "http://10.147.18.82:11435" if OLLAMA_HOST != "http://10.147.18.82:11435" else "http://ollama:11434"
+                        fallback_host = "http://10.147.18.24:11434" if OLLAMA_HOST != "http://10.147.18.24:11434" else "http://10.147.18.24:11444"
                         try:
                             response = await client.post(
                                 f"{fallback_host}/api/chat",
@@ -92,13 +90,13 @@ async def run_agent(query: str, expert: str = "openml", limit: int = 10, save_va
                                     "tools": ollama_tools,
                                     "stream": False,
                                     "options": {
-                                        "num_ctx": 65536
+                                        "num_ctx": 8192
                                     }
                                 },
                                 headers=req_headers
                             )
                         except Exception as e2:
-                            print(f"Failed to connect to Ollama: {e} (fallback error: {e2})")
+                            print(f"Failed to connect to Ollama: {type(e).__name__}: {repr(e)} (fallback error: {type(e2).__name__}: {repr(e2)})")
                             break
                         
                     if response.status_code != 200:

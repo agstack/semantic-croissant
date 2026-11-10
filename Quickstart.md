@@ -137,7 +137,7 @@ IP=0.0.0.0
 
 # LLM / Ollama Backend
 OLLAMA_HOST=http://your-ollama-host:11434
-OLLAMA_DEFAULT_MODEL=gemma4:31b-cloud
+OLLAMA_DEFAULT_MODEL=gemma4:e4b
 
 # Port Allocation (Ensure no port conflicts on the host)
 QLEVER_SERVER_PORT=7011

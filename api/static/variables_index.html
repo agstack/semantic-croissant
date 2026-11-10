@@ -767,7 +767,7 @@
                     <div style="display: inline-flex; align-items: center; gap: 6px; background: var(--panel-bg, #f3f4f6); padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border-color, #e5e7eb);">
                         <label for="var-qa-model-select" style="font-size: 0.72rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase;">Model:</label>
                         <select id="var-qa-model-select" style="font-size: 0.78rem; padding: 3px 6px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--surface-color, #fff); color: var(--text-color); outline: none; cursor: pointer;">
-                            <option value="gemma4:31b-cloud" selected>gemma4:31b-cloud (Default)</option>
+                            <option value="{{OLLAMA_DEFAULT_MODEL}}" selected>{{OLLAMA_DEFAULT_MODEL}} (Default)</option>
                             <option value="glm-5.2:cloud">glm-5.2:cloud</option>
                             <option value="gemma4:12b">gemma4:12b</option>
                             <option value="cdif-expert:latest">cdif-expert:latest</option>
@@ -1524,7 +1524,7 @@
 
         async function rerunVarQaWithSelectedModel() {
             const modelSelect = document.getElementById('var-qa-model-select');
-            const selectedModel = modelSelect ? modelSelect.value : 'gemma4:31b-cloud';
+            const selectedModel = modelSelect ? modelSelect.value : '{{OLLAMA_DEFAULT_MODEL}}';
             await explainFilteredVariables(selectedModel);
         }
 
@@ -1542,7 +1542,7 @@
             const searchInput = document.getElementById('var-search-input');
             const queryStr = searchInput ? searchInput.value.trim() : '';
             const modelSelect = document.getElementById('var-qa-model-select');
-            const selectedModel = modelSelect ? modelSelect.value : 'gemma4:31b-cloud';
+            const selectedModel = modelSelect ? modelSelect.value : '{{OLLAMA_DEFAULT_MODEL}}';
 
             const exportUrl = queryStr
                 ? `https://${window.location.host}/export?q=${encodeURIComponent(queryStr)}`
@@ -1621,7 +1621,7 @@
             const explainBtn = document.getElementById('btn-var-explain');
             const runBtn = document.getElementById('var-qa-run-btn');
             const modelSelect = document.getElementById('var-qa-model-select');
-            const chosenModel = modelOverride || (modelSelect ? modelSelect.value : 'gemma4:31b-cloud');
+            const chosenModel = modelOverride || (modelSelect ? modelSelect.value : '{{OLLAMA_DEFAULT_MODEL}}');
 
             if (alertBox) alertBox.style.display = 'none';
             if (panel) panel.style.display = 'block';

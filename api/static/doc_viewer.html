@@ -2040,25 +2040,27 @@
                     .then(data => {
                         if (data.data && data.data.length > 0) {
                             let models = data.data;
-                            // Prioritize gemma4:31b-cloud first, then other -cloud models, then alphabetical
+                            // Prioritize server configured model or local models first
+                            const envDefault = '{{OLLAMA_DEFAULT_MODEL}}';
                             models.sort((a, b) => {
-                                const aId = (a.id || '').toLowerCase();
-                                const bId = (b.id || '').toLowerCase();
-                                if (aId.includes('gemma4:31b-cloud') || aId.includes('gemma4-31b-cloud') || aId.includes('gemma4-31b:cloud')) return -1;
-                                if (bId.includes('gemma4:31b-cloud') || bId.includes('gemma4-31b-cloud') || bId.includes('gemma4-31b:cloud')) return 1;
-
-                                const aCloud = aId.includes('-cloud');
-                                const bCloud = bId.includes('-cloud');
-                                if (aCloud && !bCloud) return -1;
-                                if (!aCloud && bCloud) return 1;
+                                if (a.id === envDefault) return -1;
+                                if (b.id === envDefault) return 1;
+                                const aCloud = (a.id || '').toLowerCase().includes('-cloud');
+                                const bCloud = (b.id || '').toLowerCase().includes('-cloud');
+                                if (!aCloud && bCloud) return -1;
+                                if (aCloud && !bCloud) return 1;
                                 return a.id.localeCompare(b.id);
                             });
 
-                            // Determine default model
-                            const defaultModel = models.find(m => {
-                                const id = (m.id || '').toLowerCase();
-                                return id.includes('gemma4:31b-cloud') || id.includes('gemma4-31b-cloud') || id.includes('gemma4-31b:cloud');
-                            }) || models.find(m => (m.id || '').toLowerCase().includes('-cloud')) || models[0];
+                            // Determine default model: prioritize server-configured OLLAMA_DEFAULT_MODEL, then first model
+                            const envDefaultModel = '{{OLLAMA_DEFAULT_MODEL}}';
+                            const defaultModel = models.find(m => m.id === envDefaultModel) ||
+                                models.find(m => {
+                                    const id = (m.id || '').toLowerCase();
+                                    return envDefaultModel && !envDefaultModel.startsWith('{{') && id === envDefaultModel.toLowerCase();
+                                }) ||
+                                models.find(m => !m.id.includes('-cloud')) ||
+                                models[0];
                             
                             models.forEach(m => {
                                 const opt = document.createElement('option');
