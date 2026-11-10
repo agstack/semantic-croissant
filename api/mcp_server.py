@@ -5701,7 +5701,7 @@ def main(port: int, transport: str) -> int:
                                     ext_summary = ", ".join(f"{k}: {v}" for k, v in sorted(ext_counts.items(), key=lambda x: -x[1]))
                                     croissant_summary_snippet = (
                                         f"=== CROISSANT DATASET FILES SUMMARY (Record: {clean_id}) ===\n"
-                                        f"- Total Distribution Files in Dataset: {total_files}\n"
+                                        f"- Total Number of Files / Distributions in Dataset: {total_files}\n"
                                         f"- File Formats Breakdown: {ext_summary}\n"
                                         f"- Sample Files (first {len(sample_names)}): {', '.join(sample_names)}\n\n"
                                     )
@@ -5713,10 +5713,11 @@ def main(port: int, transport: str) -> int:
                                     import copy, json
                                     trimmed_doc = copy.deepcopy(croissant_doc_dict)
                                     trimmed_doc["distribution"] = trimmed_doc["distribution"][:10]
-                                    trimmed_doc["distribution_note"] = f"Showing first 10 of {total_files} distributions. See CROISSANT DATASET FILES SUMMARY above for complete totals and format breakdown."
+                                    trimmed_doc["distribution_total_count"] = total_files
+                                    trimmed_doc["distribution_note"] = f"CRITICAL: The complete dataset contains {total_files} files in total. Only the first 10 sample files are shown in this array snippet for brevity."
                                     jsonld_to_inject = json.dumps(trimmed_doc, indent=2)
 
-                            context_text = croissant_summary_snippet + "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + jsonld_to_inject + "\n\n" + context_text
+                            context_text = f"IMPORTANT DATASET OVERVIEW:\n- Total files in dataset: {total_files}\n\n" + croissant_summary_snippet + "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + jsonld_to_inject + "\n\n" + context_text
                     except Exception as doc_err:
                         print(f"Warning: doc_id handling error in vault_ask: {doc_err}")
                 model_name = data.get("model", OLLAMA_DEFAULT_MODEL).strip()
