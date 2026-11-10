@@ -9111,8 +9111,6 @@ Please answer the question based ONLY on the context provided above (including t
             if user_orcid:
                 import os, json
                 safe_did = "".join(c for c in col_owner_did if c.isalnum() or c in ":-")
-                owner_file = os.path.
-... [truncated for diff preview]
                 owner_file = os.path.join(_odrl_base_dir(), "users", f"{safe_did}.json")
                 if os.path.exists(owner_file):
                     try:
