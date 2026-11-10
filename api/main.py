@@ -47,8 +47,8 @@ def authenticate_dumps_user(credentials: HTTPBasicCredentials = Depends(security
         )
     return credentials.username
 
-@app.get("/dumps/{filepath:path}")
-async def get_dump_file(filepath: str, user: str = Depends(authenticate_dumps_user)):
+@app.api_route("/dumps/{filepath:path}", methods=["GET", "HEAD"])
+async def get_dump_file(filepath: str, request: Request, user: str = Depends(authenticate_dumps_user)):
     """Serves protected dump files or an HTML directory listing with Basic Auth."""
     full_path = os.path.abspath(os.path.join(DUMPS_DIR, filepath)) if filepath else DUMPS_DIR
     
@@ -101,11 +101,52 @@ async def get_dump_file(filepath: str, user: str = Depends(authenticate_dumps_us
         html_lines.append("</table></body></html>")
         return HTMLResponse(content="\n".join(html_lines))
 
-    return FileResponse(path=full_path, filename=os.path.basename(full_path))
+    # Support HTTP Range requests for resuming large downloads
+    file_size = os.path.getsize(full_path)
+    range_header = request.headers.get("range")
+    if range_header and range_header.startswith("bytes="):
+        try:
+            byte_range = range_header[6:].strip()
+            parts = byte_range.split("-")
+            start = int(parts[0]) if parts[0] else 0
+            end = int(parts[1]) if len(parts) > 1 and parts[1] else file_size - 1
+            if start >= file_size or end >= file_size or start > end:
+                raise HTTPException(status_code=416, detail="Range Not Satisfiable")
+            content_length = end - start + 1
 
-@app.get("/dumps")
-async def get_dumps_root(user: str = Depends(authenticate_dumps_user)):
-    return await get_dump_file("", user=user)
+            def iterfile():
+                with open(full_path, "rb") as f:
+                    f.seek(start)
+                    remaining = content_length
+                    chunk_sz = 1048576  # 1MB
+                    while remaining > 0:
+                        read_bytes = min(remaining, chunk_sz)
+                        data = f.read(read_bytes)
+                        if not data:
+                            break
+                        remaining -= len(data)
+                        yield data
+
+            headers = {
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(content_length),
+                "Content-Disposition": f'attachment; filename="{os.path.basename(full_path)}"'
+            }
+            from starlette.responses import StreamingResponse
+            return StreamingResponse(iterfile(), status_code=206, headers=headers, media_type="application/octet-stream")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    response = FileResponse(path=full_path, filename=os.path.basename(full_path))
+    response.headers["Accept-Ranges"] = "bytes"
+    return response
+
+@app.api_route("/dumps", methods=["GET", "HEAD"])
+async def get_dumps_root(request: Request, user: str = Depends(authenticate_dumps_user)):
+    return await get_dump_file("", request=request, user=user)
 
 
 
@@ -476,7 +517,7 @@ async def process_dspace(url: str):
     return croissant
 
 @app.post("/api/generic/process")
-async def process_generic(url: str = None):
+async def process_generic(url: str = None, vision: bool = False):
     import asyncio
     import re
     from fastapi import HTTPException
@@ -490,6 +531,8 @@ async def process_generic(url: str = None):
         script_path = "convertors/url_to_croissant.py"
         
     cmd = ["python3", script_path, url, "--elastic"]
+    if vision:
+        cmd.append("--computer-vision")
     
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -523,7 +566,7 @@ async def process_generic(url: str = None):
     return {"status": "success", "redirect_url": redirect_url}
 
 @app.post("/api/dataverse/process")
-async def process_dataverse(callback: str = None, url: str = None, siteUrl: str = None, datasetPid: str = None):
+async def process_dataverse(callback: str = None, url: str = None, siteUrl: str = None, datasetPid: str = None, vision: bool = False):
     import base64
     import requests
     import asyncio
@@ -571,6 +614,8 @@ async def process_dataverse(callback: str = None, url: str = None, siteUrl: str 
             script_path = "convertors/url_to_croissant.py"
             
         cmd = ["python3", script_path, dataset_url, "--elastic"]
+        if vision:
+            cmd.append("--computer-vision")
         
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -733,6 +778,31 @@ def get_user_info_from_odrl(request=None):
 
 
 
+def check_palefire_enabled():
+    import os
+    if os.environ.get("PALEFIRE", "").lower() in ("true", "1", "yes"):
+        return True
+    profile_name = os.environ.get("PROFILE_NAME", "")
+    candidates = []
+    if profile_name:
+        candidates.append(f"profiles/{profile_name}.env")
+        candidates.append(f"/app/profiles/{profile_name}.env")
+    candidates.extend(["profiles/asknowmuseum.env", "/app/profiles/asknowmuseum.env"])
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("#"): continue
+                        if line.startswith("PALEFIRE="):
+                            val = line.split("=", 1)[1].strip().strip("\"'").lower()
+                            return val in ("true", "1", "yes")
+            except Exception:
+                pass
+    return False
+
+
 def render_html_template(file_path: str, request=None, auth_status=None):
     import os
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -748,6 +818,9 @@ def render_html_template(file_path: str, request=None, auth_status=None):
     
     html = html.replace('{{VAULT_LOGO_HTML}}', logo_html)
     html = html.replace('{{VAULT_FOOTER_HTML}}', footer_html)
+    
+    palefire_display = "flex" if check_palefire_enabled() else "none"
+    html = html.replace('{{PALEFIRE_DISPLAY}}', palefire_display)
     
     if '{{LOGIN_BUTTON_HTML}}' in html and request:
         try:
@@ -999,9 +1072,9 @@ async def proxy_vault_approve(request: Request, es_id: str):
 
 @app.get("/vault/{filename:path}")
 async def get_vault_file(filename: str):
-    minio_base = os.environ.get("MINIO_URL", "http://minio:9000")
+    minio_base = os.environ.get("MINIO_GLOBAL_HOST", "").strip().rstrip("/") or os.environ.get("MINIO_URL", "http://minio:9000")
     
-    if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".gz") and not filename.endswith(".csv"):
+    if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".json") and not filename.endswith(".gz") and not filename.endswith(".csv"):
         filename += ".md"
         
     from minio import Minio
@@ -2065,6 +2138,30 @@ async def api_collections_proxy(request: Request):
             return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
+
+@app.api_route("/spatial-query", methods=["POST", "GET"])
+async def proxy_spatial_query(request: Request):
+    """Proxy spatial queries to palefire-api."""
+    import httpx
+    from fastapi import Response, HTTPException
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    body = await request.body()
+    
+    palefire_url = os.environ.get("PALEFIRE_API_URL", "http://palefire-api:8000/spatial-query")
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            resp = await client.request(
+                request.method,
+                palefire_url,
+                headers=headers,
+                params=dict(request.query_params),
+                content=body
+            )
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to reach Palefire spatial query service: {str(e)}")
+
 
 
 

@@ -54,6 +54,7 @@
             const direct_url = params.get('url') || params.get('add');
             let siteUrl = params.get('siteUrl');
             const datasetPid = params.get('datasetPid');
+            const vision = params.get('vision');
             
             if (datasetPid) {
                 if (!siteUrl) {
@@ -75,6 +76,9 @@
                     fetchUrl += `callback=${encodeURIComponent(callback)}`;
                 } else if (direct_url) {
                     fetchUrl += `url=${encodeURIComponent(direct_url)}`;
+                }
+                if (vision === 'true' || vision === '1') {
+                    fetchUrl += `&vision=true`;
                 }
                 const response = await fetch(fetchUrl, {
                     method: 'POST'
