@@ -38,7 +38,7 @@ def _get_default_es_url():
 ELASTICSEARCH_URL = _get_default_es_url()
 MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "localhost")
 OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:31b-cloud")
-MODEL_NAME = os.environ.get("MODEL_NAME") or os.environ.get("MODEL") or OLLAMA_DEFAULT_MODEL
+MODEL_NAME = os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("MODEL") or "gemma4:31b-cloud"
 
 def fetch_with_playwright(url):
     print(f"  -> Fetching with Playwright fallback: {url}")

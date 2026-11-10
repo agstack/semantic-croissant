@@ -15,7 +15,7 @@ with open(CONFIG_PATH, "r", encoding="utf-8") as f:
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", config.get("OLLAMA_HOST", "http://10.147.18.82:11435"))
 if "10.147.18.24" in OLLAMA_HOST or "ollama:11434" in OLLAMA_HOST:
     OLLAMA_HOST = "http://10.147.18.82:11435"
-MODEL = os.environ.get("MODEL", config.get("MODEL", "gemma4:31b-cloud"))
+MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL", os.environ.get("MODEL", config.get("MODEL", "gemma4:31b-cloud")))
 OLLAMA_TOKEN = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
 MCP_URL = os.environ.get("MCP_URL", config.get("MCP_URL", "http://localhost:7070/sse"))
 AI_MODEL_OVERRIDE = os.environ.get("AI_MODEL_OVERRIDE", config.get("ai_model_override", "Semantic Croissant AI Agent v.0.1"))

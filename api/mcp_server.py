@@ -5452,7 +5452,7 @@ Please answer the question based ONLY on the context provided above (including t
                 import os
                 
                 if not model_name or model_name in ["default", "gemma4:e4b", "llama3.1"]:
-                    model_name = "gemma4:31b-cloud"
+                    model_name = os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:31b-cloud"
 
                 def run_agent():
                     env = os.environ.copy()
@@ -12327,9 +12327,9 @@ CDIF EXPORT VARIABLES CONTEXT:
             ollama_url = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11435")
             if "10.147.18.24" in ollama_url or "ollama:11434" in ollama_url:
                 ollama_url = "http://10.147.18.82:11435"
-            # Allow user to specify model or default to gemma4:31b-cloud
+            # Allow user to specify model or default to OLLAMA_DEFAULT_MODEL
             req_model = body.get("model") or body.get("ai_model")
-            model = req_model or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:31b-cloud"
+            model = req_model or os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:31b-cloud"
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
             req_headers = {"Authorization": f"Bearer {ollama_token}"} if ollama_token else {}
 
@@ -12367,7 +12367,7 @@ CDIF EXPORT VARIABLES CONTEXT:
             body = await request.json()
             markdown_content = body.get("markdown") or body.get("content") or ""
             filter_query = body.get("filter", "") or body.get("query", "")
-            model_name = body.get("model") or "gemma4:31b-cloud"
+            model_name = body.get("model") or os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL") or os.environ.get("MODEL_NAME") or "gemma4:31b-cloud"
             variables = body.get("variables", [])
             cdif_export_url = body.get("cdif_export_url") or ""
 
