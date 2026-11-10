@@ -12,7 +12,7 @@ services:
       - ${VOLUME_DIR:-./qlever-tests/volumes}/${PROFILE_NAME:-croissant-live}/server:/data/server
       - ${VOLUME_DIR:-./qlever-tests/volumes}/${PROFILE_NAME:-croissant-live}/ui:/data/ui
       - ./volumes/${PROFILE_NAME:-croissant-live}/es:/data/es
-      - ./volumes/${PROFILE_NAME:-croissant-live}/minio:/data/minio
+      - ${VOLUME_DIR:-./qlever-tests/volumes}/${PROFILE_NAME:-croissant-live}/minio:/data/minio
 
   server:
     container_name: ${PROFILE_NAME:-croissant-live}-server
@@ -184,7 +184,7 @@ services:
       - MINIO_ROOT_PASSWORD=minioadmin
     command: server /data --console-address ":9001"
     volumes:
-      - ./volumes/${PROFILE_NAME:-croissant-live}/minio:/data
+      - ${VOLUME_DIR:-./qlever-tests/volumes}/${PROFILE_NAME:-croissant-live}/minio:/data
 
   converters:
     container_name: ${PROFILE_NAME:-croissant-live}-converters
