@@ -7892,29 +7892,36 @@ Please answer the question based ONLY on the context provided above (including t
             es_id = request.path_params["es_id"]
             md_text = None
             media_type = "text/markdown"
+            es_nodes = get_elasticsearch_lookup_urls()
             vault_es_url = get_vault_elasticsearch_url()
+            if vault_es_url not in es_nodes:
+                es_nodes.insert(0, vault_es_url)
             candidate_indices = ["croissant", "dataverse", "openml", "sshoc", "trump", "cdif"]
             
             async with httpx.AsyncClient(timeout=4.0) as client:
                 try:
                     doc_source = None
-                    for idx_name in candidate_indices:
-                        try:
-                            r = await client.get(f"{vault_es_url}/{idx_name}/_doc/{es_id}", timeout=2.0)
-                            if r.status_code == 200:
-                                doc_source = r.json().get("_source", {})
-                                break
-                        except Exception:
-                            pass
-                    if not doc_source:
-                        try:
-                            r = await client.post(f"{vault_es_url}/_all/_search", json={"query": {"term": {"_id": es_id}}, "size": 1}, timeout=2.0)
-                            if r.status_code == 200:
-                                hits = r.json().get("hits", {}).get("hits", [])
-                                if hits:
-                                    doc_source = hits[0].get("_source", {})
-                        except Exception:
-                            pass
+                    for es_url in es_nodes:
+                        if doc_source:
+                            break
+                        for idx_name in candidate_indices:
+                            try:
+                                r = await client.get(f"{es_url}/{idx_name}/_doc/{es_id}", timeout=2.0)
+                                if r.status_code == 200:
+                                    doc_source = r.json().get("_source", {})
+                                    break
+                            except Exception:
+                                pass
+                        if not doc_source:
+                            try:
+                                r = await client.post(f"{es_url}/_search", json={"query": {"ids": {"values": [es_id]}}, "size": 1}, timeout=2.0)
+                                if r.status_code == 200:
+                                    hits = r.json().get("hits", {}).get("hits", [])
+                                    if hits:
+                                        doc_source = hits[0].get("_source", {})
+                                        break
+                            except Exception:
+                                pass
 
                     if doc_source:
                         md_text = doc_source.get("_markdown_text", None)
