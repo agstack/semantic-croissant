@@ -1409,10 +1409,14 @@
 
                 function normalizeVaultUrl(u) {
                     if (!u || typeof u !== 'string') return u;
-                    // Fix outdated or mismatched domain ai.mediaquantum.ai -> current origin or ai.mediaquantum.eu
+                    // Fix outdated or mismatched domain ai.mediaquantum.ai -> current origin
                     if (u.includes('ai.mediaquantum.ai')) {
-                        return u.replace(/https?:\/\/ai\.mediaquantum\.ai/g, window.location.origin);
+                        u = u.replace(/https?:\/\/ai\.mediaquantum\.ai/g, window.location.origin);
                     }
+                    // Fix any hardcoded localhost, 127.0.0.1 (with or without port) pointing to /vault/
+                    u = u.replace(/https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\/(vault\/[^\s"'>]+)/g, `${window.location.origin}/$1`);
+                    // If it is an absolute vault url on another host or internal container, normalize to current origin
+                    u = u.replace(/https?:\/\/[^\/]+\/(vault\/[^\s"'>]+)/g, `${window.location.origin}/$1`);
                     return u;
                 }
 
@@ -1810,7 +1814,7 @@
                                     }
                                     const fmt = d.encodingFormat || '-';
                                     const size = d.contentSize || '-';
-                                    const curl = d.contentUrl || '';
+                                    const curl = normalizeVaultUrl(d.contentUrl || '');
                                     const dlStr = curl ? `[📥](${curl})` : '-';
                                     const toolsStr = curl ? '[⚙️](#tools)' : '-';
                                     let cdifStr = '-';
@@ -1839,6 +1843,11 @@
                     }
                 }
                 
+                // Normalize vault links in markdown body (e.g. [doc.csv](./doc.csv) or absolute localhost urls)
+                markdown = markdown.replace(/\[([^\]]+)\]\(\.\/([^\)]+)\)/g, '[$1](/vault/$2)');
+                markdown = markdown.replace(/https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\/(vault\/[^\s\)\"\'\>]+)/g, `${window.location.origin}/$1`);
+                markdown = markdown.replace(/https?:\/\/[^\/\s\)\"\'\>]+\/(vault\/[^\s\)\"\'\>]+)/g, `${window.location.origin}/$1`);
+
                 const htmlContent = marked.parse(markdown);
                 
                 const contentDiv = document.getElementById('md-content');
@@ -1865,11 +1874,15 @@
                             let fileUrl = '';
                             if (dlColIdx !== -1 && tr.children[dlColIdx]) {
                                 const dlLink = tr.children[dlColIdx].querySelector('a');
-                                if (dlLink) fileUrl = dlLink.href;
+                                if (dlLink) {
+                                    if (dlLink.href) dlLink.href = normalizeVaultUrl(dlLink.href);
+                                    fileUrl = dlLink.href;
+                                }
                             }
 
                             // Convert download links
                             tr.querySelectorAll('a').forEach(a => {
+                                if (a.href) a.href = normalizeVaultUrl(a.href);
                                 const txt = a.textContent.trim();
                                 if (txt === 'Download' || txt === '📥') {
                                     a.className = 'dist-btn-download';

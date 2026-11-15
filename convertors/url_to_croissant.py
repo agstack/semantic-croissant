@@ -2569,7 +2569,10 @@ if __name__ == "__main__":
     if args.host:
         h = args.host.strip()
         if not h.startswith("http://") and not h.startswith("https://"):
-            h = f"https://{h}"
+            if h.startswith("localhost") or h.startswith("127.0.0.1") or (":" in h and h.split(":")[0].replace(".", "").isdigit()):
+                h = f"http://{h}"
+            else:
+                h = f"https://{h}"
         os.environ["HOST"] = h
         os.environ["MCP_DOMAIN"] = h.replace("http://", "").replace("https://", "").split("/")[0]
     
