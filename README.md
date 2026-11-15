@@ -11,22 +11,82 @@ Semantic Croissant platform is being used by following European projects:
 - **qlever-tests**: The original `qlever-tests` repository is linked here as a **Git Submodule**. This provides access to the required environment variables (`.env` files) and Docker build contexts (`Dockerfile`s).
 - **compose.yaml**: The Docker Compose file defines the `default` profile (`./profiles/default.env`) to run the server, UI, API, MCP server, Elasticsearch, MinIO, Converters, and DDI-CDI Studio in a fully local setup.
 
-## Deploying
+## Deploying & Quickstart
 
-1. Ensure the submodule is fully initialized:
-   ```bash
-   git submodule update --init --recursive
-   ```
+### Prerequisites
+- Docker & Docker Compose v2+
+- Git with submodule support
+- (Optional) NVIDIA GPU / Ollama for local LLM & Vision support
 
-2. Build the local DDI-CDI Studio image (first-time setup):
-   ```bash
-   docker build -t ddicdi-studio:latest tools/DDICDI_generator_gen2
-   ```
+---
 
-3. Start the infrastructure using the default local profile:
-   ```bash
-   docker-compose --profile ./profiles/default.env up -d
-   ```
+### Step-by-Step Build and Start with `default` Profile
+
+#### 1. Initialize Submodules
+The repository relies on submodules (`qlever-tests`, `palefire`, `croissant-toolkit`):
+```bash
+git submodule update --init --recursive
+```
+
+#### 2. Build the Docker Images
+Before starting the services for the first time or after updates, build the required local container images:
+
+```bash
+# 1. Build the API and MCP server image (named api-default for default profile)
+docker build -t api-default api/
+
+# 2. Build the DDI-CDI Studio service
+docker build -t ddicdi-studio:latest tools/DDICDI_generator_gen2
+
+# 3. Build the format converters service
+docker build -t default-converters tools/converters
+
+# 4. (Optional) Build Datamaps CV image if computer vision / map extraction is needed
+docker build -t datamaps-default -f docker/datamaps/Dockerfile palefire/datamaps
+```
+
+#### 3. Start the Infrastructure
+Launch the full stack with Docker Compose using the `default` profile and environment file:
+
+```bash
+PROFILE_NAME=default docker compose --env-file profiles/default.env -p default --profile default up -d
+```
+*(Alternatively, shorthand `docker compose --profile ./profiles/default.env up -d` can also be used).*
+
+#### 4. Verify Services and Endpoints
+Once started, the following services and endpoints are available on `localhost`:
+
+| Service | Port | Local Endpoint / URL | Description |
+|---|---|---|---|
+| **Semantic Croissant API** | `7013` | http://localhost:7013 | REST API & Document Viewer (`/vault/doc/...`) |
+| **MCP Server (SSE)** | `7070` | http://localhost:7070/sse | Model Context Protocol SSE transport endpoint |
+| **QLever UI** | `7012` | http://localhost:7012 | SPARQL Query Editor & Web Interface |
+| **QLever SPARQL Backend** | `7011` | http://localhost:7011 | Fast SPARQL query engine |
+| **Elasticsearch** | `9200` | http://localhost:9200 | Semantic full-text & dataset search |
+| **MinIO Object Vault API** | `9005` | http://localhost:9005 | S3-compatible Vault storage for JSON-LD, CSV, XLSX |
+| **MinIO Web Console** | `9007` | http://localhost:9007 | Browser UI for MinIO (`minioadmin` / `minioadmin`) |
+| **Converters Service** | `8082` | http://localhost:8082 | CDIF, OAI-PMH & data format conversion tools |
+| **DDI-CDI Studio** | `8083` | http://localhost:8083 | DDI-CDI generator service |
+
+Check running containers:
+```bash
+docker compose -p default ps
+```
+
+Check API and service logs:
+```bash
+docker compose -p default logs -f api
+```
+
+#### 5. Stopping the Infrastructure
+To stop all services:
+```bash
+PROFILE_NAME=default docker compose --env-file profiles/default.env -p default --profile default down
+```
+To stop and clean up volumes (caution: removes local Elasticsearch and database state):
+```bash
+PROFILE_NAME=default docker compose --env-file profiles/default.env -p default --profile default down -v
+```
 
 ### Volume Parameterization
 By default, the Docker compose configuration uses volumes located at `./qlever-tests/volumes` and raw data from `./qlever-tests/data`.
