@@ -6459,7 +6459,9 @@ Question: {question}
 
         async def proxy_vault(request):
             filename = request.path_params["filename"]
-            if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".json") and not filename.endswith(".gz") and not filename.endswith(".csv"):
+            KNOWN_VAULT_EXTS = ('.md', '.jsonld', '.json', '.gz', '.csv', '.xlsx', '.xls', '.ods', '.tsv', '.html',
+                                '.jpg', '.jpeg', '.png', '.webp', '.tiff', '.bmp', '.pdf', '.txt', '.doc', '.docx')
+            if not any(filename.lower().endswith(ext) for ext in KNOWN_VAULT_EXTS):
                 filename += ".md"
             minio_base = get_minio_base_url()
             from minio import Minio
@@ -6687,21 +6689,36 @@ Question: {question}
                 signposting_links = [
                     f'<{base_url}/vault/{filename}>; rel="cite-as"',
                     f'<{base_url}/vault/{filename}.jsonld>; rel="describedby" type="application/ld+json"',
-                    f'<{base_url}/vault/{filename}>; rel="item" type="text/markdown"',
                     '<https://schema.org/Dataset>; rel="type"',
                     '<https://creativecommons.org/licenses/by/4.0/>; rel="license"'
                 ]
+                if filename.endswith(".md"):
+                    signposting_links.append(f'<{base_url}/vault/{filename}>; rel="item" type="text/markdown"')
+                elif filename.endswith(".csv"):
+                    signposting_links.append(f'<{base_url}/vault/{filename}>; rel="item" type="text/csv"')
                 
                 headers = {
                     "Link": ", ".join(signposting_links),
-                    "X-Fair-Signposting": "enabled"
+                    "X-Fair-Signposting": "enabled",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Expose-Headers": "Link, Content-Disposition, Content-Type, Content-Length"
                 }
                 
-                media_type = "text/markdown; charset=utf-8"
+                import mimetypes
+                guessed_type, _ = mimetypes.guess_type(filename)
+                media_type = guessed_type or "text/markdown; charset=utf-8"
                 if filename.endswith(".jsonld") or filename.endswith(".jsonld.gz") or filename.endswith(".json"):
                     media_type = "application/ld+json; charset=utf-8"
                 elif filename.endswith(".csv"):
                     media_type = "text/csv; charset=utf-8"
+                elif filename.endswith(".xlsx"):
+                    media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                elif filename.endswith(".tsv"):
+                    media_type = "text/tab-separated-values; charset=utf-8"
+                elif filename.endswith(".md"):
+                    media_type = "text/markdown; charset=utf-8"
                 
                 if filename.endswith(".gz"):
                     headers["Content-Encoding"] = "gzip"
@@ -6867,6 +6884,29 @@ Question: {question}
                     return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
                 except Exception as e:
                     return JSONResponse({"error": f"Failed to reach Palefire spatial query service: {str(e)}"}, status_code=502)
+
+        async def proxy_mcp_geoid(request):
+            """Proxy geoid reverse geocode and docid search requests to palefire-api."""
+            import httpx
+            from starlette.responses import Response, JSONResponse
+            body = await request.body()
+            headers = dict(request.headers)
+            headers.pop("host", None)
+            palefire_base = os.environ.get("PALEFIRE_SERVER_URL", "http://palefire-api:8000")
+            geoid_url = f"{palefire_base.rstrip('/')}/api/geoid"
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                try:
+                    resp = await client.request(
+                        request.method,
+                        geoid_url,
+                        headers=headers,
+                        params=dict(request.query_params),
+                        content=body
+                    )
+                    return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+                except Exception as e:
+                    return JSONResponse({"error": f"Failed to reach Palefire GeoID service: {str(e)}"}, status_code=502)
+
 
         async def export_to_cdif(request):
             """
@@ -7596,6 +7636,7 @@ Question: {question}
                         resp_headers = stream_resp.headers
                         content_type_header = resp_headers.get("content-type", "").lower()
                         cd = resp_headers.get("content-disposition", "")
+                        filename = None
                         if "filename=" in cd or "filename*=" in cd:
                             m = re.search(r"filename\*?=['\"]?(?:UTF-8'')?([^;'\"]+)", cd)
                             if m:
@@ -14231,18 +14272,49 @@ Output a JSON object with:
             
             url = request.query_params.get("url")
             vision_param = request.query_params.get("vision", "").lower() in ("true", "1", "yes")
+            host_param = request.query_params.get("host")
+            
+            if not url:
+                try:
+                    body = await request.json()
+                    if isinstance(body, dict):
+                        url = body.get("url") or url
+                        if "vision" in body:
+                            vision_param = bool(body.get("vision"))
+                        if "host" in body:
+                            host_param = body.get("host") or host_param
+                except Exception:
+                    pass
             
             if not url:
                 return JSONResponse({"detail": "Missing url parameter"}, status_code=400)
             
             try:
+                # Resolve relative or test file paths if target exists on disk
+                resolved_url = url
+                if not url.startswith("http://") and not url.startswith("https://") and not os.path.exists(resolved_url):
+                    base_dirs = ["/app/palefire", "/mediaquantum/qlever/semantic-croissant/palefire", "/mediaquantum/qlever/semantic-croissant", "/app", os.getcwd()]
+                    for b in base_dirs:
+                        cand = os.path.join(b, url.lstrip("/"))
+                        if os.path.exists(cand):
+                            resolved_url = cand
+                            break
+
+                client_host = host_param
+                if not client_host:
+                    client_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+                if not client_host:
+                    client_host = os.environ.get("HOST") or os.environ.get("MCP_DOMAIN")
+
                 script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../convertors/url_to_croissant.py"))
                 if not os.path.exists(script_path):
                     script_path = "convertors/url_to_croissant.py"
                     
-                cmd = ["python3", script_path, url, "--elastic"]
+                cmd = ["python3", script_path, resolved_url, "--elastic"]
                 if vision_param:
                     cmd.append("--computer-vision")
+                if client_host:
+                    cmd.extend(["--host", str(client_host).strip()])
                 
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -14280,6 +14352,82 @@ Output a JSON object with:
             except Exception as e:
                 print(f"Error processing generic url: {e}")
                 return JSONResponse({"detail": str(e)}, status_code=500)
+
+        async def process_generic_upload(request):
+            import asyncio
+            import re
+            import os
+            import shutil
+            from starlette.responses import JSONResponse
+            
+            try:
+                form = await request.form()
+                file_obj = form.get("file")
+                vision_val = form.get("vision", "false")
+                vision_param = str(vision_val).lower() in ("true", "1", "yes", "on")
+                host_val = form.get("host")
+                
+                if not file_obj or not hasattr(file_obj, "filename") or not file_obj.filename:
+                    return JSONResponse({"detail": "No file uploaded"}, status_code=400)
+                    
+                filename = file_obj.filename
+                upload_dir = "/tmp/palefire_uploads"
+                os.makedirs(upload_dir, exist_ok=True)
+                tmp_path = os.path.join(upload_dir, filename)
+                
+                with open(tmp_path, "wb") as buffer:
+                    shutil.copyfileobj(file_obj.file, buffer)
+                    
+                client_host = host_val
+                if not client_host:
+                    client_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+                if not client_host:
+                    client_host = os.environ.get("HOST") or os.environ.get("MCP_DOMAIN")
+
+                script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../convertors/url_to_croissant.py"))
+                if not os.path.exists(script_path):
+                    script_path = "convertors/url_to_croissant.py"
+                    
+                cmd = ["python3", script_path, tmp_path, "--elastic"]
+                if vision_param:
+                    cmd.append("--computer-vision")
+                if client_host:
+                    cmd.extend(["--host", str(client_host).strip()])
+                    
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await process.communicate()
+                
+                if process.returncode != 0:
+                    return JSONResponse({"detail": f"File processing failed: {stderr.decode('utf-8')}"}, status_code=500)
+                    
+                output = stdout.decode('utf-8')
+                match = re.search(r"Extracted markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+                translated_match = re.search(r"Translated markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+                
+                if translated_match:
+                    redirect_url = translated_match.group(1)
+                elif match:
+                    redirect_url = match.group(1)
+                else:
+                    file_match = re.search(r"Extracted markdown saved to [^/]+/([^/]+)/([a-zA-Z0-9_-]+\.md)", output)
+                    if file_match:
+                        redirect_url = f"/vault/doc/{file_match.group(2)}"
+                    else:
+                        return JSONResponse({"detail": "Could not determine generated filename from output"}, status_code=500)
+                        
+                doc_id = redirect_url.rstrip("/").split("/")[-1]
+                if doc_id.endswith(".md"):
+                    doc_id = doc_id[:-3]
+                redirect_url = f"/vault/doc/{doc_id}"
+                
+                return JSONResponse({"status": "success", "redirect_url": redirect_url})
+            except Exception as e:
+                print(f"Error in generic upload: {e}")
+                return JSONResponse({"detail": str(e)}, status_code=500)
         
     if transport == "sse":
         from starlette.middleware.gzip import GZipMiddleware
@@ -14307,6 +14455,7 @@ Output a JSON object with:
                 Route("/add", endpoint=view_add),
                 Route("/url", endpoint=view_add),
                 Route("/api/generic/process", endpoint=process_generic, methods=["POST"]),
+                Route("/api/generic/upload", endpoint=process_generic_upload, methods=["POST"]),
                 Route("/collectionsindex", endpoint=view_collections_index),
                 Route("/variableindex", endpoint=view_variables_index),
                 Route("/validate", endpoint=view_validate_html),
@@ -14359,6 +14508,8 @@ Output a JSON object with:
                 Route("/api/export", endpoint=export_to_cdif, methods=["GET", "POST"]),
                 Route("/spatial-query", endpoint=proxy_mcp_spatial_query, methods=["GET", "POST"]),
                 Route("/api/spatial-query", endpoint=proxy_mcp_spatial_query, methods=["GET", "POST"]),
+                Route("/geoid", endpoint=proxy_mcp_geoid, methods=["GET", "POST"]),
+                Route("/api/geoid", endpoint=proxy_mcp_geoid, methods=["GET", "POST"]),
                 Route("/vault/doc/{es_id}", endpoint=vault_es_doc_html),
                 Route("/vault/doc/{es_id}/annotations", endpoint=vault_es_doc_html),
                 Route("/vault/history", endpoint=vault_get_history, methods=["GET"]),

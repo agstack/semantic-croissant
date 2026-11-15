@@ -1407,6 +1407,15 @@
                 markdown = markdown.replace(/^#\s+🥐/gm, '## 🥐');
                 
 
+                function normalizeVaultUrl(u) {
+                    if (!u || typeof u !== 'string') return u;
+                    // Fix outdated or mismatched domain ai.mediaquantum.ai -> current origin or ai.mediaquantum.eu
+                    if (u.includes('ai.mediaquantum.ai')) {
+                        return u.replace(/https?:\/\/ai\.mediaquantum\.ai/g, window.location.origin);
+                    }
+                    return u;
+                }
+
                 function renderJsonLd(data) {
                     let html = `<div style="font-family: var(--font-family, sans-serif); color: var(--text-color);">`;
                     
@@ -1509,18 +1518,19 @@
                             let actHtml = '-';
                             let cdifHtml = '-';
                             let toolsHtml = '-';
-                            if (d.contentUrl) {
-                                actHtml = `<a href="${d.contentUrl}" target="_blank" class="dist-btn-download" title="Download ${name}">
+                            const targetContentUrl = normalizeVaultUrl(d.contentUrl);
+                            if (targetContentUrl) {
+                                actHtml = `<a href="${targetContentUrl}" target="_blank" class="dist-btn-download" title="Download ${name}">
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                                 </a>`;
                                 const dsParam = data.url || data.identifier || '';
-                                const cdifHref = dsParam ? `/export?ds=${encodeURIComponent(dsParam)}&file=${encodeURIComponent(d.contentUrl)}` : `/export?file=${encodeURIComponent(d.contentUrl)}`;
+                                const cdifHref = dsParam ? `/export?ds=${encodeURIComponent(dsParam)}&file=${encodeURIComponent(targetContentUrl)}` : `/export?file=${encodeURIComponent(targetContentUrl)}`;
                                 cdifHtml = `<a href="${cdifHref}" target="_blank" class="dist-btn-cdif" title="Export to CDIF (DDI-CDI JSON-LD)">
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
                                 </a>`;
                                 
                                 const safeName = name.replace(/"/g, '&quot;');
-                                const safeUrl = d.contentUrl.replace(/"/g, '&quot;');
+                                const safeUrl = targetContentUrl.replace(/"/g, '&quot;');
                                 toolsHtml = `
                                 <div class="dist-tools-container">
                                     <button class="dist-btn-tools" onclick="toggleDistToolsMenu(this, event)" title="File Tools">
@@ -2637,7 +2647,7 @@
                             if (toolbarRight) {
                                 if (csvDist) {
                                     const btnCsv = document.createElement('a');
-                                    btnCsv.href = csvDist.contentUrl;
+                                    btnCsv.href = normalizeVaultUrl(csvDist.contentUrl);
                                     btnCsv.target = '_blank';
                                     btnCsv.innerHTML = '📊 CSV';
                                     btnCsv.style.cssText = 'padding: 4px 12px; border-radius: 4px; border: 1px solid var(--border-color); cursor: pointer; background: var(--header-bg); color: var(--text-color); font-size: 0.85rem; text-decoration: none; display: flex; align-items: center; gap: 5px;';
@@ -2646,7 +2656,8 @@
                                 if (anyDataDist) {
                                     const btnCdif = document.createElement('a');
                                     const dsParam = data.url || data.identifier || '';
-                                    btnCdif.href = dsParam ? `/export?ds=${encodeURIComponent(dsParam)}&file=${encodeURIComponent(anyDataDist.contentUrl)}` : `/export?file=${encodeURIComponent(anyDataDist.contentUrl)}`;
+                                    const normalizedDataDistUrl = normalizeVaultUrl(anyDataDist.contentUrl);
+                                    btnCdif.href = dsParam ? `/export?ds=${encodeURIComponent(dsParam)}&file=${encodeURIComponent(normalizedDataDistUrl)}` : `/export?file=${encodeURIComponent(normalizedDataDistUrl)}`;
                                     btnCdif.target = '_blank';
                                     btnCdif.innerHTML = '⚡ Export to CDIF';
                                     btnCdif.title = 'Convert dataset file to DDI-CDI JSON-LD';
@@ -3038,19 +3049,119 @@
         }
     </script>
     <div id="add-resource-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">
-        <div style="background: var(--bg-color); padding: 20px; border-radius: 8px; width: 400px; max-width: 90%; border: 1px solid var(--border-color);">
+        <div style="background: var(--bg-color); padding: 20px; border-radius: 8px; width: 440px; max-width: 90%; border: 1px solid var(--border-color); box-shadow: 0 4px 16px rgba(0,0,0,0.2);">
             <h3 style="margin-top: 0; color: var(--text-color);">Add Resource</h3>
-            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-color);">Enter the URL of the resource you want to ingest:</p>
+            
+            <!-- Ingest via URL -->
+            <p style="font-size: 0.9rem; margin-bottom: 8px; color: var(--text-color); font-weight: 500;">Enter the URL of the resource you want to ingest:</p>
             <input type="text" id="add-resource-input" placeholder="https://..." style="width: 100%; padding: 8px; margin-bottom: 12px; border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; background: var(--panel-bg); color: var(--text-color); font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') document.getElementById('add-resource-submit').click()">
+            
+            <!-- Local file upload option if PALEFIRE is True -->
+            <div id="add-resource-file-container" style="display: {{PALEFIRE_DISPLAY}}; flex-direction: column; margin-bottom: 14px; padding: 10px; border: 1px dashed var(--border-color); border-radius: 6px; background: rgba(128,128,128,0.05);">
+                <label style="font-size: 0.85rem; color: var(--text-color); font-weight: 500; margin-bottom: 6px; display: block;">Or upload local file (Image, PDF, Document):</label>
+                <input type="file" id="add-resource-file-input" style="font-size: 0.85rem; color: var(--text-color);">
+            </div>
+
             <label id="add-resource-vision-label" style="display: {{PALEFIRE_DISPLAY}}; align-items: center; gap: 8px; margin-bottom: 15px; font-size: 0.85rem; color: var(--text-color); cursor: pointer; user-select: none;">
                 <input type="checkbox" id="add-resource-vision" style="cursor: pointer; width: 15px; height: 15px;">
                 <span>Use Computer Vision</span>
             </label>
+                        <div id="add-resource-progress-container" style="display: none; margin-bottom: 14px;">
+                <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-color); margin-bottom: 6px; font-weight: 500;">
+                    <span id="add-resource-status-text">Processing file with PaleFire OCR & Ingestion...</span>
+                    <span id="add-resource-progress-percent">0%</span>
+                </div>
+                <div style="width: 100%; height: 8px; background: rgba(128,128,128,0.2); border-radius: 4px; overflow: hidden;">
+                    <div id="add-resource-progress-bar" style="width: 0%; height: 100%; background: #006bb3; transition: width 0.3s ease; border-radius: 4px;"></div>
+                </div>
+                <div id="add-resource-status-subtext" style="font-size: 0.75rem; color: var(--text-color); opacity: 0.8; margin-top: 4px;">Uploading file...</div>
+            </div>
+            <div id="add-resource-error" style="display: none; font-size: 0.85rem; color: #d32f2f; margin-bottom: 10px;"></div>
             <div style="display: flex; justify-content: flex-end; gap: 10px;">
                 <button onclick="document.getElementById('add-resource-modal').style.display='none'" class="theme-toggle">Cancel</button>
-                <button id="add-resource-submit" onclick="var url = document.getElementById('add-resource-input').value; var cv = document.getElementById('add-resource-vision').checked; if(url) window.location.href='/dataverse?url=' + encodeURIComponent(url) + (cv ? '&vision=true' : '');" style="background-color: #006bb3; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
+                <button id="add-resource-submit" onclick="
+                    var fileInput = document.getElementById('add-resource-file-input');
+                    var urlInput = document.getElementById('add-resource-input');
+                    var cv = document.getElementById('add-resource-vision').checked;
+                    var btn = document.getElementById('add-resource-submit');
+                    var progContainer = document.getElementById('add-resource-progress-container');
+                    var progText = document.getElementById('add-resource-status-text');
+                    var progSubtext = document.getElementById('add-resource-status-subtext');
+                    var progPercent = document.getElementById('add-resource-progress-percent');
+                    var progBar = document.getElementById('add-resource-progress-bar');
+                    var errBox = document.getElementById('add-resource-error');
+                    
+                    if (fileInput && fileInput.files && fileInput.files.length > 0) {
+                        btn.disabled = true;
+                        btn.innerText = 'Processing...';
+                        if (errBox) errBox.style.display = 'none';
+                        progContainer.style.display = 'block';
+                        progText.innerText = 'Processing file with PaleFire OCR & Ingestion...';
+                        progSubtext.innerText = 'Uploading file to server...';
+                        progBar.style.width = '15%';
+                        progPercent.innerText = '15%';
+
+                        var progressInterval = setInterval(function() {
+                            var cur = parseInt(progBar.style.width) || 15;
+                            if (cur < 35) {
+                                cur += 5;
+                                progSubtext.innerText = 'Extracting text and tables via PaleFire Tesseract OCR...';
+                            } else if (cur < 65) {
+                                cur += 3;
+                                progSubtext.innerText = 'Detecting structured sheets and generating Excel & CSV...';
+                            } else if (cur < 90) {
+                                cur += 1;
+                                progSubtext.innerText = 'Creating Croissant JSON-LD & saving to MinIO Vault...';
+                            }
+                            progBar.style.width = cur + '%';
+                            progPercent.innerText = cur + '%';
+                        }, 800);
+
+                        var formData = new FormData();
+                        formData.append('file', fileInput.files[0]);
+                        if (cv) formData.append('vision', 'true');
+                        fetch('/api/generic/upload', {
+                            method: 'POST',
+                            body: formData
+                        })
+                        .then(r => r.json().then(data => ({ok: r.ok, data})))
+                        .then(res => {
+                            clearInterval(progressInterval);
+                            if (res.ok && res.data.redirect_url) {
+                                progBar.style.width = '100%';
+                                progPercent.innerText = '100%';
+                                progSubtext.innerText = 'Complete! Redirecting to Vault...';
+                                setTimeout(function() {
+                                    window.location.href = res.data.redirect_url;
+                                }, 400);
+                            } else {
+                                progContainer.style.display = 'none';
+                                if (errBox) {
+                                    errBox.style.display = 'block';
+                                    errBox.innerText = 'Error: ' + (res.data.detail || 'Upload failed');
+                                }
+                                btn.disabled = false;
+                                btn.innerText = 'Ingest';
+                            }
+                        })
+                        .catch(err => {
+                            clearInterval(progressInterval);
+                            progContainer.style.display = 'none';
+                            if (errBox) {
+                                errBox.style.display = 'block';
+                                errBox.innerText = 'Upload error: ' + err;
+                            }
+                            btn.disabled = false;
+                            btn.innerText = 'Ingest';
+                        });
+                    } else if (urlInput && urlInput.value.trim()) {
+                        var url = urlInput.value.trim();
+                        window.location.href = '/dataverse?url=' + encodeURIComponent(url) + (cv ? '&vision=true' : '');
+                    }
+                " style="background-color: #006bb3; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
             </div>
         </div>
+    </div>
     </div>
 
     <script>

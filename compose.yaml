@@ -124,6 +124,7 @@ services:
       - ${VOLUME_DIR:-./qlever-tests/volumes}/${PROFILE_NAME:-default}/server:/volumes/server
       - ./convertors:/app/convertors:ro
       - ./agents:/app/agents:ro
+      - ./palefire/test:/app/test:ro
       - ~/.odrl:/app/.odrl
       - ./api/main.py:/app/main.py
       - ./api/mcp_server.py:/app/mcp_server.py
@@ -182,6 +183,7 @@ services:
       - ./shapes:/app/shapes:ro
       - ./convertors:/app/convertors:ro
       - ./agents:/app/agents:ro
+      - ./palefire/test:/app/test:ro
       - ~/.odrl:/app/.odrl
       - ./api/main.py:/app/main.py
       - ./api/mcp_server.py:/app/mcp_server.py

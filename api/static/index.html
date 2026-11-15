@@ -1318,19 +1318,119 @@
     </div>
 
     <div id="add-resource-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">
-        <div style="background: var(--bg-color); padding: 20px; border-radius: 8px; width: 400px; max-width: 90%; border: 1px solid var(--border-color);">
+        <div style="background: var(--bg-color); padding: 20px; border-radius: 8px; width: 440px; max-width: 90%; border: 1px solid var(--border-color); box-shadow: 0 4px 16px rgba(0,0,0,0.2);">
             <h3 style="margin-top: 0; color: var(--text-color);">Add Resource</h3>
-            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-color);">Enter the URL of the resource you want to ingest:</p>
+            
+            <!-- Ingest via URL -->
+            <p style="font-size: 0.9rem; margin-bottom: 8px; color: var(--text-color); font-weight: 500;">Enter the URL of the resource you want to ingest:</p>
             <input type="text" id="add-resource-input" placeholder="https://..." style="width: 100%; padding: 8px; margin-bottom: 12px; border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; background: var(--panel-bg); color: var(--text-color); font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') document.getElementById('add-resource-submit').click()">
+            
+            <!-- Local file upload option if PALEFIRE is True -->
+            <div id="add-resource-file-container" style="display: {{PALEFIRE_DISPLAY}}; flex-direction: column; margin-bottom: 14px; padding: 10px; border: 1px dashed var(--border-color); border-radius: 6px; background: rgba(128,128,128,0.05);">
+                <label style="font-size: 0.85rem; color: var(--text-color); font-weight: 500; margin-bottom: 6px; display: block;">Or upload local file (Image, PDF, Document):</label>
+                <input type="file" id="add-resource-file-input" style="font-size: 0.85rem; color: var(--text-color);">
+            </div>
+
             <label id="add-resource-vision-label" style="display: {{PALEFIRE_DISPLAY}}; align-items: center; gap: 8px; margin-bottom: 15px; font-size: 0.85rem; color: var(--text-color); cursor: pointer; user-select: none;">
                 <input type="checkbox" id="add-resource-vision" style="cursor: pointer; width: 15px; height: 15px;">
                 <span>Use Computer Vision</span>
             </label>
+                        <div id="add-resource-progress-container" style="display: none; margin-bottom: 14px;">
+                <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-color); margin-bottom: 6px; font-weight: 500;">
+                    <span id="add-resource-status-text">Processing file with PaleFire OCR & Ingestion...</span>
+                    <span id="add-resource-progress-percent">0%</span>
+                </div>
+                <div style="width: 100%; height: 8px; background: rgba(128,128,128,0.2); border-radius: 4px; overflow: hidden;">
+                    <div id="add-resource-progress-bar" style="width: 0%; height: 100%; background: #006bb3; transition: width 0.3s ease; border-radius: 4px;"></div>
+                </div>
+                <div id="add-resource-status-subtext" style="font-size: 0.75rem; color: var(--text-color); opacity: 0.8; margin-top: 4px;">Uploading file...</div>
+            </div>
+            <div id="add-resource-error" style="display: none; font-size: 0.85rem; color: #d32f2f; margin-bottom: 10px;"></div>
             <div style="display: flex; justify-content: flex-end; gap: 10px;">
                 <button onclick="document.getElementById('add-resource-modal').style.display='none'" class="theme-toggle">Cancel</button>
-                <button id="add-resource-submit" onclick="var url = document.getElementById('add-resource-input').value; var cv = document.getElementById('add-resource-vision').checked; if(url) window.location.href='/dataverse?url=' + encodeURIComponent(url) + (cv ? '&vision=true' : '');" style="background-color: #006bb3; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
+                <button id="add-resource-submit" onclick="
+                    var fileInput = document.getElementById('add-resource-file-input');
+                    var urlInput = document.getElementById('add-resource-input');
+                    var cv = document.getElementById('add-resource-vision').checked;
+                    var btn = document.getElementById('add-resource-submit');
+                    var progContainer = document.getElementById('add-resource-progress-container');
+                    var progText = document.getElementById('add-resource-status-text');
+                    var progSubtext = document.getElementById('add-resource-status-subtext');
+                    var progPercent = document.getElementById('add-resource-progress-percent');
+                    var progBar = document.getElementById('add-resource-progress-bar');
+                    var errBox = document.getElementById('add-resource-error');
+                    
+                    if (fileInput && fileInput.files && fileInput.files.length > 0) {
+                        btn.disabled = true;
+                        btn.innerText = 'Processing...';
+                        if (errBox) errBox.style.display = 'none';
+                        progContainer.style.display = 'block';
+                        progText.innerText = 'Processing file with PaleFire OCR & Ingestion...';
+                        progSubtext.innerText = 'Uploading file to server...';
+                        progBar.style.width = '15%';
+                        progPercent.innerText = '15%';
+
+                        var progressInterval = setInterval(function() {
+                            var cur = parseInt(progBar.style.width) || 15;
+                            if (cur < 35) {
+                                cur += 5;
+                                progSubtext.innerText = 'Extracting text and tables via PaleFire Tesseract OCR...';
+                            } else if (cur < 65) {
+                                cur += 3;
+                                progSubtext.innerText = 'Detecting structured sheets and generating Excel & CSV...';
+                            } else if (cur < 90) {
+                                cur += 1;
+                                progSubtext.innerText = 'Creating Croissant JSON-LD & saving to MinIO Vault...';
+                            }
+                            progBar.style.width = cur + '%';
+                            progPercent.innerText = cur + '%';
+                        }, 800);
+
+                        var formData = new FormData();
+                        formData.append('file', fileInput.files[0]);
+                        if (cv) formData.append('vision', 'true');
+                        fetch('/api/generic/upload', {
+                            method: 'POST',
+                            body: formData
+                        })
+                        .then(r => r.json().then(data => ({ok: r.ok, data})))
+                        .then(res => {
+                            clearInterval(progressInterval);
+                            if (res.ok && res.data.redirect_url) {
+                                progBar.style.width = '100%';
+                                progPercent.innerText = '100%';
+                                progSubtext.innerText = 'Complete! Redirecting to Vault...';
+                                setTimeout(function() {
+                                    window.location.href = res.data.redirect_url;
+                                }, 400);
+                            } else {
+                                progContainer.style.display = 'none';
+                                if (errBox) {
+                                    errBox.style.display = 'block';
+                                    errBox.innerText = 'Error: ' + (res.data.detail || 'Upload failed');
+                                }
+                                btn.disabled = false;
+                                btn.innerText = 'Ingest';
+                            }
+                        })
+                        .catch(err => {
+                            clearInterval(progressInterval);
+                            progContainer.style.display = 'none';
+                            if (errBox) {
+                                errBox.style.display = 'block';
+                                errBox.innerText = 'Upload error: ' + err;
+                            }
+                            btn.disabled = false;
+                            btn.innerText = 'Ingest';
+                        });
+                    } else if (urlInput && urlInput.value.trim()) {
+                        var url = urlInput.value.trim();
+                        window.location.href = '/dataverse?url=' + encodeURIComponent(url) + (cv ? '&vision=true' : '');
+                    }
+                " style="background-color: #006bb3; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
             </div>
         </div>
+    </div>
     </div>
     
     <div id="add-text-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">

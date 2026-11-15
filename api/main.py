@@ -21,6 +21,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 from fastapi.staticfiles import StaticFiles
@@ -524,7 +525,14 @@ async def process_dspace(url: str):
     return croissant
 
 @app.post("/api/generic/process")
-async def process_generic(request: Request, url: str = None, vision: bool = False):
+async def process_generic(
+    request: Request,
+    url: str = None,
+    vision: bool = False,
+    host: str = None,
+    engine: str = None,
+    ollama_visual_model: str = None
+):
     import asyncio
     import re
     from fastapi import HTTPException
@@ -536,19 +544,57 @@ async def process_generic(request: Request, url: str = None, vision: bool = Fals
                 url = body.get("url") or url
                 if "vision" in body:
                     vision = bool(body.get("vision"))
+                if "host" in body:
+                    host = body.get("host") or host
+                if "engine" in body:
+                    engine = body.get("engine") or engine
+                if "ollama_visual_model" in body:
+                    ollama_visual_model = body.get("ollama_visual_model") or ollama_visual_model
+                elif "OLLAMA_VISUAL_MODEL" in body:
+                    ollama_visual_model = body.get("OLLAMA_VISUAL_MODEL") or ollama_visual_model
         except Exception:
             pass
     if not url:
         raise HTTPException(status_code=400, detail="Missing required parameter url")
         
     import os
+    # Resolve relative or test file paths if target exists on disk
+    resolved_url = url
+    if not url.startswith("http://") and not url.startswith("https://") and not os.path.exists(resolved_url):
+        base_dirs = ["/app/palefire", "/mediaquantum/qlever/semantic-croissant/palefire", "/mediaquantum/qlever/semantic-croissant", "/app", os.getcwd()]
+        for b in base_dirs:
+            cand = os.path.join(b, url.lstrip("/"))
+            if os.path.exists(cand):
+                resolved_url = cand
+                break
+
+    # Determine host: explicit parameter > Host header > environment variable
+    client_host = host
+    # If client_host was passed with legacy or incorrect tld .ai, normalize to .eu unless explicitly configured
+    if client_host:
+        client_host = str(client_host).strip()
+        if "ai.mediaquantum.ai" in client_host:
+            client_host = client_host.replace("ai.mediaquantum.ai", "ai.mediaquantum.eu")
+    if not client_host:
+        client_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if not client_host:
+        client_host = os.environ.get("HOST") or os.environ.get("MCP_DOMAIN") or "ai.mediaquantum.eu"
+    if client_host and "ai.mediaquantum.ai" in str(client_host):
+        client_host = str(client_host).replace("ai.mediaquantum.ai", "ai.mediaquantum.eu")
+
     script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../convertors/url_to_croissant.py"))
     if not os.path.exists(script_path):
         script_path = "convertors/url_to_croissant.py"
         
-    cmd = ["python3", script_path, url, "--elastic"]
+    cmd = ["python3", script_path, resolved_url, "--elastic"]
     if vision:
         cmd.append("--computer-vision")
+    if client_host:
+        cmd.extend(["--host", str(client_host).strip()])
+    if engine:
+        cmd.extend(["--engine", str(engine).strip()])
+    if ollama_visual_model:
+        cmd.extend(["--ollama-visual-model", str(ollama_visual_model).strip()])
     
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -562,6 +608,79 @@ async def process_generic(request: Request, url: str = None, vision: bool = Fals
         
     output = stdout.decode('utf-8')
     
+    match = re.search(r"Extracted markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+    translated_match = re.search(r"Translated markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+    
+    if translated_match:
+        redirect_url = translated_match.group(1)
+    elif match:
+        redirect_url = match.group(1)
+    else:
+        file_match = re.search(r"Extracted markdown saved to [^/]+/([^/]+)/([a-zA-Z0-9_-]+\.md)", output)
+        if file_match:
+            redirect_url = f"/vault/doc/{file_match.group(2)}"
+        else:
+            raise HTTPException(status_code=500, detail="Could not determine generated filename from output")
+            
+    if redirect_url.startswith("http"):
+        redirect_url = "/vault/doc/" + redirect_url.split("/vault/")[-1]
+        
+    return {"status": "success", "redirect_url": redirect_url}
+
+
+@app.post("/api/generic/upload")
+async def process_generic_upload(request: Request):
+    import os
+    import tempfile
+    import shutil
+    import asyncio
+    import re
+    from fastapi import HTTPException
+    
+    form = await request.form()
+    file_obj = form.get("file")
+    vision_val = form.get("vision", "false")
+    vision = str(vision_val).lower() in ("true", "1", "yes", "on")
+    host_val = form.get("host")
+    
+    if not file_obj or not hasattr(file_obj, "filename") or not file_obj.filename:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+        
+    filename = file_obj.filename
+    upload_dir = "/tmp/palefire_uploads"
+    os.makedirs(upload_dir, exist_ok=True)
+    tmp_path = os.path.join(upload_dir, filename)
+    
+    with open(tmp_path, "wb") as buffer:
+        shutil.copyfileobj(file_obj.file, buffer)
+        
+    client_host = host_val
+    if not client_host:
+        client_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if not client_host:
+        client_host = os.environ.get("HOST") or os.environ.get("MCP_DOMAIN")
+
+    script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../convertors/url_to_croissant.py"))
+    if not os.path.exists(script_path):
+        script_path = "convertors/url_to_croissant.py"
+        
+    cmd = ["python3", script_path, tmp_path, "--elastic"]
+    if vision:
+        cmd.append("--computer-vision")
+    if client_host:
+        cmd.extend(["--host", str(client_host).strip()])
+        
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await process.communicate()
+    
+    if process.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"File processing failed: {stderr.decode('utf-8')}")
+        
+    output = stdout.decode('utf-8')
     match = re.search(r"Extracted markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
     translated_match = re.search(r"Translated markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
     
@@ -1005,7 +1124,7 @@ async def view_index(request: Request):
     if not os.path.exists(file_path):
         file_path = "api/static/index.html" # fallback
     
-        return HTMLResponse(content=render_html_template(file_path, request))
+    return HTMLResponse(content=render_html_template(file_path, request))
 
 @app.get("/vault/doc/raw/{es_id}")
 async def proxy_vault_doc_raw(es_id: str, request: Request):
@@ -1089,7 +1208,9 @@ async def proxy_vault_approve(request: Request, es_id: str):
 async def get_vault_file(filename: str):
     minio_base = os.environ.get("MINIO_GLOBAL_HOST", "").strip().rstrip("/") or os.environ.get("MINIO_URL", "http://minio:9000")
     
-    if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".json") and not filename.endswith(".gz") and not filename.endswith(".csv"):
+    KNOWN_VAULT_EXTS = ('.md', '.jsonld', '.json', '.gz', '.csv', '.xlsx', '.xls', '.ods', '.tsv', '.html',
+                        '.jpg', '.jpeg', '.png', '.webp', '.tiff', '.bmp', '.pdf', '.txt', '.doc', '.docx')
+    if not any(filename.lower().endswith(ext) for ext in KNOWN_VAULT_EXTS):
         filename += ".md"
         
     from minio import Minio
@@ -1098,10 +1219,14 @@ async def get_vault_file(filename: str):
     m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
 
     # Determine media type
-    media_type = "application/octet-stream"
+    import mimetypes
+    guessed_type, _ = mimetypes.guess_type(filename)
+    media_type = guessed_type or "application/octet-stream"
     if filename.endswith(".md"): media_type = "text/markdown; charset=utf-8"
     elif filename.endswith(".jsonld") or filename.endswith(".json"): media_type = "application/ld+json; charset=utf-8"
     elif filename.endswith(".csv"): media_type = "text/csv; charset=utf-8"
+    elif filename.endswith(".xlsx"): media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    elif filename.endswith(".tsv"): media_type = "text/tab-separated-values; charset=utf-8"
     elif filename.endswith(".html"): media_type = "text/html; charset=utf-8"
     elif filename.endswith(".gz"): media_type = "application/gzip"
 
@@ -2157,6 +2282,7 @@ async def api_collections_proxy(request: Request):
             raise HTTPException(status_code=500, detail=str(e))
 
 @app.api_route("/spatial-query", methods=["POST", "GET"])
+@app.api_route("/api/spatial-query", methods=["POST", "GET"])
 async def proxy_spatial_query(request: Request):
     """Proxy spatial queries to palefire-api."""
     import httpx
@@ -2178,6 +2304,33 @@ async def proxy_spatial_query(request: Request):
             return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Failed to reach Palefire spatial query service: {str(e)}")
+
+
+@app.api_route("/api/geoid", methods=["POST", "GET"])
+@app.api_route("/geoid", methods=["POST", "GET"])
+async def proxy_geoid(request: Request):
+    """Proxy geoid reverse geocode and docid search queries to palefire-api."""
+    import httpx
+    from fastapi import Response, HTTPException
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    body = await request.body()
+    
+    palefire_base = os.environ.get("PALEFIRE_SERVER_URL", "http://palefire-api:8000")
+    geoid_url = f"{palefire_base.rstrip('/')}/api/geoid"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            resp = await client.request(
+                request.method,
+                geoid_url,
+                headers=headers,
+                params=dict(request.query_params),
+                content=body
+            )
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to reach Palefire GeoID service: {str(e)}")
+
 
 
 
