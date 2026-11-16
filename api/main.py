@@ -642,6 +642,8 @@ async def process_generic_upload(request: Request):
     vision_val = form.get("vision", "false")
     vision = str(vision_val).lower() in ("true", "1", "yes", "on")
     host_val = form.get("host")
+    engine = form.get("engine")
+    ollama_visual_model = form.get("ollama_visual_model")
     
     if not file_obj or not hasattr(file_obj, "filename") or not file_obj.filename:
         raise HTTPException(status_code=400, detail="No file uploaded")
@@ -669,6 +671,10 @@ async def process_generic_upload(request: Request):
         cmd.append("--computer-vision")
     if client_host:
         cmd.extend(["--host", str(client_host).strip()])
+    if engine:
+        cmd.extend(["--engine", str(engine).strip()])
+    if ollama_visual_model:
+        cmd.extend(["--ollama-visual-model", str(ollama_visual_model).strip()])
         
     process = await asyncio.create_subprocess_exec(
         *cmd,

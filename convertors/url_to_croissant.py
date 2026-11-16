@@ -590,7 +590,7 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                     except Exception:
                         pass
 
-                if ocr_text.startswith("# Daily Rainfall Measurements"):
+                if ocr_text.startswith("# Daily Rainfall Measurements") or ocr_text.startswith("# Map Analysis:"):
                     text = ocr_text
                 else:
                     text = f"# Image Document: {url.split('/')[-1]}\n\n"
@@ -609,6 +609,15 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                     "sha256": checksum,
                     "retrievalTimestamp": datetime.now(timezone.utc).isoformat(),
                 }
+                if 'meta_pf' in locals() and isinstance(meta_pf, dict):
+                    if meta_pf.get('initial_croissant'):
+                        meta['initial_croissant'] = meta_pf.get('initial_croissant')
+                    if meta_pf.get('visual_category'):
+                        meta['visual_category'] = meta_pf.get('visual_category')
+                    if meta_pf.get('temporal_resolution'):
+                        meta['temporal_resolution'] = meta_pf.get('temporal_resolution')
+                    if meta_pf.get('temporal_period'):
+                        meta['temporal_period'] = meta_pf.get('temporal_period')
                 if traverse:
                     return text.strip(), meta, []
                 return text.strip(), meta
@@ -1833,6 +1842,13 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
         prompt = f"Create Croissant JSON-LD metadata for a machine learning model or dataset. The source URL is {url}."
         if lang != 'en':
             prompt += f" The source documentation is in language code '{lang}'. Please do a precise ONE-to-ONE translation of the relevant metadata to English and output the Croissant JSON-LD entirely in English."
+        
+        # Integrate Computer Vision Croissant knowledge layer if available
+        if extracted_meta and extracted_meta.get("initial_croissant"):
+            import json as _json_layer
+            initial_cr = extracted_meta.get("initial_croissant")
+            prompt += f"\n\n[Computer Vision Knowledge Layer]: Prior analysis with multimodal visual model produced this initial Croissant metadata layer:\n{_json_layer.dumps(initial_cr, indent=2)}\nUse this knowledge layer along with OCR and text content below to produce an integrated, authoritative Croissant JSON-LD metadata.\n"
+
         prompt += f" Here is the documentation and description extracted from its official page:\n\n{llm_context_data}\n\n"
         prompt += "Extract relevant information such as the description, authors, license, keywords, tags, or any dataset dependencies into the Croissant metadata if available. Map keywords/tags to the standard schema:keywords property, and extract them EXACTLY as they appear in the text (do not change casing or invent new tags). Ensure 'keywords' is formatted as a JSON array of strings, not a single comma-separated string. IMPORTANT: For any fields or data that do not have a standard mapping in Croissant, include them in the JSON-LD under a custom field called 'unmappedFields' as a list of key-value pairs.\n"
         prompt += 'Example structure:\n{\n  "@context": {\n    "@vocab": "http://schema.org/",\n    "sc": "http://schema.org/",\n    "schema": "http://schema.org/",\n    "cr": "http://mlcommons.org/croissant/",\n    "dct": "http://purl.org/dc/terms/",\n    "conformsTo": "dct:conformsTo",\n    "distribution": {"@id": "cr:distribution"},\n    "bs4ExtractionPattern": {"@id": "sc:processingRequirement", "@type": "@json"},\n    "unf": "https://guides.dataverse.org/en/6.9/developers/unf/unf-v6.html",\n    "odrl": "http://www.w3.org/ns/odrl/2/",\n    "cdif": "https://cdif.org/1.1/",\n    "did": "https://www.w3.org/ns/did/v1",\n    "url": {"@type": "http://www.w3.org/2001/XMLSchema#string"}\n  },\n  "@type": "sc:SoftwareApplication",\n  "name": "...",\n  "description": "...",\n  "url": "...",\n  "license": "...",\n  "keywords": [],\n  "unmappedFields": [],\n  "contentUrl": "...",\n  "isBasedOn": [],\n  "isPartOf": [{"@type": "Collection", "name": "/expert/croissant"}],\n  "version": "1.0",\n  "creator": {"@type": "Person", "name": "...", "email": "..."}\n}\n\n'
