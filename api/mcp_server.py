@@ -11730,6 +11730,50 @@ Instructions:
                 if doc_id.endswith(".md"):
                     doc_id = doc_id[:-3]
                 redirect_url = f"/vault/doc/{doc_id}"
+
+                if col_id_param:
+                    try:
+                        m_client = get_minio_client()
+                        resp = m_client.get_object("collections", f"{col_id_param}.json")
+                        c_data = json.loads(resp.read().decode("utf-8"))
+                        resp.close()
+                        resp.release_conn()
+                        if "items" not in c_data: c_data["items"] = []
+                        if doc_id not in c_data["items"]:
+                            c_data["items"].append(doc_id)
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{col_id_param}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{col_id_param}", json=c_data)
+                    except Exception as e_col:
+                        print(f"Warning: Failed to add item {doc_id} to collection {col_id_param}: {e_col}")
+                elif new_col_name_param:
+                    try:
+                        import uuid, datetime, io
+                        cid = str(uuid.uuid4())
+                        c_data = {
+                            "id": cid,
+                            "name": new_col_name_param.strip(),
+                            "description": f"Created during ingestion of resource {doc_id}",
+                            "link": "",
+                            "parent_id": None,
+                            "is_supercollection": False,
+                            "is_private": False,
+                            "owner": None,
+                            "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+                            "items": [doc_id]
+                        }
+                        m_client = get_minio_client()
+                        if not m_client.bucket_exists("collections"):
+                            m_client.make_bucket("collections")
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{cid}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{cid}", json=c_data)
+                    except Exception as e_new_col:
+                        print(f"Warning: Failed to create new collection {new_col_name_param}: {e_new_col}")
                     
                 return JSONResponse({"status": "success", "redirect_url": redirect_url})
                 
@@ -11748,6 +11792,8 @@ Instructions:
             dataset_pid = request.query_params.get("datasetPid")
             site_url_param = request.query_params.get("siteUrl")
             vision_param = request.query_params.get("vision", "").lower() in ("true", "1", "yes")
+            col_id_param = request.query_params.get("col_id")
+            new_col_name_param = request.query_params.get("new_col_name")
             
             if not callback and not direct_url and not dataset_pid:
                 return JSONResponse({"detail": "Missing callback, url, or datasetPid parameter"}, status_code=400)
@@ -11824,6 +11870,50 @@ Instructions:
                 if doc_id.endswith(".md"):
                     doc_id = doc_id[:-3]
                 redirect_url = f"/vault/doc/{doc_id}"
+
+                if col_id_param:
+                    try:
+                        m_client = get_minio_client()
+                        resp = m_client.get_object("collections", f"{col_id_param}.json")
+                        c_data = json.loads(resp.read().decode("utf-8"))
+                        resp.close()
+                        resp.release_conn()
+                        if "items" not in c_data: c_data["items"] = []
+                        if doc_id not in c_data["items"]:
+                            c_data["items"].append(doc_id)
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{col_id_param}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{col_id_param}", json=c_data)
+                    except Exception as e_col:
+                        print(f"Warning: Failed to add item {doc_id} to collection {col_id_param}: {e_col}")
+                elif new_col_name_param:
+                    try:
+                        import uuid, datetime, io
+                        cid = str(uuid.uuid4())
+                        c_data = {
+                            "id": cid,
+                            "name": new_col_name_param.strip(),
+                            "description": f"Created during ingestion of resource {doc_id}",
+                            "link": "",
+                            "parent_id": None,
+                            "is_supercollection": False,
+                            "is_private": False,
+                            "owner": None,
+                            "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+                            "items": [doc_id]
+                        }
+                        m_client = get_minio_client()
+                        if not m_client.bucket_exists("collections"):
+                            m_client.make_bucket("collections")
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{cid}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{cid}", json=c_data)
+                    except Exception as e_new_col:
+                        print(f"Warning: Failed to create new collection {new_col_name_param}: {e_new_col}")
                     
                 return JSONResponse({"status": "success", "redirect_url": redirect_url})
                 
@@ -14013,6 +14103,50 @@ Output a JSON object with:
                 if doc_id.endswith(".md"):
                     doc_id = doc_id[:-3]
                 redirect_url = f"/vault/doc/{doc_id}"
+
+                if col_id_param:
+                    try:
+                        m_client = get_minio_client()
+                        resp = m_client.get_object("collections", f"{col_id_param}.json")
+                        c_data = json.loads(resp.read().decode("utf-8"))
+                        resp.close()
+                        resp.release_conn()
+                        if "items" not in c_data: c_data["items"] = []
+                        if doc_id not in c_data["items"]:
+                            c_data["items"].append(doc_id)
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{col_id_param}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{col_id_param}", json=c_data)
+                    except Exception as e_col:
+                        print(f"Warning: Failed to add item {doc_id} to collection {col_id_param}: {e_col}")
+                elif new_col_name_param:
+                    try:
+                        import uuid, datetime, io
+                        cid = str(uuid.uuid4())
+                        c_data = {
+                            "id": cid,
+                            "name": new_col_name_param.strip(),
+                            "description": f"Created during ingestion of resource {doc_id}",
+                            "link": "",
+                            "parent_id": None,
+                            "is_supercollection": False,
+                            "is_private": False,
+                            "owner": None,
+                            "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+                            "items": [doc_id]
+                        }
+                        m_client = get_minio_client()
+                        if not m_client.bucket_exists("collections"):
+                            m_client.make_bucket("collections")
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{cid}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{cid}", json=c_data)
+                    except Exception as e_new_col:
+                        print(f"Warning: Failed to create new collection {new_col_name_param}: {e_new_col}")
                     
                 return JSONResponse({"status": "success", "redirect_url": redirect_url})
                 
@@ -14272,6 +14406,8 @@ Output a JSON object with:
             
             url = request.query_params.get("url")
             vision_param = request.query_params.get("vision", "").lower() in ("true", "1", "yes")
+            col_id_param = request.query_params.get("col_id")
+            new_col_name_param = request.query_params.get("new_col_name")
             host_param = request.query_params.get("host")
             
             if not url:
@@ -14346,6 +14482,50 @@ Output a JSON object with:
                 if doc_id.endswith(".md"):
                     doc_id = doc_id[:-3]
                 redirect_url = f"/vault/doc/{doc_id}"
+
+                if col_id_param:
+                    try:
+                        m_client = get_minio_client()
+                        resp = m_client.get_object("collections", f"{col_id_param}.json")
+                        c_data = json.loads(resp.read().decode("utf-8"))
+                        resp.close()
+                        resp.release_conn()
+                        if "items" not in c_data: c_data["items"] = []
+                        if doc_id not in c_data["items"]:
+                            c_data["items"].append(doc_id)
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{col_id_param}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{col_id_param}", json=c_data)
+                    except Exception as e_col:
+                        print(f"Warning: Failed to add item {doc_id} to collection {col_id_param}: {e_col}")
+                elif new_col_name_param:
+                    try:
+                        import uuid, datetime, io
+                        cid = str(uuid.uuid4())
+                        c_data = {
+                            "id": cid,
+                            "name": new_col_name_param.strip(),
+                            "description": f"Created during ingestion of resource {doc_id}",
+                            "link": "",
+                            "parent_id": None,
+                            "is_supercollection": False,
+                            "is_private": False,
+                            "owner": None,
+                            "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+                            "items": [doc_id]
+                        }
+                        m_client = get_minio_client()
+                        if not m_client.bucket_exists("collections"):
+                            m_client.make_bucket("collections")
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{cid}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{cid}", json=c_data)
+                    except Exception as e_new_col:
+                        print(f"Warning: Failed to create new collection {new_col_name_param}: {e_new_col}")
                     
                 return JSONResponse({"status": "success", "redirect_url": redirect_url})
                 

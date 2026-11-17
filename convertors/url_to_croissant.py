@@ -1,4 +1,5 @@
 GLOBAL_PARSED_TABLES = []
+GLOBAL_PDF_ASSETS = []
 import io
 import requests
 import cloudscraper
@@ -362,32 +363,100 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                 checksum = hashlib.sha256(pdf_bytes).hexdigest()
                 size = len(pdf_bytes)
                 
-                print("Detected PDF document. Extracting text with PyMuPDF...")
+                print("Detected PDF document. Extracting pages, images, and running OCR pipeline...")
                 doc = fitz.open(stream=pdf_bytes, filetype="pdf")
                 text = ""
+                global GLOBAL_PDF_ASSETS
+                GLOBAL_PDF_ASSETS = []
+                
+                # Check if Tesseract tessdata is configured or use standard path
+                tess_prefix = os.environ.get("TESSDATA_PREFIX", "/usr/share/tesseract-ocr/5/tessdata")
+                if not os.path.exists(tess_prefix) and os.path.exists("/usr/share/tessdata/5/tessdata"):
+                    tess_prefix = "/usr/share/tessdata/5/tessdata"
+                
                 for page_idx, page in enumerate(doc, start=1):
-                    extracted = page.get_text()
-                    if extracted and extracted.strip():
-                        text += f"### Page {page_idx}\n\n" + extracted.strip() + "\n\n"
+                    native_text = (page.get_text() or "").strip()
                     
-                if use_computer_vision:
+                    # 1. Render page to high-res JPEG image
+                    page_img_bytes = None
                     try:
-                        import sys as _sys
-                        _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-                        import datamaps_runner
-                    except Exception:
-                        datamaps_runner = None
+                        pix = page.get_pixmap(dpi=150)
+                        page_img_bytes = pix.tobytes("jpeg")
+                        GLOBAL_PDF_ASSETS.append({
+                            "type": "page",
+                            "page": page_idx,
+                            "bytes": page_img_bytes,
+                            "filename_suffix": f"_page_{page_idx:02d}.jpg",
+                            "mimetype": "image/jpeg",
+                            "description": f"Rendered Image of Page {page_idx}"
+                        })
+                    except Exception as e_pix:
+                        print(f"Warning: Failed to render page {page_idx} to image: {e_pix}")
+                        
+                    # 2. Extract embedded images (>= 200x200) from page
+                    try:
+                        page_imgs = page.get_images(full=True)
+                        extracted_embedded_count = 0
+                        for img_idx, img_info in enumerate(page_imgs, start=1):
+                            xref = img_info[0]
+                            base_img = doc.extract_image(xref)
+                            w = base_img.get("width", 0)
+                            h = base_img.get("height", 0)
+                            ext = base_img.get("ext", "png").lower()
+                            if ext == "jpg": ext = "jpeg"
+                            # Filter out tiny icon / banner artifacts
+                            if w >= 200 and h >= 200:
+                                extracted_embedded_count += 1
+                                GLOBAL_PDF_ASSETS.append({
+                                    "type": "image",
+                                    "page": page_idx,
+                                    "index": img_idx,
+                                    "bytes": base_img.get("image"),
+                                    "filename_suffix": f"_page_{page_idx:02d}_img_{img_idx:02d}.{ext}",
+                                    "mimetype": f"image/{ext}",
+                                    "description": f"Extracted Image from Page {page_idx} ({w}x{h})"
+                                })
+                    except Exception as e_emb:
+                        print(f"Warning: Failed to extract embedded images on page {page_idx}: {e_emb}")
 
-                    use_datamaps_cv = bool(datamaps_runner and datamaps_runner.url_matches(url))
-                    if use_datamaps_cv:
-                        print("URL matches DATAMAPS_URL_PATTERNS, running datamaps CV pipeline...")
+                    # 3. Run OCR on page
+                    ocr_text = ""
+                    try:
+                        tp = page.get_textpage_ocr(language="spa", dpi=150, tessdata=tess_prefix if os.path.exists(tess_prefix) else None)
+                        ocr_text = (tp.extractText() or "").strip()
+                    except Exception as e_ocr:
                         try:
-                            dm_result = datamaps_runner.run(url)
-                            if dm_result:
-                                text += datamaps_runner.to_markdown(dm_result)
-                        except Exception as e_dm:
-                            print(f"Warning: datamaps pipeline failed: {e_dm}")
-                    else:
+                            # Fallback without explicit tessdata
+                            tp = page.get_textpage_ocr(language="spa", dpi=150)
+                            ocr_text = (tp.extractText() or "").strip()
+                        except Exception as e_ocr2:
+                            print(f"Warning: OCR extraction failed on page {page_idx}: {e_ocr2}")
+
+                    text += f"### Page {page_idx}\n\n"
+                    if native_text:
+                        text += f"**Native Text:**\n{native_text}\n\n"
+                    if ocr_text and ocr_text != native_text:
+                        text += f"**OCR Text:**\n{ocr_text}\n\n"
+                    if not native_text and not ocr_text:
+                        text += "_[No text detected on page]_\n\n"
+                
+                print(f"PDF processed: {len(doc)} pages, {len(GLOBAL_PDF_ASSETS)} page renders & extracted images, text length={len(text)}")
+                    
+                try:
+                    import sys as _sys
+                    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                    import datamaps_runner
+                except Exception:
+                    datamaps_runner = None
+
+                use_datamaps_cv = bool(datamaps_runner and datamaps_runner.url_matches(url))
+                if use_datamaps_cv:
+                    print("URL matches DATAMAPS_URL_PATTERNS, running datamaps CV pipeline...")
+                    try:
+                        dm_result = datamaps_runner.run(url)
+                    except Exception as e_dm:
+                        print(f"Warning: datamaps pipeline failed: {e_dm}")
+                elif use_computer_vision:
                         print("Running Computer Vision extraction on PDF with Palefire...")
                         cv_done = False
                         palefire_url = os.environ.get("PALEFIRE_API_URL", "http://10.147.18.24:8000/parse-url")
@@ -1585,6 +1654,48 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                 except Exception as e_up_tbl:
                     print(f"Warning: Failed to upload parsed tables to vault: {e_up_tbl}")
 
+            # If PDF assets (page renders and embedded images) were generated, upload them to MinIO vault
+            if 'GLOBAL_PDF_ASSETS' in globals() and GLOBAL_PDF_ASSETS:
+                try:
+                    base_s = os.path.basename(safe_name)
+                    print(f"Uploading {len(GLOBAL_PDF_ASSETS)} PDF page renders & images to MinIO vault...")
+                    for asset in GLOBAL_PDF_ASSETS:
+                        asset_fn = f"{base_s}{asset['filename_suffix']}"
+                        asset_bytes = asset['bytes']
+                        if asset_bytes:
+                            client.put_object(
+                                "vault",
+                                asset_fn,
+                                io.BytesIO(asset_bytes),
+                                len(asset_bytes),
+                                content_type=asset.get("mimetype", "image/jpeg")
+                            )
+                    print("Finished uploading PDF assets to MinIO vault.")
+                except Exception as e_pdf_assets:
+                    print(f"Warning: Failed to upload PDF assets to vault: {e_pdf_assets}")
+
+            base_vault_url = f"{get_base_host()}/vault"
+            # If the original input is a local file (e.g. image, csv, pdf), upload it first so it is present in vault
+            if os.path.isfile(url):
+                orig_ext = os.path.splitext(url)[1]
+                orig_vault_name = f"{os.path.basename(safe_name)}{orig_ext}"
+                try:
+                    with open(url, "rb") as f_orig:
+                        orig_bytes = f_orig.read()
+                    import mimetypes
+                    guessed_mime, _ = mimetypes.guess_type(url)
+                    orig_mime = guessed_mime or "application/octet-stream"
+                    client.put_object(
+                        "vault",
+                        orig_vault_name,
+                        data=io.BytesIO(orig_bytes),
+                        length=len(orig_bytes),
+                        content_type=orig_mime
+                    )
+                    print(f"Original source file successfully uploaded to vault: {base_vault_url}/{orig_vault_name}")
+                except Exception as e_orig_up:
+                    print(f"Warning: Failed to upload original file to MinIO vault: {e_orig_up}")
+
             # Re-generate markdown header with spreadsheet links now that files are in vault
             base_stem = os.path.basename(safe_name)
             extra_links = []
@@ -1611,6 +1722,33 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                     extra_links.append(f"* **{label}**: [{fn}](./{fn})")
                 except Exception:
                     pass
+
+            # Upload datamaps CSVs early if datamaps pipeline ran so header links are guaranteed to work
+            try:
+                import sys as _sys
+                _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                import datamaps_runner
+                dm_res_early = datamaps_runner.RESULTS.get(resolve_direct_url(url)) or datamaps_runner.RESULTS.get(url)
+                if dm_res_early:
+                    datamaps_runner.upload_and_distributions(dm_res_early, client, get_base_host(), doc_id=base_stem)
+                    fn_dm_csv = f"{base_stem}.csv"
+                    if not any(fn_dm_csv in l for l in extra_links):
+                        extra_links.append(f"* **Master CSV Data (Heatmap Report)**: [{fn_dm_csv}](./{fn_dm_csv})")
+                    maps_list = dm_res_early.get("maps", [])
+                    if maps_list:
+                        extra_links.append("\n## Extracted Map Datasets (Two Maps Per Page: Left & Right Panels)\n")
+                        extra_links.append("| Page | Panel | Map Variable / Title | CSV Dataset | JSON-LD Observations |")
+                        extra_links.append("|---|---|---|---|---|")
+                        for m_item in maps_list:
+                            p_num = m_item.get("page") or 0
+                            s_side = m_item.get("side") or "single"
+                            m_title = (m_item.get("title") or f"Page {p_num} {s_side}").replace("|", "/")
+                            c_fn = f"{base_stem}_page_{p_num:02d}_{s_side}.csv"
+                            j_fn = f"{base_stem}_page_{p_num:02d}_{s_side}.jsonld"
+                            extra_links.append(f"| Page {p_num:02d} | `{s_side}` | {m_title} | [{c_fn}](./{c_fn}) | [{j_fn}](./{j_fn}) |")
+            except Exception as e_dm_early:
+                print(f"Warning: Early datamaps upload failed: {e_dm_early}")
+
             if extra_links:
                 clean_header = f"# Citation: {citation_text}\n\n* **Croissant Metadata**: [{croissant_filename}](./{croissant_filename})\n" + "\n".join(extra_links) + "\n\n"
                 # Strip old citation header if present
@@ -1628,29 +1766,30 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                 length=len(md_bytes),
                 content_type="text/markdown"
             )
+            # If PDF assets (page renders and embedded images) were generated, upload them to MinIO vault
+            if 'GLOBAL_PDF_ASSETS' in globals() and GLOBAL_PDF_ASSETS:
+                try:
+                    base_s = os.path.basename(safe_name)
+                    print(f"Uploading {len(GLOBAL_PDF_ASSETS)} PDF page renders & images to MinIO vault...")
+                    for asset in GLOBAL_PDF_ASSETS:
+                        asset_fn = f"{base_s}{asset['filename_suffix']}"
+                        asset_bytes = asset['bytes']
+                        if asset_bytes:
+                            client.put_object(
+                                "vault",
+                                asset_fn,
+                                io.BytesIO(asset_bytes),
+                                len(asset_bytes),
+                                content_type=asset.get("mimetype", "image/jpeg")
+                            )
+                    print("Finished uploading PDF assets to MinIO vault.")
+                except Exception as e_pdf_assets:
+                    print(f"Warning: Failed to upload PDF assets to vault: {e_pdf_assets}")
+
             base_vault_url = f"{get_base_host()}/vault"
             print(f"Extracted markdown successfully uploaded to vault: {base_vault_url}/{vault_filename}")
 
-            # If the original input is a local file (e.g. image, csv, pdf), upload it as well
-            if os.path.isfile(url):
-                orig_ext = os.path.splitext(url)[1]
-                orig_vault_name = f"{os.path.basename(safe_name)}{orig_ext}"
-                try:
-                    with open(url, "rb") as f_orig:
-                        orig_bytes = f_orig.read()
-                    import mimetypes
-                    guessed_mime, _ = mimetypes.guess_type(url)
-                    orig_mime = guessed_mime or "application/octet-stream"
-                    client.put_object(
-                        "vault",
-                        orig_vault_name,
-                        data=io.BytesIO(orig_bytes),
-                        length=len(orig_bytes),
-                        content_type=orig_mime
-                    )
-                    print(f"Original source file successfully uploaded to vault: {base_vault_url}/{orig_vault_name}")
-                except Exception as e_orig_up:
-                    print(f"Warning: Failed to upload original file to MinIO vault: {e_orig_up}")
+# Original file upload moved before header generation
     except Exception as e:
         print(f"Warning: Failed to upload markdown to MinIO vault: {e}")
 
@@ -2158,6 +2297,8 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
 
         # Attach datamaps outputs (CSV + JSON-LD) as distributions, uploaded to the vault
         try:
+            import sys as _sys
+            _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
             import datamaps_runner
             dm_result = datamaps_runner.RESULTS.get(resolve_direct_url(url)) or datamaps_runner.RESULTS.get(url)
             if dm_result:
@@ -2165,13 +2306,16 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                 try:
                     from minio import Minio
                     _murl = os.environ.get("MINIO_URL", "http://minio:9000")
-                    dm_client = Minio(_murl.replace("http://", "").replace("https://", ""),
+                    _in_d_dm = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+                    if _in_d_dm and any(h in _murl for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+                        _murl = "http://minio:9000"
+                    dm_client = Minio(_murl.replace("http://", "").replace("https://", "").rstrip("/"),
                                       access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
                                       secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
                                       secure=_murl.startswith("https"))
                 except Exception as e_mc:
                     print(f"Warning: MinIO unavailable for datamaps upload: {e_mc}")
-                dm_dists = datamaps_runner.upload_and_distributions(dm_result, dm_client, get_base_host())
+                dm_dists = datamaps_runner.upload_and_distributions(dm_result, dm_client, get_base_host(), doc_id=os.path.basename(safe_name))
                 output = datamaps_runner.inject_distributions(output, dm_dists)
                 print(f"Added {len(dm_dists)} datamaps distributions to Croissant.")
         except ImportError:
@@ -2277,6 +2421,45 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                     print(f"Warning: Failed to inject original file distribution: {e_dist}")
             except Exception as e_att:
                 print(f"Warning: Failed to prepare original file distribution: {e_att}")
+
+        # Attach PDF page renders and extracted images as distributions
+        if 'GLOBAL_PDF_ASSETS' in globals() and GLOBAL_PDF_ASSETS:
+            try:
+                base_safe = os.path.basename(safe_name)
+                pdf_dists = []
+                import hashlib
+                for asset in GLOBAL_PDF_ASSETS:
+                    asset_fn = f"{base_safe}{asset['filename_suffix']}"
+                    asset_bytes = asset.get('bytes')
+                    if asset_bytes:
+                        pdf_dists.append({
+                            "@type": "cr:FileObject",
+                            "@id": asset_fn,
+                            "name": asset_fn,
+                            "description": asset.get("description") or f"PDF Resource ({asset_fn})",
+                            "contentUrl": f"{get_base_host()}/vault/{asset_fn}",
+                            "encodingFormat": asset.get("mimetype", "image/jpeg"),
+                            "contentSize": f"{len(asset_bytes)} B",
+                            "sha256": hashlib.sha256(asset_bytes).hexdigest()
+                        })
+                if pdf_dists:
+                    try:
+                        j_obj = json.loads(output)
+                        tgt = j_obj[0] if isinstance(j_obj, list) and j_obj else j_obj
+                        if isinstance(tgt, dict):
+                            existing_dist = tgt.get("distribution") or []
+                            if isinstance(existing_dist, dict):
+                                existing_dist = [existing_dist]
+                            for pd_dist in pdf_dists:
+                                if not any(d.get("@id") == pd_dist["@id"] for d in existing_dist if isinstance(d, dict)):
+                                    existing_dist.append(pd_dist)
+                            tgt["distribution"] = existing_dist
+                            output = json.dumps(j_obj, indent=2, ensure_ascii=False)
+                            print(f"Added {len(pdf_dists)} PDF page renders & extracted image distributions to Croissant.")
+                    except Exception as e_pdf_inj:
+                        print(f"Warning: Failed to inject PDF distributions: {e_pdf_inj}")
+            except Exception as e_pdf_chk:
+                pass
 
         output_filename = f"{safe_name}_croissant.jsonld"
         
