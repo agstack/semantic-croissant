@@ -867,6 +867,28 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                                 print(f"  -> Vision OCR failed for {img_url}: {e_img}")
                         if ocr_blocks:
                             markdown_content += "\n\n## Computer Vision Extracted Image Data\n\n" + "\n\n".join(ocr_blocks)
+                            try:
+                                import pandas as _pd
+                                global GLOBAL_PARSED_TABLES
+                                if 'GLOBAL_PARSED_TABLES' not in globals() or GLOBAL_PARSED_TABLES is None:
+                                    GLOBAL_PARSED_TABLES = []
+                                for block in ocr_blocks:
+                                    lines = [ln.strip() for ln in block.splitlines() if ln.strip().startswith('|') and ln.strip().endswith('|')]
+                                    if len(lines) >= 3:
+                                        # Split into separate tables if there are multiple header+separator pairs
+                                        cur_rows = []
+                                        for ln in lines:
+                                            cells = [c.strip() for c in ln.strip('|').split('|')]
+                                            if all(set(c) <= set('-: ') for c in cells if c):
+                                                continue
+                                            cur_rows.append(cells)
+                                        if len(cur_rows) >= 2:
+                                            hdr = cur_rows[0]
+                                            body = [r[:len(hdr)] + [''] * max(0, len(hdr) - len(r)) for r in cur_rows[1:]]
+                                            df_ocr = _pd.DataFrame(body, columns=hdr)
+                                            GLOBAL_PARSED_TABLES.append({'df': df_ocr, 'month_name': f'Vision_Table_{len(GLOBAL_PARSED_TABLES)+1}'})
+                            except Exception as e_tbl:
+                                print(f"Warning: Failed to convert Vision OCR Markdown tables to DataFrame: {e_tbl}")
                 except Exception as e_cv:
                     print(f"Warning: HTML Computer Vision image extraction failed: {e_cv}")
 
