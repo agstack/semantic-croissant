@@ -838,7 +838,7 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                             img_urls.append(full_img_url)
                     if img_urls:
                         ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11434").rstrip("/")
-                        vision_model = os.environ.get("VISION_MODEL", "gemma4:31b-cloud")
+                        vision_model = os.environ.get("VISION_MODEL", "gemma4:e4b")
                         ocr_blocks = []
                         for img_url in img_urls[:5]:
                             try:
@@ -861,6 +861,8 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                                     ocr_text = ov_resp.json().get("response", "").strip()
                                     if ocr_text:
                                         ocr_blocks.append(f"### Image: {img_url}\n\n{ocr_text}")
+                                else:
+                                    print(f"  -> Ollama Vision OCR returned HTTP {ov_resp.status_code}: {ov_resp.text[:200]}")
                             except Exception as e_img:
                                 print(f"  -> Vision OCR failed for {img_url}: {e_img}")
                         if ocr_blocks:
