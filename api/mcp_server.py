@@ -14773,6 +14773,8 @@ Output a JSON object with:
                 cmd = ["python3", script_path, tmp_path, "--elastic"]
                 if vision_param:
                     cmd.append("--computer-vision")
+                else:
+                    cmd.extend(["--engine", "tesseract"])
                 if client_host:
                     cmd.extend(["--host", str(client_host).strip()])
                     
