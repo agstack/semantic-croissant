@@ -1346,6 +1346,7 @@
             }
             
             let firstH1 = null;
+            const excludedTocTitles = new Set(['question', 'answer', 'prompt', 'response', 'ask the document']);
             
             headings.forEach(heading => {
                 if (!heading.id) {
@@ -1355,12 +1356,20 @@
                 if (!firstH1 && heading.tagName === 'H1') {
                     firstH1 = heading.textContent;
                 }
+
+                const cleanHeadingText = heading.textContent.trim();
+                if (excludedTocTitles.has(cleanHeadingText.toLowerCase())) {
+                    return;
+                }
+                if (heading.closest('#ask-doc-container')) {
+                    return;
+                }
                 
                 const level = parseInt(heading.tagName.substring(1));
                 const item = document.createElement('a');
                 item.className = 'sidebar-item';
                 item.href = '#' + heading.id;
-                item.textContent = heading.textContent;
+                item.textContent = cleanHeadingText;
                 item.style.paddingLeft = `${(level - 1) * 15 + 10}px`;
                 
                 item.addEventListener('click', (e) => {
@@ -1401,6 +1410,11 @@
                 
                 // Strip existing baked-in Make public button from markdown
                 markdown = markdown.replace(/<button[\s\S]*?>Make public<\/button>/gi, '');
+                
+                // Keep a clean copy of the raw document markdown for the Editor (before UI banners & distribution tables are injected)
+                let editableMarkdown = markdown
+                    .replace(/\n*---\n\*\*Digital Signature:\*\*[\s\S]*$/i, '')
+                    .trim();
                 
                 // Decrease size of large headings
                 markdown = markdown.replace(/^#\s+Citation:/gm, '### Citation:');
@@ -1885,6 +1899,14 @@
                 const contentDiv = document.getElementById('md-content');
                 contentDiv.innerHTML = htmlContent;
 
+                // Ensure all headings have deterministic slug IDs so Table of Contents anchor links (#1-title) scroll smoothly
+                contentDiv.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(h => {
+                    if (!h.id) {
+                        const slug = h.textContent.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/[\s-]+/g, '-');
+                        if (slug) h.id = slug;
+                    }
+                });
+
                 // Post-process table to style download, CDIF links, and Tools dropdown nicely with pictograms
                 contentDiv.querySelectorAll('table').forEach(tbl => {
                     const ths = Array.from(tbl.querySelectorAll('th')).map(th => th.textContent.trim().toLowerCase());
@@ -2064,10 +2086,77 @@
                 const askDocContainer = document.createElement('div');
                 askDocContainer.style.cssText = "margin-bottom: 20px; padding: 15px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--header-bg);";
                 
+                const askDocHeaderRow = document.createElement('div');
+                askDocHeaderRow.style.cssText = "display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;";
+
+                const askDocHeaderLeft = document.createElement('div');
+                askDocHeaderLeft.style.cssText = "display: flex; align-items: center; gap: 10px;";
+
                 const askDocHeader = document.createElement('h3');
-                askDocHeader.style.cssText = "margin-top: 0; color: var(--accent-color); font-size: 1.1rem;";
+                askDocHeader.style.cssText = "margin: 0; color: var(--accent-color); font-size: 1.1rem;";
                 askDocHeader.innerText = "Ask the Document";
-                askDocContainer.appendChild(askDocHeader);
+                askDocHeaderLeft.appendChild(askDocHeader);
+
+                const refreshSubchaptersBtn = document.createElement('button');
+                refreshSubchaptersBtn.type = 'button';
+                refreshSubchaptersBtn.title = 'Generate subchapters from Question / Answer sections';
+                refreshSubchaptersBtn.style.cssText = "display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 0.82rem; font-weight: 600; border-radius: 5px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); cursor: pointer; transition: all 0.15s ease;";
+                const refreshIconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>`;
+                refreshSubchaptersBtn.innerHTML = `${refreshIconSvg} <span>Refresh</span>`;
+
+                const refreshStatusSpan = document.createElement('span');
+                refreshStatusSpan.style.cssText = "font-size: 0.82rem; color: var(--text-color); opacity: 0.85;";
+
+                refreshSubchaptersBtn.onclick = async () => {
+                    refreshSubchaptersBtn.disabled = true;
+                    refreshSubchaptersBtn.innerHTML = `${refreshIconSvg} <span>Generating subchapters...</span>`;
+                    refreshStatusSpan.textContent = '';
+                    try {
+                        const selectedModel = askDocModelSelect && askDocModelSelect.value ? askDocModelSelect.value : '';
+                        const res = await fetch(`/vault/doc/refresh-subchapters/${docId}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ model: selectedModel })
+                        });
+                        const data = await res.json();
+                        if (!res.ok || data.status !== 'success') {
+                            throw new Error(data.detail || 'Failed to generate subchapters');
+                        }
+                        refreshStatusSpan.innerHTML = `<span style="color: #008855; font-weight: 600;">✅ Generated ${data.subchapters} subchapters! Reloading...</span>`;
+                        setTimeout(() => {
+                            if (!window.location.pathname.endsWith('.md')) {
+                                window.location.href = `/vault/doc/${docId}.md`;
+                            } else {
+                                window.location.reload();
+                            }
+                        }, 500);
+                    } catch (err) {
+                        console.error('Refresh subchapters error:', err);
+                        refreshStatusSpan.innerHTML = `<span style="color: #dc2626;">❌ ${err.message}</span>`;
+                        refreshSubchaptersBtn.disabled = false;
+                        refreshSubchaptersBtn.innerHTML = `${refreshIconSvg} <span>Refresh</span>`;
+                    }
+                };
+
+                askDocHeaderLeft.appendChild(refreshSubchaptersBtn);
+
+                const moveToChatBtn = document.createElement('button');
+                moveToChatBtn.type = 'button';
+                moveToChatBtn.title = 'Open this document in Chat mode to ask questions, save, edit, and update';
+                moveToChatBtn.style.cssText = "display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 0.82rem; font-weight: 600; border-radius: 5px; border: 1px solid #006bb3; background: #006bb3; color: #ffffff; cursor: pointer; transition: all 0.15s ease;";
+                const chatIconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`;
+                moveToChatBtn.innerHTML = `${chatIconSvg} <span>Ask</span>`;
+                moveToChatBtn.onclick = () => {
+                    const qVal = (askDocInput && askDocInput.value.trim()) ? askDocInput.value.trim() : '';
+                    let targetUrl = `/?doc=${encodeURIComponent(docId)}`;
+                    if (qVal) targetUrl += `&q=${encodeURIComponent(qVal)}`;
+                    window.location.href = targetUrl;
+                };
+                askDocHeaderLeft.appendChild(moveToChatBtn);
+
+                askDocHeaderLeft.appendChild(refreshStatusSpan);
+                askDocHeaderRow.appendChild(askDocHeaderLeft);
+                askDocContainer.appendChild(askDocHeaderRow);
                 
                 const askDocFlex = document.createElement('div');
                 askDocFlex.style.cssText = "display: flex; gap: 10px; align-items: center;";
@@ -2233,27 +2322,86 @@
                 };
                 toolbarLeft.appendChild(btnPublic);
 
-                // Edit button (GitHub style)
+                // Edit & Save buttons
                 const btnEdit = document.createElement('button');
-                btnEdit.innerHTML = '<span title="Edit">✏️</span>';
+                btnEdit.type = 'button';
+                btnEdit.innerHTML = '✏️ <span>Edit</span>';
+                btnEdit.title = 'Edit document markdown';
                 btnEdit.style.cssText = btnStyle;
+
+                const btnSaveToolbar = document.createElement('button');
+                btnSaveToolbar.type = 'button';
+                btnSaveToolbar.innerHTML = '💾 <span>Save</span>';
+                btnSaveToolbar.title = 'Save changes to document';
+                btnSaveToolbar.style.cssText = btnStyle + ' display: none; background: #008855; color: #ffffff; border-color: #008855; font-weight: 600;';
+
+                const btnCancelToolbar = document.createElement('button');
+                btnCancelToolbar.type = 'button';
+                btnCancelToolbar.innerHTML = 'Cancel';
+                btnCancelToolbar.title = 'Cancel editing';
+                btnCancelToolbar.style.cssText = btnStyle + ' display: none; color: #d73a49;';
                 
                 let isEditing = false;
                 let githubEditContainer = null;
+
+                async function saveEditedDocument(newMarkdown, triggerBtn) {
+                    const origText = triggerBtn ? triggerBtn.innerHTML : '';
+                    if (triggerBtn) {
+                        triggerBtn.innerHTML = '⏳ Saving...';
+                        triggerBtn.disabled = true;
+                    }
+                    btnSaveToolbar.disabled = true;
+                    try {
+                        const res = await fetch(`/vault/doc/update/${docId}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ markdown: newMarkdown, message: 'Update document' })
+                        });
+                        if (res.ok) {
+                            editableMarkdown = newMarkdown;
+                            window.location.reload();
+                        } else {
+                            const errData = await res.json().catch(() => ({}));
+                            alert('Failed to save document: ' + (errData.message || res.status));
+                        }
+                    } catch (err) {
+                        console.error(err);
+                        alert('Error saving document: ' + err.message);
+                    } finally {
+                        if (triggerBtn) {
+                            triggerBtn.innerHTML = origText;
+                            triggerBtn.disabled = false;
+                        }
+                        btnSaveToolbar.disabled = false;
+                    }
+                }
                 
                 btnEdit.onclick = () => {
                     if (!isEditing) {
                         isEditing = true;
-                        contentDiv.style.display = 'none';
+                        btnEdit.style.display = 'none';
+                        btnSaveToolbar.style.display = 'flex';
+                        btnCancelToolbar.style.display = 'flex';
+
+                        // Hide rendered markdown elements inside contentDiv while keeping askDocContainer and actionToolbar visible
+                        Array.from(contentDiv.children).forEach(ch => {
+                            if (ch !== askDocContainer && ch !== actionToolbar && ch !== githubEditContainer) {
+                                ch.dataset.prevDisplay = ch.style.display || '';
+                                ch.style.display = 'none';
+                            }
+                        });
                         
                         if (!githubEditContainer) {
                             githubEditContainer = document.createElement('div');
                             githubEditContainer.style.cssText = "border: 1px solid var(--border-color); border-radius: 6px; margin-bottom: 20px; background: var(--bg-color); font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;";
                             
-                            // Header with tabs
+                            // Header with tabs and top Save button
                             const header = document.createElement('div');
-                            header.style.cssText = "background: var(--header-bg); border-bottom: 1px solid var(--border-color); padding: 10px 15px 0 15px; display: flex; border-radius: 6px 6px 0 0;";
+                            header.style.cssText = "background: var(--header-bg); border-bottom: 1px solid var(--border-color); padding: 10px 15px 0 15px; display: flex; justify-content: space-between; align-items: center; border-radius: 6px 6px 0 0;";
                             
+                            const tabsLeft = document.createElement('div');
+                            tabsLeft.style.cssText = "display: flex;";
+
                             const tabEdit = document.createElement('div');
                             tabEdit.innerText = "Edit file";
                             tabEdit.style.cssText = "padding: 8px 16px; cursor: pointer; border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; font-size: 14px; font-weight: 600;";
@@ -2262,8 +2410,9 @@
                             tabPreview.innerText = "Preview";
                             tabPreview.style.cssText = "padding: 8px 16px; cursor: pointer; border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; font-size: 14px;";
                             
-                            header.appendChild(tabEdit);
-                            header.appendChild(tabPreview);
+                            tabsLeft.appendChild(tabEdit);
+                            tabsLeft.appendChild(tabPreview);
+                            header.appendChild(tabsLeft);
                             githubEditContainer.appendChild(header);
                             
                             // Body
@@ -2271,6 +2420,7 @@
                             body.style.cssText = "padding: 10px;";
                             
                             const textarea = document.createElement('textarea');
+                            textarea.id = 'doc-editor-textarea';
                             textarea.style.cssText = "width: 100%; height: calc(100vh - 280px); font-family: monospace; font-size: 14px; padding: 15px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color); color: var(--text-color); box-sizing: border-box; resize: vertical;";
                             
                             const previewArea = document.createElement('div');
@@ -2281,45 +2431,30 @@
                             body.appendChild(previewArea);
                             githubEditContainer.appendChild(body);
                             
-                            // Footer with Commit Button
+                            // Footer with Save & Cancel Buttons
                             const footer = document.createElement('div');
-                            footer.style.cssText = "padding: 15px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end;";
+                            footer.style.cssText = "padding: 15px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 10px;";
                             
-                            const btnCommit = document.createElement('button');
-                            btnCommit.innerText = "Commit changes...";
-                            btnCommit.style.cssText = "background: #2ea44f; color: white; border: none; padding: 5px 16px; border-radius: 6px; font-weight: 500; cursor: pointer; font-size: 14px; line-height: 20px;";
+                            const btnSaveFooter = document.createElement('button');
+                            btnSaveFooter.type = 'button';
+                            btnSaveFooter.innerHTML = "💾 Save changes";
+                            btnSaveFooter.style.cssText = "background: #008855; color: white; border: none; padding: 6px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 14px; line-height: 20px;";
                             
                             const btnCancel = document.createElement('button');
+                            btnCancel.type = 'button';
                             btnCancel.innerText = "Cancel";
-                            btnCancel.style.cssText = "background: transparent; color: #d73a49; border: none; padding: 5px 16px; font-weight: 500; cursor: pointer; font-size: 14px; line-height: 20px; margin-right: 10px;";
+                            btnCancel.style.cssText = "background: transparent; color: #d73a49; border: 1px solid var(--border-color); padding: 6px 16px; border-radius: 6px; font-weight: 500; cursor: pointer; font-size: 14px; line-height: 20px;";
                             
                             footer.appendChild(btnCancel);
-                            footer.appendChild(btnCommit);
+                            footer.appendChild(btnSaveFooter);
                             githubEditContainer.appendChild(footer);
                             
-                            contentDiv.parentNode.insertBefore(githubEditContainer, contentDiv);
+                            if (actionToolbar.nextSibling) {
+                                contentDiv.insertBefore(githubEditContainer, actionToolbar.nextSibling);
+                            } else {
+                                contentDiv.appendChild(githubEditContainer);
+                            }
                             
-                            // Modal for commit
-                            const commitModal = document.createElement('div');
-                            commitModal.style.cssText = "display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;";
-                            commitModal.innerHTML = `
-                                <div style="background: var(--bg-color); width: 400px; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border: 1px solid var(--border-color); overflow: hidden;">
-                                    <div style="padding: 16px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: var(--header-bg);">
-                                        <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-color);">Commit changes</h3>
-                                        <span style="cursor: pointer; font-weight: bold; color: var(--text-color);" id="closeCommitModal">&times;</span>
-                                    </div>
-                                    <div style="padding: 16px;">
-                                        <input type="text" id="commitMsg" placeholder="Update document" style="width: 100%; box-sizing: border-box; padding: 5px 12px; margin-bottom: 15px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px; line-height: 20px; background: var(--bg-color); color: var(--text-color);">
-                                        <div style="display: flex; justify-content: flex-end; gap: 10px;">
-                                            <button id="cancelCommitBtn" style="background: var(--header-bg); color: var(--text-color); border: 1px solid var(--border-color); padding: 5px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px;">Cancel</button>
-                                            <button id="confirmCommitBtn" style="background: #2ea44f; color: white; border: none; padding: 5px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px;">Commit changes</button>
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                            document.body.appendChild(commitModal);
-                            
-                            // Logic
                             const activateTab = (active, inactive, showEl, hideEl) => {
                                 active.style.border = "1px solid var(--border-color)";
                                 active.style.borderBottom = "1px solid var(--bg-color)";
@@ -2341,56 +2476,33 @@
                                 previewArea.innerHTML = marked.parse(textarea.value);
                             };
                             
-                            textarea.value = markdown;
+                            textarea.value = editableMarkdown;
                             activateTab(tabEdit, tabPreview, textarea, previewArea);
                             
-                            btnCancel.onclick = () => {
+                            const exitEditMode = () => {
                                 githubEditContainer.style.display = 'none';
-                                contentDiv.style.display = 'block';
-                                isEditing = false;
-                            };
-                            
-                            btnCommit.onclick = () => {
-                                commitModal.style.display = 'flex';
-                            };
-                            
-                            commitModal.querySelector('#closeCommitModal').onclick = () => commitModal.style.display = 'none';
-                            commitModal.querySelector('#cancelCommitBtn').onclick = () => commitModal.style.display = 'none';
-                            
-                            commitModal.querySelector('#confirmCommitBtn').onclick = async () => {
-                                const btnConfirm = commitModal.querySelector('#confirmCommitBtn');
-                                btnConfirm.innerText = "Committing...";
-                                btnConfirm.disabled = true;
-                                
-                                try {
-                                    const newMarkdown = textarea.value;
-                                    const res = await fetch(`/vault/doc/update/${docId}`, {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ markdown: newMarkdown, message: commitModal.querySelector('#commitMsg').value })
-                                    });
-                                    
-                                    if (res.ok) {
-                                        markdown = newMarkdown;
-                                        window.location.reload();
-                                    } else {
-                                        alert('Failed to save document');
+                                Array.from(contentDiv.children).forEach(ch => {
+                                    if (ch !== askDocContainer && ch !== actionToolbar && ch !== githubEditContainer) {
+                                        ch.style.display = ch.dataset.prevDisplay || '';
                                     }
-                                } catch (err) {
-                                    console.error(err);
-                                    alert('Error saving document');
-                                }
-                                btnConfirm.innerText = "Commit changes";
-                                btnConfirm.disabled = false;
+                                });
+                                isEditing = false;
+                                btnEdit.style.display = 'flex';
+                                btnSaveToolbar.style.display = 'none';
+                                btnCancelToolbar.style.display = 'none';
                             };
+
+                            btnCancel.onclick = exitEditMode;
+                            btnCancelToolbar.onclick = exitEditMode;
+                            btnSaveFooter.onclick = () => saveEditedDocument(textarea.value, btnSaveFooter);
+                            btnSaveToolbar.onclick = () => saveEditedDocument(textarea.value, btnSaveToolbar);
                         } else {
-                            githubEditContainer.querySelector('textarea').value = markdown;
+                            const textarea = githubEditContainer.querySelector('#doc-editor-textarea');
+                            const previewArea = githubEditContainer.querySelector('.markdown-body');
+                            const tabEdit = githubEditContainer.children[0].children[0].children[0];
+                            const tabPreview = githubEditContainer.children[0].children[0].children[1];
+                            textarea.value = editableMarkdown;
                             githubEditContainer.style.display = 'block';
-                            
-                            const tabEdit = githubEditContainer.children[0].children[0];
-                            const tabPreview = githubEditContainer.children[0].children[1];
-                            const textarea = githubEditContainer.children[1].children[0];
-                            const previewArea = githubEditContainer.children[1].children[1];
                             
                             tabEdit.style.border = "1px solid var(--border-color)";
                             tabEdit.style.borderBottom = "1px solid var(--bg-color)";
@@ -2406,6 +2518,26 @@
                     }
                 };
                 toolbarLeft.appendChild(btnEdit);
+                toolbarLeft.appendChild(btnSaveToolbar);
+                toolbarLeft.appendChild(btnCancelToolbar);
+
+                // Refresh Subchapters button in the menu toolbar
+                const btnRefreshMenu = document.createElement('button');
+                btnRefreshMenu.type = 'button';
+                btnRefreshMenu.title = 'Refresh / Generate subchapters from Question & Answer sections';
+                btnRefreshMenu.style.cssText = btnStyle;
+                btnRefreshMenu.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>`;
+                btnRefreshMenu.onclick = () => refreshSubchaptersBtn.click();
+                toolbarLeft.appendChild(btnRefreshMenu);
+
+                // Ask button in the menu toolbar (moves document to Chat mode on /)
+                const btnAskMenu = document.createElement('button');
+                btnAskMenu.type = 'button';
+                btnAskMenu.title = 'Open document in Chat mode to ask questions, save, edit, and update';
+                btnAskMenu.style.cssText = btnStyle;
+                btnAskMenu.innerHTML = `${chatIconSvg} <span>Ask</span>`;
+                btnAskMenu.onclick = () => moveToChatBtn.click();
+                toolbarLeft.appendChild(btnAskMenu);
                 
                 // Collections button
                 const btnCols = document.createElement('button');

@@ -945,6 +945,29 @@ def step_4_build_docker_images(repo_dir: str, profile_name: str):
                 default="y" if palefire_enabled else "n"
             ).lower()
             if build_pf in ["y", "yes"]:
+                # Generate palefire/.env from profile_cfg and user input
+                pf_env_path = os.path.join(palefire_dir, ".env")
+                cfg_map = parse_env_file(profile_env_file) if os.path.isfile(profile_env_file) else {}
+                mcp_port = cfg_map.get("MCP_PORT", "7070")
+                api_port = cfg_map.get("API_PORT", "7013")
+                ddi_port = cfg_map.get("DDI_CDI_PORT", "8083")
+                default_ollama = cfg_map.get("OLLAMA_HOST", "http://host.docker.internal:11434")
+                default_vmodel = cfg_map.get("OLLAMA_VISUAL_MODEL", "gemma4:31b-cloud")
+                pf_ollama = ask_prompt("Pale Fire OLLAMA_HOST", default=default_ollama)
+                pf_vmodel = ask_prompt("Pale Fire OLLAMA_VISUAL_MODEL", default=default_vmodel)
+                with open(pf_env_path, "w", encoding="utf-8") as f_pf:
+                    f_pf.write(
+                        f"# Semantic Croissant MCP & LLM configuration for PaleFire\n"
+                        f"SEMANTIC_CROISSANT_MCP_URL=http://localhost:{mcp_port}/mcp\n"
+                        f"SEMANTIC_CROISSANT_SSE_URL=http://localhost:{mcp_port}/sse\n"
+                        f"SEMANTIC_CROISSANT_API_URL=http://localhost:{api_port}\n"
+                        f"OLLAMA_HOST={pf_ollama}\n"
+                        f"OLLAMA_VISUAL_MODEL={pf_vmodel}\n"
+                        f"OLLAMA_DEFAULT_MODEL={pf_vmodel}\n"
+                        f"DDI_CDI_SERVICE=http://localhost:{ddi_port}\n"
+                    )
+                log_success(f"Created {pf_env_path}")
+
                 log_info("Building Pale Fire Docker image from palefire/Dockerfile...")
                 res_pf = subprocess.run(
                     ["docker", "compose", "-f", "docker-compose.yml", "build", "palefire-api"],
@@ -987,6 +1010,20 @@ def step_5_run_and_test(repo_dir: str, profile_name: str):
     if res.returncode != 0:
         log_error("Docker Compose failed to start services.")
         sys.exit(res.returncode)
+
+    palefire_dir = os.path.join(repo_dir, "palefire")
+    if os.path.isfile(os.path.join(palefire_dir, ".env")) and os.path.isfile(os.path.join(palefire_dir, "docker-compose.yml")):
+        start_pf = ask_prompt("Start Pale Fire (palefire-api) service now? (y/n)", default="y").lower()
+        if start_pf in ["y", "yes"]:
+            log_info("Starting Pale Fire service...")
+            res_pf_up = subprocess.run(
+                ["docker", "compose", "-f", "docker-compose.yml", "up", "-d", "palefire-api"],
+                cwd=palefire_dir
+            )
+            if res_pf_up.returncode == 0:
+                log_success("Pale Fire service started.")
+            else:
+                log_warn(f"Pale Fire startup exited with code {res_pf_up.returncode}")
 
     # Launch Pale Fire stack if enabled
     profile_env_file = os.path.join(repo_dir, "profiles", f"{profile_name}.env")
