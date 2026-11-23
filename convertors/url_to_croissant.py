@@ -840,8 +840,36 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                         ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11434").rstrip("/")
                         vision_model = os.environ.get("VISION_MODEL", "gemma4:e4b")
                         ocr_blocks = []
-                        for img_url in img_urls[:5]:
+                        for idx_cv, img_url in enumerate(img_urls[:5], 1):
                             try:
+                                img_resp = _requests.get(img_url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+                                if img_resp.status_code != 200 or len(img_resp.content) < 5000:
+                                    continue
+                                # Deposit image to MinIO vault BEFORE OCR / datamaps analysis
+                                try:
+                                    import hashlib as _hl
+                                    from minio import Minio as _Minio
+                                    _murl = os.environ.get("MINIO_URL", "http://minio:9000")
+                                    if (bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")) and any(h in _murl for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+                                        _murl = "http://minio:9000"
+                                    _mc = _Minio(_murl.replace("http://", "").replace("https://", "").rstrip("/"),
+                                                 access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                                                 secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                                                 secure=_murl.startswith("https"))
+                                    _ext = os.path.splitext(img_url.split("?")[0])[1].lower() or ".jpg"
+                                    if _ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                                        _ext = ".jpg"
+                                    _ctype = img_resp.headers.get("Content-Type", "image/jpeg")
+                                    _img_key = f"{_hl.md5(img_resp.content).hexdigest()[:16]}_image_{idx_cv}{_ext}"
+                                    _mc.put_object("vault", _img_key, io.BytesIO(img_resp.content), len(img_resp.content), content_type=_ctype)
+                                    _g_up = globals()
+                                    if 'GLOBAL_HTML_CV_UPLOADED_IMAGES' not in _g_up or _g_up['GLOBAL_HTML_CV_UPLOADED_IMAGES'] is None:
+                                        _g_up['GLOBAL_HTML_CV_UPLOADED_IMAGES'] = []
+                                    _g_up['GLOBAL_HTML_CV_UPLOADED_IMAGES'].append((_img_key, _ctype, img_url))
+                                    print(f"Deposited HTML CV image {_img_key} to vault before OCR analysis.")
+                                except Exception as e_dep:
+                                    print(f"  -> Pre-OCR vault deposit skipped for {img_url}: {e_dep}")
+
                                 # Try PaleFire datamaps polygon-matching pipeline first for map images
                                 try:
                                     dm_img_resp = _requests.post(
@@ -862,13 +890,6 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                                 except Exception as e_dm_img:
                                     print(f"  -> Datamaps image call skipped/failed for {img_url}: {e_dm_img}")
 
-                                img_resp = _requests.get(img_url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-                                if img_resp.status_code != 200 or len(img_resp.content) < 5000:
-                                    continue
-                                _g_img = globals()
-                                if 'GLOBAL_HTML_CV_IMAGES' not in _g_img or _g_img['GLOBAL_HTML_CV_IMAGES'] is None:
-                                    _g_img['GLOBAL_HTML_CV_IMAGES'] = []
-                                _g_img['GLOBAL_HTML_CV_IMAGES'].append((img_url, img_resp.content, img_resp.headers.get("Content-Type", "image/jpeg")))
                                 img_b64 = _b64.b64encode(img_resp.content).decode("utf-8")
                                 print(f"Running Ollama Vision OCR ({vision_model}) on image: {img_url}")
                                 ov_resp = _requests.post(
