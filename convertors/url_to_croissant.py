@@ -1747,6 +1747,33 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
 
                         uploaded_table_stems.append((t_stem, sheet_title))
 
+                        # Add GeoID column from location columns if not already present
+                        if 'GeoID' not in df_tbl.columns and any(c in df_tbl.columns for c in ('Community', 'Municipality', 'Department', 'Country')):
+                            try:
+                                import requests as _req_geo
+                                _loc_cache = {}
+                                def _lookup_geoid(row):
+                                    parts = [str(row.get(c, '')).strip() for c in ('Community', 'Municipality', 'Department', 'Country') if c in df_tbl.columns]
+                                    parts = [p for p in parts if p and p.lower() not in ('n/a', 'none', 'nan', 'unknown')]
+                                    q = ', '.join(parts)
+                                    if not q:
+                                        return ''
+                                    if q in _loc_cache:
+                                        return _loc_cache[q]
+                                    try:
+                                        gr = _req_geo.get('https://nominatim.openstreetmap.org/search', params={'q': q, 'format': 'json', 'limit': 1}, headers={'User-Agent': 'semantic-croissant/1.0'}, timeout=5)
+                                        if gr.status_code == 200 and gr.json():
+                                            gid = str(gr.json()[0].get('osm_id', ''))
+                                            _loc_cache[q] = gid
+                                            return gid
+                                    except Exception:
+                                        pass
+                                    _loc_cache[q] = ''
+                                    return ''
+                                df_tbl['GeoID'] = df_tbl.apply(_lookup_geoid, axis=1)
+                            except Exception:
+                                pass
+
                         # Upload CSV
                         csv_b = df_tbl.to_csv(index=False).encode('utf-8')
                         client.put_object("vault", f"{t_stem}.csv", io.BytesIO(csv_b), len(csv_b), content_type="text/csv")
