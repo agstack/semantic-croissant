@@ -865,6 +865,10 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                                 img_resp = _requests.get(img_url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
                                 if img_resp.status_code != 200 or len(img_resp.content) < 5000:
                                     continue
+                                _g_img = globals()
+                                if 'GLOBAL_HTML_CV_IMAGES' not in _g_img or _g_img['GLOBAL_HTML_CV_IMAGES'] is None:
+                                    _g_img['GLOBAL_HTML_CV_IMAGES'] = []
+                                _g_img['GLOBAL_HTML_CV_IMAGES'].append((img_url, img_resp.content, img_resp.headers.get("Content-Type", "image/jpeg")))
                                 img_b64 = _b64.b64encode(img_resp.content).decode("utf-8")
                                 print(f"Running Ollama Vision OCR ({vision_model}) on image: {img_url}")
                                 ov_resp = _requests.post(
@@ -1745,6 +1749,23 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                         xl_b_main = xl_buf_main.getvalue()
                         client.put_object("vault", f"{base_s}.xlsx", io.BytesIO(xl_b_main), len(xl_b_main), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 except Exception as e_up_tbl:
+                    print(f"Warning: Failed to upload parsed tables: {e_up_tbl}")
+
+            if 'GLOBAL_HTML_CV_IMAGES' in globals() and globals()['GLOBAL_HTML_CV_IMAGES']:
+                try:
+                    base_s = os.path.basename(safe_name)
+                    uploaded_cv_imgs = []
+                    for idx, (orig_img_url, img_bytes, ctype) in enumerate(globals()['GLOBAL_HTML_CV_IMAGES'], 1):
+                        ext = os.path.splitext(orig_img_url.split("?")[0])[1].lower() or ".jpg"
+                        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                            ext = ".jpg"
+                        img_fname = f"{base_s}_image_{idx}{ext}"
+                        client.put_object("vault", img_fname, io.BytesIO(img_bytes), len(img_bytes), content_type=ctype)
+                        uploaded_cv_imgs.append((img_fname, ctype, orig_img_url))
+                        print(f"Uploaded HTML CV image {img_fname} to vault.")
+                    globals()['GLOBAL_HTML_CV_UPLOADED_IMAGES'] = uploaded_cv_imgs
+                except Exception as e_cv_up:
+                    print(f"Warning: Failed to upload HTML CV images: {e_cv_up}")
                     print(f"Warning: Failed to upload parsed tables to vault: {e_up_tbl}")
 
             # If PDF assets (page renders and embedded images) were generated, upload them to MinIO vault
@@ -2387,6 +2408,29 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                     print("Aborting conversion due to invalid JSON after max retries.")
                     return
 
+
+        # Attach HTML CV images as distributions if uploaded
+        if 'GLOBAL_HTML_CV_UPLOADED_IMAGES' in globals() and globals()['GLOBAL_HTML_CV_UPLOADED_IMAGES']:
+            try:
+                _cv_dists = []
+                _bhost = get_base_host().rstrip("/")
+                for _fn, _ct, _orig in globals()['GLOBAL_HTML_CV_UPLOADED_IMAGES']:
+                    _cv_dists.append({
+                        "@type": "cr:FileObject",
+                        "@id": _fn,
+                        "name": _fn,
+                        "description": f"Extracted image from {_orig}",
+                        "contentUrl": f"{_bhost}/vault/{_fn}",
+                        "encodingFormat": _ct,
+                    })
+                if isinstance(output, dict):
+                    _cur_d = output.get("distribution", [])
+                    if not isinstance(_cur_d, list):
+                        _cur_d = [_cur_d] if _cur_d else []
+                    _cur_d.extend(_cv_dists)
+                    output["distribution"] = _cur_d
+            except Exception as e_cv_d:
+                print(f"Warning: Failed to attach HTML CV image distributions: {e_cv_d}")
 
         # Attach datamaps outputs (CSV + JSON-LD) as distributions, uploaded to the vault
         try:
