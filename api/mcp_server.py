@@ -5155,7 +5155,7 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="describe_resource",
-            description="Describes a resource (local file or URL) by generating a Croissant JSON-LD file and a Markdown summary file.",
+            description="Describes a resource (local file or URL) by generating a Croissant JSON-LD file and a Markdown summary file. Always extract the predicted value definition and units of measure, and map them into the 'value' field in the Croissant metadata.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -5517,44 +5517,88 @@ def main(port: int, transport: str) -> int:
 
         async def vault_es_doc_update(request):
             es_id = request.path_params["es_id"]
-            import json, os
+            if es_id.endswith(".md"):
+                es_id = es_id[:-3]
+            import json, os, re, io, asyncio
             import httpx
             from starlette.responses import JSONResponse
             body = await request.json()
             new_markdown = body.get("markdown")
             if not new_markdown:
                 return JSONResponse({"status": "error", "message": "No markdown provided"}, status_code=400)
-            
+
+            # Strip any UI-injected Croissant Dataset banner or Files & Distributions table if present
+            new_markdown = re.sub(
+                r"<div[^>]*>[\s\S]*?Croissant Dataset:[\s\S]*?View Croissant Dataset[\s\S]*?</div>\s*",
+                "",
+                new_markdown,
+                flags=re.IGNORECASE
+            )
+            new_markdown = re.sub(
+                r"\n+---\n### Files & Distributions\n\| File \| Title \| Format \| Size \| Download \| CDIF \| Tools \|[\s\S]*?(?=\n+---\n\*\*Digital Signature:\*\*|$)",
+                "",
+                new_markdown
+            )
+
+            minio_success = False
+            es_success = False
+
+            # 1. Always update MinIO Vault first (preserving top header button & Digital Signature if needed)
+            try:
+                m_client = get_minio_client()
+                existing_md = ""
+                try:
+                    r_old = await asyncio.to_thread(m_client.get_object, "vault", f"{es_id}.md")
+                    existing_md = r_old.read().decode("utf-8")
+                    r_old.close()
+                    r_old.release_conn()
+                except Exception:
+                    pass
+
+                header_part = ""
+                footer_part = ""
+                if existing_md:
+                    hm = re.match(r"^(\[View Croissant JSON-LD Data\][^\n]*\n+)", existing_md)
+                    if hm and "[View Croissant JSON-LD Data]" not in new_markdown:
+                        header_part = hm.group(1)
+                    fm = re.search(r"(\n*---\n\*\*Digital Signature:\*\*[\s\S]*)$", existing_md)
+                    if fm and "**Digital Signature:**" not in new_markdown:
+                        footer_part = "\n\n" + fm.group(1).lstrip()
+
+                final_md = header_part + new_markdown.strip() + (footer_part if footer_part else "\n")
+                data_bytes = final_md.encode("utf-8")
+                await asyncio.to_thread(
+                    m_client.put_object,
+                    "vault",
+                    f"{es_id}.md",
+                    io.BytesIO(data_bytes),
+                    len(data_bytes),
+                    content_type="text/markdown"
+                )
+                new_markdown = final_md
+                minio_success = True
+            except Exception as e:
+                import sys
+                print(f"MinIO Update error: {e}", file=sys.stderr)
+
+            # 2. Also update Elasticsearch across croissant and user indices
             es_url = get_vault_elasticsearch_url()
-            success = False
-            async with httpx.AsyncClient() as client:
-                try:
-                    update_body = {"doc": {"_markdown_text": new_markdown}}
-                    r = await client.post(f"{es_url}/croissant/_update/{es_id}", json=update_body)
-                    if r.status_code in (200, 201):
-                        success = True
-                except Exception as e:
-                    import sys
-                    print(f"ES Update error: {e}", file=sys.stderr)
-            
-            if not success:
-                # Try MinIO fallback
-                minio_base = get_minio_base_url()
-                try:
-                    from minio import Minio
-                    import io
-                    endpoint = minio_base.replace("http://", "").replace("https://", "")
-                    m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
-                    
-                    data_bytes = new_markdown.encode('utf-8')
-                    m_client.put_object("vault", es_id + ".md", io.BytesIO(data_bytes), len(data_bytes), content_type="text/markdown")
-                    success = True
-                except Exception as e:
-                    import sys
-                    print(f"MinIO Update error: {e}", file=sys.stderr)
-                    
-            if success:
-                return JSONResponse({"status": "success"})
+            local_es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                for base_u in {es_url, local_es_url}:
+                    if not base_u:
+                        continue
+                    try:
+                        update_body = {"doc": {"_markdown_text": new_markdown}, "doc_as_upsert": True}
+                        r = await client.post(f"{base_u}/croissant/_update/{es_id}", json=update_body)
+                        if r.status_code in (200, 201):
+                            es_success = True
+                    except Exception as e:
+                        import sys
+                        print(f"ES Update error ({base_u}): {e}", file=sys.stderr)
+
+            if minio_success or es_success:
+                return JSONResponse({"status": "success", "doc_id": es_id})
             else:
                 return JSONResponse({"status": "error", "message": "Failed to update document"}, status_code=500)
 
@@ -5877,7 +5921,165 @@ def main(port: int, transport: str) -> int:
                                 except Exception as dm_sum_err:
                                     print(f"Warning: datamaps_page_summary error: {dm_sum_err}")
 
-                                context_text = f"IMPORTANT DATASET OVERVIEW:\n- Title: {ds_name}\n- Authors / Creators: {', '.join(ds_creators) if ds_creators else 'Unknown'}\n- Total files: {total_files}\n\n" + croissant_summary_snippet + datamaps_page_summary + "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + jsonld_to_inject + "\n\n" + context_text
+                                # Also load any *_cdif.jsonld file from distribution (e.g. PaleFire polygon CDIF exports)
+                                cdif_file_summary = ""
+                                try:
+                                    cdif_keys = [
+                                        d.get("name") or d.get("@id")
+                                        for d in (croissant_doc_dict.get("distribution") or [])
+                                        if isinstance(d, dict) and str(d.get("name") or d.get("@id") or "").endswith("_cdif.jsonld")
+                                    ]
+                                    for ckey in cdif_keys[:2]:
+                                        try:
+                                            c_resp = m_client.get_object("vault", ckey)
+                                            c_data = json.loads(c_resp.read().decode("utf-8"))
+                                            c_resp.close()
+                                            c_resp.release_conn()
+                                            obs_list = c_data.get("observations") or []
+                                            range_by_color = {
+                                                lb.get("color_name") or lb.get("label"): lb.get("label")
+                                                for lb in (c_data.get("legend") or [])
+                                                if isinstance(lb, dict)
+                                            }
+                                            q_low = question.lower()
+                                            matched_obs = [o for o in obs_list if o.get("name") and o["name"].lower() in q_low]
+                                            geo_note = ""
+                                            if not matched_obs and obs_list:
+                                                # Geocode place name from question via Nominatim to resolve department/region or nearest observation
+                                                import re as _re, urllib.request as _ureq, urllib.parse as _uparse
+                                                place_m = _re.search(r'\b(?:in|of|at|for|near)\s+([A-Z][a-zA-ZÀ-ÿ\-]+(?:\s+[A-Z][a-zA-ZÀ-ÿ\-]+)*)', question)
+                                                place_q = place_m.group(1) if place_m else ""
+                                                if place_q:
+                                                    try:
+                                                        nom_url = f"https://nominatim.openstreetmap.org/search?q={_uparse.quote(place_q)}&format=json&addressdetails=1&limit=1"
+                                                        nom_req = _ureq.Request(nom_url, headers={"User-Agent": "SemanticCroissant/1.0"})
+                                                        with _ureq.urlopen(nom_req, timeout=5) as nr:
+                                                            nom_res = json.loads(nr.read().decode("utf-8"))
+                                                        if nom_res:
+                                                            addr = nom_res[0].get("address", {})
+                                                            admin_cands = [
+                                                                str(addr.get(k, "")).lower()
+                                                                for k in ("county", "state_district", "state", "region", "province")
+                                                                if addr.get(k)
+                                                            ]
+                                                            matched_obs = [
+                                                                o for o in obs_list
+                                                                if o.get("name") and any(o["name"].lower() in ac or ac in o["name"].lower() for ac in admin_cands)
+                                                            ]
+                                                            if not matched_obs:
+                                                                # Nearest observation by lat/lon
+                                                                qlat, qlon = float(nom_res[0]["lat"]), float(nom_res[0]["lon"])
+                                                                with_coords = [o for o in obs_list if o.get("latitude") is not None and o.get("longitude") is not None]
+                                                                if with_coords:
+                                                                    nearest = min(with_coords, key=lambda o: (float(o["latitude"]) - qlat)**2 + (float(o["longitude"]) - qlon)**2)
+                                                                    matched_obs = [nearest]
+                                                            if matched_obs:
+                                                                geo_note = f"(Geocoded '{place_q}' -> {', '.join(addr.get(k) for k in ('county', 'state', 'country') if addr.get(k))})\n"
+                                                            # If spatialTransform + map image exist, sample exact pixel color at (qlat, qlon)
+                                                            st = c_data.get("spatialTransform")
+                                                            if st and st.get("lonlat_affine"):
+                                                                try:
+                                                                    import fitz
+                                                                    img_keys = [
+                                                                        d.get("name") or d.get("@id")
+                                                                        for d in (croissant_doc_dict.get("distribution") or [])
+                                                                        if isinstance(d, dict) and str(d.get("encodingFormat", "")).startswith("image/")
+                                                                    ]
+                                                                    if img_keys:
+                                                                        im_resp = m_client.get_object("vault", img_keys[0])
+                                                                        pix = fitz.Pixmap(im_resp.read())
+                                                                        im_resp.close()
+                                                                        im_resp.release_conn()
+                                                                        a, b, d_aff, e_aff, xoff, yoff = st["lonlat_affine"]
+                                                                        qlon, qlat = float(nom_res[0]["lon"]), float(nom_res[0]["lat"])
+                                                                        px = int(round(a * qlon + b * qlat + xoff))
+                                                                        py = int(round(d_aff * qlon + e_aff * qlat + yoff))
+                                                                        if 0 <= px < pix.width and 0 <= py < pix.height:
+                                                                            legend_list = c_data.get("legend") or []
+                                                                            best_lb = None
+                                                                            best_dist = float("inf")
+                                                                            pbgr = [0, 0, 0]
+                                                                            phex = "#000000"
+                                                                            # Check exact center pixel first; expand to 15x15 only if center is background/border/ocean
+                                                                            offsets = [(0, 0)] + [(dx, dy) for dy in range(-3, 4) for dx in range(-3, 4) if (dx, dy) != (0, 0)]
+                                                                            for dx, dy in offsets:
+                                                                                sx, sy = px + dx, py + dy
+                                                                                if 0 <= sx < pix.width and 0 <= sy < pix.height:
+                                                                                    pv = pix.pixel(sx, sy)
+                                                                                    r_px, g_px, b_px = pv[0], pv[1], pv[2]
+                                                                                    if (r_px > 235 and g_px > 235 and b_px > 235) or (r_px < 45 and g_px < 45 and b_px < 45) or (b_px > 225 and g_px > 205 and r_px < 215):
+                                                                                        continue
+                                                                                    cand_bgr = [int(b_px), int(g_px), int(r_px)]
+                                                                                    for lb in legend_list:
+                                                                                        d_c = sum((u - v) ** 2 for u, v in zip(cand_bgr, lb.get("bgr", [0, 0, 0])))
+                                                                                        if d_c < best_dist:
+                                                                                            best_dist = d_c
+                                                                                            best_lb = lb
+                                                                                            pbgr = cand_bgr
+                                                                                            phex = "#{:02x}{:02x}{:02x}".format(r_px, g_px, b_px)
+                                                                                    if dx == 0 and dy == 0 and best_lb is not None:
+                                                                                        break
+                                                                            if best_lb:
+                                                                                geo_note = f"PRECISE POINT SAMPLE for '{place_q}' ({nom_res[0]['lat']}, {nom_res[0]['lon']}) at pixel ({px}, {py}): Color={phex}, Climate/Legend={best_lb.get('label')}\n" + geo_note
+                                                                except Exception:
+                                                                    pass
+                                                    except Exception:
+                                                        pass
+                                            rows_to_show = matched_obs if matched_obs else obs_list[:60]
+                                            obs_lines = []
+                                            for o in rows_to_show:
+                                                vrange = o.get("value_range") or range_by_color.get(o.get("color_name", ""), "")
+                                                val_display = o.get("value") if o.get("value") not in (None, "", "N/A", "None") else (f"{vrange} (from Value_Range)" if vrange else "N/A")
+                                                obs_lines.append(
+                                                    f"- {o.get('name')} (GeoID: {o.get('geoid')}, Lat/Lon: {o.get('latitude')}, {o.get('longitude')}): Color={o.get('color_name')} ({o.get('color_hex')}), Value={val_display}, Value_Range={vrange or 'N/A'}, Legend={o.get('legend_label')}"
+                                                )
+                                            cdif_file_summary += f"=== CDIF OBSERVATIONS ({ckey}, {len(obs_list)} total) ===\n" + geo_note + "\n".join(obs_lines) + "\n\n"
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+
+                                # Also load any .csv distribution from MinIO vault
+                                try:
+                                    csv_keys = [
+                                        d.get("name") or d.get("@id")
+                                        for d in (croissant_doc_dict.get("distribution") or [])
+                                        if isinstance(d, dict) and str(d.get("name") or d.get("@id") or "").endswith(".csv")
+                                    ]
+                                    for csv_key in csv_keys[:2]:
+                                        try:
+                                            csv_resp = m_client.get_object("vault", csv_key)
+                                            csv_text = csv_resp.read().decode("utf-8", errors="replace")
+                                            csv_resp.close()
+                                            csv_resp.release_conn()
+                                            csv_lines = csv_text.splitlines()[:150]
+                                            cdif_file_summary += f"=== CSV DATA ({csv_key}) ===\n" + "\n".join(csv_lines) + "\n\n"
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+
+                                # Also load any .csv distribution from MinIO vault
+                                try:
+                                    csv_keys = [
+                                        d.get("name") or d.get("@id")
+                                        for d in (croissant_doc_dict.get("distribution") or [])
+                                        if isinstance(d, dict) and str(d.get("name") or d.get("@id") or "").endswith(".csv")
+                                    ]
+                                    for csv_key in csv_keys[:2]:
+                                        try:
+                                            csv_resp = m_client.get_object("vault", csv_key)
+                                            csv_text = csv_resp.read().decode("utf-8", errors="replace")
+                                            csv_resp.close()
+                                            csv_resp.release_conn()
+                                            csv_lines = csv_text.splitlines()[:150]
+                                            cdif_file_summary += f"=== CSV DATA ({csv_key}) ===\n" + "\n".join(csv_lines) + "\n\n"
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+
+                                context_text = f"IMPORTANT DATASET OVERVIEW:\n- Title: {ds_name}\n- Authors / Creators: {', '.join(ds_creators) if ds_creators else 'Unknown'}\n- Total files: {total_files}\n\n" + croissant_summary_snippet + datamaps_page_summary + cdif_file_summary + "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + jsonld_to_inject + "\n\n" + context_text
                     except Exception as doc_err:
                         print(f"Warning: doc_id handling error in vault_ask: {doc_err}")
                 model_name = data.get("model", OLLAMA_DEFAULT_MODEL).strip()
