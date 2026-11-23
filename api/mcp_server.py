@@ -14805,7 +14805,54 @@ Output a JSON object with:
                 if doc_id.endswith(".md"):
                     doc_id = doc_id[:-3]
                 redirect_url = f"/vault/doc/{doc_id}"
-                
+
+                # Ensure CDIF JSON-LD is generated and registered in MinIO vault
+                try:
+                    import csv as _csv, hashlib as _hashlib, io as _io
+                    _m = get_minio_client()
+                    _jld = json.loads(_m.get_object("vault", f"{doc_id}.jsonld").read().decode("utf-8"))
+                    _dists = _jld.get("distribution") or []
+                    if isinstance(_dists, dict):
+                        _dists = [_dists]
+                    if not any(str(d.get("@id") or d.get("name") or "").endswith("_cdif.jsonld") for d in _dists if isinstance(d, dict)):
+                        _rows = []
+                        try:
+                            _csv_txt = _m.get_object("vault", f"{doc_id}.csv").read().decode("utf-8", errors="replace")
+                            _rows = list(_csv.DictReader(_io.StringIO(_csv_txt)))
+                        except Exception:
+                            pass
+                        _cols = list(_rows[0].keys()) if _rows else ["value"]
+                        _cdif = {
+                            "@context": [
+                                "https://ddialliance.org/Specification/DDI-CDI/1.0/context.jsonld",
+                                {"schema": "https://schema.org/", "cr": "http://mlcommons.org/croissant/", "cdif": "https://w3id.org/cdif/core/1.1/"},
+                            ],
+                            "@type": ["schema:Dataset", "cr:Dataset"],
+                            "conformsTo": ["https://w3id.org/cdif/core/1.1", "https://ddialliance.org/Specification/DDI-CDI/1.0/"],
+                            "schema:name": _jld.get("name") or doc_id,
+                            "schema:description": _jld.get("description") or "",
+                            "DDICDIModels": [{"@type": "InstanceVariable", "@id": f"#var-{c}", "name": {"name": c}} for c in _cols],
+                            "observations": _rows,
+                        }
+                        _cb = json.dumps(_cdif, indent=2, ensure_ascii=False).encode("utf-8")
+                        _m.put_object("vault", f"{doc_id}_cdif.jsonld", _io.BytesIO(_cb), len(_cb), content_type="application/ld+json")
+                        _host_pfx = f"https://{client_host}" if client_host and "http" not in str(client_host) else (str(client_host).rstrip("/") if client_host else "http://localhost:7070")
+                        _dists.insert(0, {
+                            "@type": "cr:FileObject",
+                            "@id": f"{doc_id}_cdif.jsonld",
+                            "name": f"{doc_id}_cdif.jsonld",
+                            "description": "DDI-CDI / CDIF JSON-LD observations",
+                            "contentUrl": f"{_host_pfx}/vault/{doc_id}_cdif.jsonld",
+                            "encodingFormat": "application/ld+json",
+                            "contentSize": f"{len(_cb)} B",
+                            "sha256": _hashlib.sha256(_cb).hexdigest(),
+                        })
+                        _jld["distribution"] = _dists
+                        _jb = json.dumps(_jld, indent=2, ensure_ascii=False).encode("utf-8")
+                        _m.put_object("vault", f"{doc_id}.jsonld", _io.BytesIO(_jb), len(_jb), content_type="application/ld+json")
+                except Exception as _cdif_err:
+                    print(f"Warning: auto-CDIF generation in MCP upload failed: {_cdif_err}", flush=True)
+
                 return JSONResponse({"status": "success", "redirect_url": redirect_url})
             except Exception as e:
                 print(f"Error in generic upload: {e}")
