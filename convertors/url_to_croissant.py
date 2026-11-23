@@ -838,7 +838,7 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                             img_urls.append(full_img_url)
                     if img_urls:
                         ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11434").rstrip("/")
-                        vision_model = os.environ.get("VISION_MODEL", "gemma4:31b")
+                        vision_model = os.environ.get("VISION_MODEL", "gemma4:e4b")
                         ocr_blocks = []
                         for img_url in img_urls[:5]:
                             try:
