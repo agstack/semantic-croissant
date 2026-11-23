@@ -818,7 +818,55 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                                 markdown_content += f"\n\n--- Content from {sub_url} ---\n\n{sub_md}"
                     except Exception as e:
                         print(f"  -> Failed to fetch subpage {sub_url}: {e}")
-                    
+
+            if use_computer_vision and content:
+                try:
+                    import base64 as _b64
+                    img_urls = []
+                    seen_imgs = set()
+                    for img in content.find_all('img'):
+                        src = img.get('data-src') or img.get('data-lazy-src') or img.get('src')
+                        if not src or src.startswith('data:'):
+                            continue
+                        full_img_url = urllib.parse.urljoin(url, src)
+                        low = full_img_url.lower()
+                        if any(low.endswith(ext) for ext in ('.svg', '.ico', '.gif')) or any(k in low for k in ('logo', 'icon', 'avatar', 'spinner', 'pixel')):
+                            continue
+                        if full_img_url not in seen_imgs:
+                            seen_imgs.add(full_img_url)
+                            img_urls.append(full_img_url)
+                    if img_urls:
+                        ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11434").rstrip("/")
+                        vision_model = os.environ.get("VISION_MODEL", "gemma4:31b-cloud")
+                        ocr_blocks = []
+                        for img_url in img_urls[:5]:
+                            try:
+                                img_resp = requests.get(img_url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+                                if img_resp.status_code != 200 or len(img_resp.content) < 5000:
+                                    continue
+                                img_b64 = _b64.b64encode(img_resp.content).decode("utf-8")
+                                print(f"Running Ollama Vision OCR ({vision_model}) on image: {img_url}")
+                                ov_resp = requests.post(
+                                    f"{ollama_host}/api/generate",
+                                    json={
+                                        "model": vision_model,
+                                        "prompt": "Perform OCR and extract all visible text, numbers, labels, legends, regions, and tabular data from this image. Format any structured data as clean Markdown tables.",
+                                        "images": [img_b64],
+                                        "stream": False,
+                                    },
+                                    timeout=120,
+                                )
+                                if ov_resp.status_code == 200:
+                                    ocr_text = ov_resp.json().get("response", "").strip()
+                                    if ocr_text:
+                                        ocr_blocks.append(f"### Image: {img_url}\n\n{ocr_text}")
+                            except Exception as e_img:
+                                print(f"  -> Vision OCR failed for {img_url}: {e_img}")
+                        if ocr_blocks:
+                            markdown_content += "\n\n## Computer Vision Extracted Image Data\n\n" + "\n\n".join(ocr_blocks)
+                except Exception as e_cv:
+                    print(f"Warning: HTML Computer Vision image extraction failed: {e_cv}")
+
             return markdown_content, {"contentUrl": url}, sibling_pages, page_meta
         else:
             print("No main or body content could be extracted.")
