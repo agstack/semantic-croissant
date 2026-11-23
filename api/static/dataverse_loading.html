@@ -80,6 +80,13 @@
                 if (vision === 'true' || vision === '1') {
                     fetchUrl += `&vision=true`;
                 }
+                const colId = params.get('col_id');
+                const newColName = params.get('new_col_name');
+                if (colId) {
+                    fetchUrl += `&col_id=${encodeURIComponent(colId)}`;
+                } else if (newColName) {
+                    fetchUrl += `&new_col_name=${encodeURIComponent(newColName)}`;
+                }
                 const response = await fetch(fetchUrl, {
                     method: 'POST'
                 });

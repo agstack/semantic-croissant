@@ -96,7 +96,7 @@
                 <a href="/#history" id="menu-history" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> History</a>
             </nav>
             <button class="theme-toggle" onclick="document.getElementById('add-text-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-text-input').focus(), 50);" style="background-color: #008855; color: white; border: none; font-weight: 500;">Add text</button>
-            <button class="theme-toggle" onclick="document.getElementById('add-resource-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-resource-input').focus(), 50);" style="background-color: #006bb3; color: white; border: none; font-weight: 500;">Add resource</button>
+            <button class="theme-toggle" onclick="openAddResourceModal()" style="background-color: #006bb3; color: white; border: none; font-weight: 500;">Add resource</button>
             <input type="text" id="global-search" placeholder="Search across all collections..." style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); width: 300px; font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') window.location.href = '/?q=' + encodeURIComponent('Search Croissant datasets for: ' + this.value)">
             {{LOGIN_BUTTON_HTML}}
         </div>
@@ -159,19 +159,342 @@
         loadGroup();
     </script>
     <div id="add-resource-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">
-        <div style="background: var(--bg-color); padding: 20px; border-radius: 8px; width: 400px; max-width: 90%; border: 1px solid var(--border-color);">
-            <h3 style="margin-top: 0; color: var(--text-color);">Add Resource</h3>
-            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-color);">Enter the URL of the resource you want to ingest:</p>
-            <input type="text" id="add-resource-input" placeholder="https://..." style="width: 100%; padding: 8px; margin-bottom: 12px; border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; background: var(--panel-bg); color: var(--text-color); font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') document.getElementById('add-resource-submit').click()">
+        <div style="background: var(--bg-color); padding: 22px; border-radius: 8px; width: 480px; max-width: 90%; border: 1px solid var(--border-color); box-shadow: 0 4px 16px rgba(0,0,0,0.2); max-height: 90vh; overflow-y: auto;">
+            <h3 style="margin-top: 0; margin-bottom: 12px; color: var(--text-color); font-size: 1.15rem;">Add Resource</h3>
+            
+            <!-- Ingest via URL -->
+            <p style="font-size: 0.9rem; margin-bottom: 6px; color: var(--text-color); font-weight: 500;">Enter the URL of the resource you want to ingest:</p>
+            <input type="text" id="add-resource-input" placeholder="https://..." style="width: 100%; padding: 8px; margin-bottom: 12px; border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; background: var(--panel-bg); color: var(--text-color); font-family: inherit; font-size: 14px;" oninput="onResourceInputChanged()" onkeydown="if(event.key === 'Enter') document.getElementById('add-resource-submit').click()">
+            
+            <!-- Local file upload option if PALEFIRE is True -->
+            <div id="add-resource-file-container" style="display: {{PALEFIRE_DISPLAY}}; flex-direction: column; margin-bottom: 14px; padding: 10px; border: 1px dashed var(--border-color); border-radius: 6px; background: rgba(128,128,128,0.05);">
+                <label style="font-size: 0.85rem; color: var(--text-color); font-weight: 500; margin-bottom: 6px; display: block;">Or upload local file (Image, PDF, Document):</label>
+                <input type="file" id="add-resource-file-input" onchange="onResourceFileChanged()" style="font-size: 0.85rem; color: var(--text-color); width: 100%;">
+            </div>
+
+            <!-- Collection Options -->
+            <div style="margin-bottom: 14px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(0,0,0,0.02);">
+                <label style="font-size: 0.85rem; color: var(--text-color); font-weight: 600; display: block; margin-bottom: 8px;">Collection Options:</label>
+                
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <label style="font-size: 0.82rem; color: var(--text-color); display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="radio" name="add-col-option" value="none" checked onchange="toggleCollectionInputs()">
+                        <span>Do not add to collection</span>
+                    </label>
+
+                    <label style="font-size: 0.82rem; color: var(--text-color); display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="radio" name="add-col-option" value="existing" onchange="toggleCollectionInputs()">
+                        <span>Add to existing collection</span>
+                    </label>
+                    <div id="add-col-existing-container" style="display: none; margin-left: 20px; margin-bottom: 4px;">
+                        <select id="add-resource-col-select" style="width: 100%; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); font-size: 0.85rem;">
+                            <option value="">Loading collections...</option>
+                        </select>
+                    </div>
+
+                    <label style="font-size: 0.82rem; color: var(--text-color); display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="radio" name="add-col-option" value="new" onchange="toggleCollectionInputs()">
+                        <span>Create new collection</span>
+                    </label>
+                    <div id="add-col-new-container" style="display: none; margin-left: 20px;">
+                        <input type="text" id="add-resource-new-col-name" placeholder="Collection name..." style="width: 100%; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); font-size: 0.85rem; box-sizing: border-box; margin-bottom: 4px;">
+                        <div style="font-size: 0.72rem; color: #888;">Suggested automatically from URL / filename, or customize as desired.</div>
+                    </div>
+                </div>
+            </div>
+
             <label id="add-resource-vision-label" style="display: {{PALEFIRE_DISPLAY}}; align-items: center; gap: 8px; margin-bottom: 15px; font-size: 0.85rem; color: var(--text-color); cursor: pointer; user-select: none;">
                 <input type="checkbox" id="add-resource-vision" style="cursor: pointer; width: 15px; height: 15px;">
                 <span>Use Computer Vision</span>
             </label>
+            
+            <div id="add-resource-progress-container" style="display: none; margin-bottom: 14px;">
+                <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-color); margin-bottom: 6px; font-weight: 500;">
+                    <span id="add-resource-status-text">Processing file with PaleFire OCR & Ingestion...</span>
+                    <span id="add-resource-progress-percent">0%</span>
+                </div>
+                <div style="width: 100%; height: 8px; background: rgba(128,128,128,0.2); border-radius: 4px; overflow: hidden;">
+                    <div id="add-resource-progress-bar" style="width: 0%; height: 100%; background: #006bb3; transition: width 0.3s ease; border-radius: 4px;"></div>
+                </div>
+                <div id="add-resource-status-subtext" style="font-size: 0.75rem; color: var(--text-color); opacity: 0.8; margin-top: 4px;">Uploading file...</div>
+            </div>
+            <div id="add-resource-error" style="display: none; font-size: 0.85rem; color: #d32f2f; margin-bottom: 10px;"></div>
             <div style="display: flex; justify-content: flex-end; gap: 10px;">
                 <button onclick="document.getElementById('add-resource-modal').style.display='none'" class="theme-toggle">Cancel</button>
-                <button id="add-resource-submit" onclick="var url = document.getElementById('add-resource-input').value; var cv = document.getElementById('add-resource-vision').checked; if(url) window.location.href='/dataverse?url=' + encodeURIComponent(url) + (cv ? '&vision=true' : '');" style="background-color: #006bb3; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
+                <button id="add-resource-submit" onclick="submitAddResource()" style="background-color: #006bb3; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
             </div>
         </div>
+    </div>
+
+    <script>
+        var cachedCollectionsList = null;
+
+        function openAddResourceModal() {
+            var modal = document.getElementById("add-resource-modal");
+            if (!modal) return;
+            modal.style.display = "flex";
+            setTimeout(function() {
+                var inp = document.getElementById("add-resource-input");
+                if (inp) inp.focus();
+            }, 50);
+            loadResourceCollections();
+        }
+
+        async function loadResourceCollections() {
+            var select = document.getElementById("add-resource-col-select");
+            if (!select) return;
+            if (cachedCollectionsList) {
+                populateCollectionSelect(cachedCollectionsList);
+                return;
+            }
+            try {
+                var r = await fetch("/api/collections");
+                if (r.ok) {
+                    var data = await r.json();
+                    cachedCollectionsList = data.collections || [];
+                    populateCollectionSelect(cachedCollectionsList);
+                } else {
+                    select.innerHTML = "<option value=>Failed to load collections</option>";
+                }
+            } catch (e) {
+                select.innerHTML = "<option value=>Error loading collections</option>";
+            }
+        }
+
+        function populateCollectionSelect(cols) {
+            var select = document.getElementById("add-resource-col-select");
+            if (!select) return;
+            select.innerHTML = "<option value=>-- Select a collection --</option>";
+            cols.forEach(function(c) {
+                var opt = document.createElement("option");
+                opt.value = c.id;
+                opt.textContent = c.name + (c.is_private ? " (Private)" : "");
+                select.appendChild(opt);
+            });
+        }
+
+        function toggleCollectionInputs() {
+            var opt = document.querySelector('input[name="add-col-option"]:checked');
+            var val = opt ? opt.value : "none";
+            var existCont = document.getElementById("add-col-existing-container");
+            var newCont = document.getElementById("add-col-new-container");
+            if (existCont) existCont.style.display = (val === "existing") ? "block" : "none";
+            if (newCont) newCont.style.display = (val === "new") ? "block" : "none";
+            if (val === "new") {
+                suggestCollectionName();
+            }
+        }
+
+        function suggestCollectionName() {
+            var newColInp = document.getElementById("add-resource-new-col-name");
+            if (!newColInp || (newColInp.value && newColInp.getAttribute("data-user-edited") === "true")) return;
+            
+            var fileInput = document.getElementById("add-resource-file-input");
+            var urlInput = document.getElementById("add-resource-input");
+            var raw = "";
+            if (fileInput && fileInput.files && fileInput.files.length > 0) {
+                raw = fileInput.files[0].name;
+            } else if (urlInput && urlInput.value.trim()) {
+                raw = urlInput.value.trim();
+            }
+            if (!raw) return;
+
+            var name = "";
+            if (raw.indexOf("://") !== -1) {
+                try {
+                    var u = new URL(raw);
+                    var qParams = ["q", "query", "title", "name", "persistentId"];
+                    for (var i = 0; i < qParams.length; i++) {
+                        var qv = u.searchParams.get(qParams[i]);
+                        if (qv) {
+                            var cleanQv = qv.replace(/^doi:/i, "").replace(/[^a-zA-Z0-9_-]/g, " ").trim();
+                            if (cleanQv.length > 2) {
+                                name = cleanQv;
+                                break;
+                            }
+                        }
+                    }
+                    if (!name) {
+                        var parts = u.pathname.split("/").filter(function(p) { return p && !p.match(/\.(html|xhtml|php|asp)$/i); });
+                        if (parts.length > 0) {
+                            name = parts[parts.length - 1].replace(/\.[a-zA-Z0-9]+$/, "").replace(/[^a-zA-Z0-9_-]/g, " ").trim();
+                        }
+                    }
+                    if (!name) {
+                        var hostParts = u.hostname.split(".");
+                        name = hostParts.length >= 2 ? hostParts[hostParts.length - 2] : u.hostname;
+                    }
+                } catch(e) {
+                    name = raw.replace(/[^a-zA-Z0-9_-]/g, " ").trim();
+                }
+            } else {
+                var fname = raw.split("/").pop().split("\\").pop();
+                name = fname.replace(/\.[a-zA-Z0-9]+$/, "").replace(/[^a-zA-Z0-9_-]/g, " ").trim();
+            }
+
+            if (name) {
+                name = name.split(/\s+/).map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(" ");
+                newColInp.value = name;
+            }
+        }
+
+        function onResourceInputChanged() {
+            var opt = document.querySelector('input[name="add-col-option"]:checked');
+            if (opt && opt.value === "new") {
+                suggestCollectionName();
+            }
+        }
+
+        function onResourceFileChanged() {
+            var opt = document.querySelector('input[name="add-col-option"]:checked');
+            if (opt && opt.value === "new") {
+                suggestCollectionName();
+            }
+        }
+
+        async function handlePostIngestCollection(docId) {
+            var opt = document.querySelector('input[name="add-col-option"]:checked');
+            var val = opt ? opt.value : "none";
+            if (val === "none" || !docId) return;
+
+            if (val === "existing") {
+                var select = document.getElementById("add-resource-col-select");
+                var cid = select ? select.value : "";
+                if (cid) {
+                    try {
+                        await fetch("/api/collections/" + encodeURIComponent(cid) + "/add", {
+                            method: "POST",
+                            headers: {"Content-Type": "application/json"},
+                            body: JSON.stringify({docId: docId})
+                        });
+                    } catch(e) {
+                        console.error("Failed to add to existing collection:", e);
+                    }
+                }
+            } else if (val === "new") {
+                var newColInp = document.getElementById("add-resource-new-col-name");
+                var cname = newColInp ? newColInp.value.trim() : "";
+                if (cname) {
+                    try {
+                        await fetch("/api/collections", {
+                            method: "POST",
+                            headers: {"Content-Type": "application/json"},
+                            body: JSON.stringify({
+                                name: cname,
+                                description: "Created during ingestion of resource " + docId,
+                                items: [docId]
+                            })
+                        });
+                    } catch(e) {
+                        console.error("Failed to create new collection:", e);
+                    }
+                }
+            }
+        }
+
+        function submitAddResource() {
+            var fileInput = document.getElementById("add-resource-file-input");
+            var urlInput = document.getElementById("add-resource-input");
+            var cvEl = document.getElementById("add-resource-vision");
+            var cv = cvEl ? cvEl.checked : false;
+            var btn = document.getElementById("add-resource-submit");
+            var progContainer = document.getElementById("add-resource-progress-container");
+            var progText = document.getElementById("add-resource-status-text");
+            var progSubtext = document.getElementById("add-resource-status-subtext");
+            var progPercent = document.getElementById("add-resource-progress-percent");
+            var progBar = document.getElementById("add-resource-progress-bar");
+            var errBox = document.getElementById("add-resource-error");
+            
+            if (fileInput && fileInput.files && fileInput.files.length > 0) {
+                btn.disabled = true;
+                btn.innerText = "Processing...";
+                if (errBox) errBox.style.display = "none";
+                if (progContainer) progContainer.style.display = "block";
+                if (progText) progText.innerText = "Processing file with PaleFire OCR & Ingestion...";
+                if (progSubtext) progSubtext.innerText = "Uploading file to server...";
+                if (progBar) progBar.style.width = "15%";
+                if (progPercent) progPercent.innerText = "15%";
+
+                var progressInterval = setInterval(function() {
+                    var cur = parseInt(progBar ? progBar.style.width : "15") || 15;
+                    if (cur < 35) {
+                        cur += 5;
+                        if (progSubtext) progSubtext.innerText = "Extracting text and tables via PaleFire Tesseract OCR...";
+                    } else if (cur < 65) {
+                        cur += 3;
+                        if (progSubtext) progSubtext.innerText = "Detecting structured sheets and generating Excel & CSV...";
+                    } else if (cur < 90) {
+                        cur += 1;
+                        if (progSubtext) progSubtext.innerText = "Creating Croissant JSON-LD & saving to MinIO Vault...";
+                    }
+                    if (progBar) progBar.style.width = cur + "%";
+                    if (progPercent) progPercent.innerText = cur + "%";
+                }, 800);
+
+                var formData = new FormData();
+                formData.append("file", fileInput.files[0]);
+                if (cv) formData.append("vision", "true");
+                fetch("/api/generic/upload", {
+                    method: "POST",
+                    body: formData
+                })
+                .then(function(r) { return r.json().then(function(data) { return {ok: r.ok, data: data}; }); })
+                .then(async function(res) {
+                    clearInterval(progressInterval);
+                    if (res.ok && res.data.redirect_url) {
+                        if (progBar) progBar.style.width = "100%";
+                        if (progPercent) progPercent.innerText = "100%";
+                        if (progSubtext) progSubtext.innerText = "Updating collection & redirecting to Vault...";
+                        
+                        var docId = res.data.redirect_url.split("/vault/doc/")[1];
+                        if (docId) {
+                            docId = docId.split("?")[0].split("#")[0].replace(/\.md$/, "");
+                            await handlePostIngestCollection(docId);
+                        }
+                        setTimeout(function() {
+                            window.location.href = res.data.redirect_url;
+                        }, 400);
+                    } else {
+                        if (progContainer) progContainer.style.display = "none";
+                        if (errBox) {
+                            errBox.style.display = "block";
+                            errBox.innerText = "Error: " + (res.data.detail || "Upload failed");
+                        }
+                        btn.disabled = false;
+                        btn.innerText = "Ingest";
+                    }
+                })
+                .catch(function(err) {
+                    clearInterval(progressInterval);
+                    if (progContainer) progContainer.style.display = "none";
+                    if (errBox) {
+                        errBox.style.display = "block";
+                        errBox.innerText = "Upload error: " + err;
+                    }
+                    btn.disabled = false;
+                    btn.innerText = "Ingest";
+                });
+            } else if (urlInput && urlInput.value.trim()) {
+                var url = urlInput.value.trim();
+                var target = "/dataverse?url=" + encodeURIComponent(url) + (cv ? "&vision=true" : "");
+                
+                var opt = document.querySelector('input[name="add-col-option"]:checked');
+                var val = opt ? opt.value : "none";
+                if (val === "existing") {
+                    var select = document.getElementById("add-resource-col-select");
+                    if (select && select.value) {
+                        target += "&col_id=" + encodeURIComponent(select.value);
+                    }
+                } else if (val === "new") {
+                    var newColInp = document.getElementById("add-resource-new-col-name");
+                    if (newColInp && newColInp.value.trim()) {
+                        target += "&new_col_name=" + encodeURIComponent(newColInp.value.trim());
+                    }
+                }
+                window.location.href = target;
+            }
+        }
+    </script>
     </div>
     
     <div id="add-text-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">

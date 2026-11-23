@@ -1,3 +1,5 @@
+GLOBAL_PARSED_TABLES = []
+GLOBAL_PDF_ASSETS = []
 import io
 import requests
 import cloudscraper
@@ -35,7 +37,33 @@ def _get_default_es_url():
     return raw.strip().rstrip("/")
 
 ELASTICSEARCH_URL = _get_default_es_url()
+HOST = os.environ.get("HOST", "").strip().rstrip("/")
 MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "localhost")
+if not HOST and MCP_DOMAIN and MCP_DOMAIN != "localhost":
+    HOST = f"https://{MCP_DOMAIN}"
+elif not HOST:
+    HOST = f"http://{MCP_DOMAIN}"
+
+def get_base_host():
+    """Get canonical base host URL (without trailing slash)."""
+    h = os.environ.get("HOST", "").strip().rstrip("/")
+    if h:
+        return h
+    dom = os.environ.get("MCP_DOMAIN", "localhost").strip()
+    if dom and dom != "localhost":
+        return f"https://{dom}"
+    return f"http://{dom}"
+
+def get_mcp_domain():
+    """Get host domain name without scheme."""
+    dom = os.environ.get("MCP_DOMAIN", "").strip()
+    if dom:
+        return dom
+    h = os.environ.get("HOST", "").strip().rstrip("/")
+    if h:
+        return h.replace("http://", "").replace("https://", "").split("/")[0]
+    return "localhost"
+
 OLLAMA_DEFAULT_MODEL = os.environ.get("OLLAMA_DEFAULT_MODEL", os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e2b"))
 MODEL_NAME = os.environ.get("OLLAMA_DEFAULT_MODEL") or os.environ.get("MODEL_NAME") or os.environ.get("MODEL") or os.environ.get("OLLAMA_DEFAULT_MODEL", "gemma4:e2b")
 
@@ -335,80 +363,118 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                 checksum = hashlib.sha256(pdf_bytes).hexdigest()
                 size = len(pdf_bytes)
                 
-                print("Detected PDF document. Extracting text with PyMuPDF...")
+                print("Detected PDF document. Extracting pages, images, and running OCR pipeline...")
                 doc = fitz.open(stream=pdf_bytes, filetype="pdf")
                 text = ""
-                for page in doc:
-                    extracted = page.get_text()
-                    if extracted:
-                        text += extracted + "\n\n"
+                global GLOBAL_PDF_ASSETS
+                GLOBAL_PDF_ASSETS = []
+                
+                # Check if Tesseract tessdata is configured or use standard path
+                tess_prefix = os.environ.get("TESSDATA_PREFIX", "/usr/share/tesseract-ocr/5/tessdata")
+                if not os.path.exists(tess_prefix) and os.path.exists("/usr/share/tessdata/5/tessdata"):
+                    tess_prefix = "/usr/share/tessdata/5/tessdata"
+                
+                for page_idx, page in enumerate(doc, start=1):
+                    native_text = (page.get_text() or "").strip()
                     
-                if use_computer_vision:
-                    print("Running Computer Vision extraction on PDF with Palefire...")
-                    cv_done = False
-                    palefire_url = os.environ.get("PALEFIRE_API_URL", "http://10.147.18.24:8000/parse-url")
+                    # 1. Render page to high-res JPEG image
+                    page_img_bytes = None
                     try:
-                        print(f"Calling Palefire API service at {palefire_url}...")
-                        vision_model = os.environ.get("VISION_MODEL", "gemma4:31b-cloud")
-                        resp = requests.post(
-                            palefire_url,
-                            json={
-                                "url": url,
-                                "vision_extract": True,
-                                "vision_model": vision_model
-                            },
-                            timeout=600
-                        )
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            episodes = data.get("episodes", [])
-                            cv_text_blocks = []
-                            for ep in episodes:
-                                if isinstance(ep, dict):
-                                    cnt = ep.get("content", {})
-                                    analysis = cnt.get("analysis", "") if isinstance(cnt, dict) else str(cnt)
-                                    src = cnt.get("source_file", "") if isinstance(cnt, dict) else ""
-                                    if analysis:
-                                        cv_text_blocks.append(f"### Visual Analysis ({src})\n{analysis}")
-                            if cv_text_blocks:
-                                text += "\n\n## Computer Vision Extracted Insights & Maps\n\n" + "\n\n".join(cv_text_blocks) + "\n"
-                                print(f"Successfully added {len(cv_text_blocks)} visual analysis blocks from Palefire API.")
-                                cv_done = True
-                            elif data.get("text"):
-                                # If palefire returned full text with CV integrated
-                                if "## Computer Vision" in data.get("text", ""):
-                                    text = data["text"]
-                                    cv_done = True
-                        else:
-                            print(f"Palefire API returned status {resp.status_code}: {resp.text[:200]}")
-                    except Exception as e_api:
-                        print(f"Palefire API call failed: {e_api}")
+                        pix = page.get_pixmap(dpi=150)
+                        page_img_bytes = pix.tobytes("jpeg")
+                        GLOBAL_PDF_ASSETS.append({
+                            "type": "page",
+                            "page": page_idx,
+                            "bytes": page_img_bytes,
+                            "filename_suffix": f"_page_{page_idx:02d}.jpg",
+                            "mimetype": "image/jpeg",
+                            "description": f"Rendered Image of Page {page_idx}"
+                        })
+                    except Exception as e_pix:
+                        print(f"Warning: Failed to render page {page_idx} to image: {e_pix}")
+                        
+                    # 2. Extract embedded images (>= 200x200) from page
+                    try:
+                        page_imgs = page.get_images(full=True)
+                        extracted_embedded_count = 0
+                        for img_idx, img_info in enumerate(page_imgs, start=1):
+                            xref = img_info[0]
+                            base_img = doc.extract_image(xref)
+                            w = base_img.get("width", 0)
+                            h = base_img.get("height", 0)
+                            ext = base_img.get("ext", "png").lower()
+                            if ext == "jpg": ext = "jpeg"
+                            # Filter out tiny icon / banner artifacts
+                            if w >= 200 and h >= 200:
+                                extracted_embedded_count += 1
+                                GLOBAL_PDF_ASSETS.append({
+                                    "type": "image",
+                                    "page": page_idx,
+                                    "index": img_idx,
+                                    "bytes": base_img.get("image"),
+                                    "filename_suffix": f"_page_{page_idx:02d}_img_{img_idx:02d}.{ext}",
+                                    "mimetype": f"image/{ext}",
+                                    "description": f"Extracted Image from Page {page_idx} ({w}x{h})"
+                                })
+                    except Exception as e_emb:
+                        print(f"Warning: Failed to extract embedded images on page {page_idx}: {e_emb}")
 
-                    if not cv_done:
-                        print("Fallback: Attempting local Palefire CV script execution...")
+                    # 3. Run OCR on page
+                    ocr_text = ""
+                    try:
+                        tp = page.get_textpage_ocr(language="spa", dpi=150, tessdata=tess_prefix if os.path.exists(tess_prefix) else None)
+                        ocr_text = (tp.extractText() or "").strip()
+                    except Exception as e_ocr:
                         try:
-                            import tempfile, subprocess
-                            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
-                                tmp_pdf.write(pdf_bytes)
-                                tmp_pdf_path = tmp_pdf.name
-                            
-                            out_ep_file = tmp_pdf_path + "_episodes.json"
-                            palefire_cv_script = os.path.abspath(os.path.join(os.path.dirname(__file__), "../palefire/extract_computer_vision.py"))
-                            if not os.path.exists(palefire_cv_script):
-                                palefire_cv_script = "palefire/extract_computer_vision.py"
-                                
-                            cv_cmd = [
-                                "python3", palefire_cv_script,
-                                "--pdf", tmp_pdf_path,
-                                "--vision-model", os.environ.get("VISION_MODEL", "gemma4:31b-cloud"),
-                                "--output", out_ep_file
-                            ]
-                            print(f"Executing: {' '.join(cv_cmd)}")
-                            subprocess.run(cv_cmd, check=True, timeout=600)
-                            
-                            if os.path.exists(out_ep_file):
-                                with open(out_ep_file, 'r', encoding='utf-8') as f_ep:
-                                    episodes = json.load(f_ep)
+                            # Fallback without explicit tessdata
+                            tp = page.get_textpage_ocr(language="spa", dpi=150)
+                            ocr_text = (tp.extractText() or "").strip()
+                        except Exception as e_ocr2:
+                            print(f"Warning: OCR extraction failed on page {page_idx}: {e_ocr2}")
+
+                    text += f"### Page {page_idx}\n\n"
+                    if native_text:
+                        text += f"**Native Text:**\n{native_text}\n\n"
+                    if ocr_text and ocr_text != native_text:
+                        text += f"**OCR Text:**\n{ocr_text}\n\n"
+                    if not native_text and not ocr_text:
+                        text += "_[No text detected on page]_\n\n"
+                
+                print(f"PDF processed: {len(doc)} pages, {len(GLOBAL_PDF_ASSETS)} page renders & extracted images, text length={len(text)}")
+                    
+                try:
+                    import sys as _sys
+                    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                    import datamaps_runner
+                except Exception:
+                    datamaps_runner = None
+
+                use_datamaps_cv = bool(datamaps_runner and datamaps_runner.url_matches(url))
+                if use_datamaps_cv:
+                    print("URL matches DATAMAPS_URL_PATTERNS, running datamaps CV pipeline...")
+                    try:
+                        dm_result = datamaps_runner.run(url)
+                    except Exception as e_dm:
+                        print(f"Warning: datamaps pipeline failed: {e_dm}")
+                elif use_computer_vision:
+                        print("Running Computer Vision extraction on PDF with Palefire...")
+                        cv_done = False
+                        palefire_url = os.environ.get("PALEFIRE_API_URL", "http://10.147.18.24:8000/parse-url")
+                        try:
+                            print(f"Calling Palefire API service at {palefire_url}...")
+                            vision_model = os.environ.get("VISION_MODEL", "gemma4:31b-cloud")
+                            resp = requests.post(
+                                palefire_url,
+                                json={
+                                    "url": url,
+                                    "vision_extract": True,
+                                    "vision_model": vision_model
+                                },
+                                timeout=600
+                            )
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                episodes = data.get("episodes", [])
                                 cv_text_blocks = []
                                 for ep in episodes:
                                     if isinstance(ep, dict):
@@ -419,16 +485,63 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                                             cv_text_blocks.append(f"### Visual Analysis ({src})\n{analysis}")
                                 if cv_text_blocks:
                                     text += "\n\n## Computer Vision Extracted Insights & Maps\n\n" + "\n\n".join(cv_text_blocks) + "\n"
+                                    print(f"Successfully added {len(cv_text_blocks)} visual analysis blocks from Palefire API.")
+                                    cv_done = True
+                                elif data.get("text"):
+                                    # If palefire returned full text with CV integrated
+                                    if "## Computer Vision" in data.get("text", ""):
+                                        text = data["text"]
+                                        cv_done = True
+                            else:
+                                print(f"Palefire API returned status {resp.status_code}: {resp.text[:200]}")
+                        except Exception as e_api:
+                            print(f"Palefire API call failed: {e_api}")
+
+                        if not cv_done:
+                            print("Fallback: Attempting local Palefire CV script execution...")
+                            try:
+                                import tempfile, subprocess
+                                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+                                    tmp_pdf.write(pdf_bytes)
+                                    tmp_pdf_path = tmp_pdf.name
+                                
+                                out_ep_file = tmp_pdf_path + "_episodes.json"
+                                palefire_cv_script = os.path.abspath(os.path.join(os.path.dirname(__file__), "../palefire/extract_computer_vision.py"))
+                                if not os.path.exists(palefire_cv_script):
+                                    palefire_cv_script = "palefire/extract_computer_vision.py"
+                                    
+                                cv_cmd = [
+                                    "python3", palefire_cv_script,
+                                    "--pdf", tmp_pdf_path,
+                                    "--vision-model", os.environ.get("VISION_MODEL", "gemma4:31b-cloud"),
+                                    "--output", out_ep_file
+                                ]
+                                print(f"Executing: {' '.join(cv_cmd)}")
+                                subprocess.run(cv_cmd, check=True, timeout=600)
+                                
+                                if os.path.exists(out_ep_file):
+                                    with open(out_ep_file, 'r', encoding='utf-8') as f_ep:
+                                        episodes = json.load(f_ep)
+                                    cv_text_blocks = []
+                                    for ep in episodes:
+                                        if isinstance(ep, dict):
+                                            cnt = ep.get("content", {})
+                                            analysis = cnt.get("analysis", "") if isinstance(cnt, dict) else str(cnt)
+                                            src = cnt.get("source_file", "") if isinstance(cnt, dict) else ""
+                                            if analysis:
+                                                cv_text_blocks.append(f"### Visual Analysis ({src})\n{analysis}")
+                                    if cv_text_blocks:
+                                        text += "\n\n## Computer Vision Extracted Insights & Maps\n\n" + "\n\n".join(cv_text_blocks) + "\n"
+                                    try:
+                                        os.unlink(out_ep_file)
+                                    except Exception:
+                                        pass
                                 try:
-                                    os.unlink(out_ep_file)
+                                    os.unlink(tmp_pdf_path)
                                 except Exception:
                                     pass
-                            try:
-                                os.unlink(tmp_pdf_path)
-                            except Exception:
-                                pass
-                        except Exception as e_cv:
-                            print(f"Warning: Local computer vision extraction failed: {e_cv}")
+                            except Exception as e_cv:
+                                print(f"Warning: Local computer vision extraction failed: {e_cv}")
                     
                 meta = {
                     "name": url.split('/')[-1] or "PDF Document",
@@ -450,6 +563,135 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                 return text.strip(), meta
             except Exception as e:
                 print(f"Failed to parse PDF: {e}")
+
+        # Check for image formats (JPG, PNG, WEBP, TIFF, BMP)
+        IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.tiff', '.bmp')
+        is_image = any(url.lower().endswith(ie) for ie in IMAGE_EXTS) or content_type.startswith('image/') or content_bytes.startswith(b'\xff\xd8') or content_bytes.startswith(b'\x89PNG\r\n\x1a\n')
+
+        if is_image:
+            try:
+                import hashlib
+                from datetime import datetime, timezone
+
+                checksum = hashlib.sha256(content_bytes).hexdigest()
+                size = len(content_bytes)
+
+                print("Detected image file. Performing Tesseract OCR via PaleFire ImageParser...")
+                ocr_text = ""
+                img_dims = ""
+
+                # First call PaleFire parse endpoint (uses PaleFire's ImageParser with Tesseract)
+                try:
+                    import requests
+                    filename = url.split('/')[-1] if '/' in url else "image.jpg"
+                    data_payload = {}
+                    if 'args' in globals() and getattr(args, 'engine', None):
+                        data_payload['engine'] = args.engine
+                    if 'args' in globals() and getattr(args, 'ollama_visual_model', None):
+                        data_payload['ollama_visual_model'] = args.ollama_visual_model
+                    elif os.environ.get("OLLAMA_VISUAL_MODEL"):
+                        data_payload['ollama_visual_model'] = os.environ.get("OLLAMA_VISUAL_MODEL")
+                    resp = requests.post(
+                        "http://palefire-api:8000/parse",
+                        files={"file": (filename, content_bytes, content_type or "image/jpeg")},
+                        data=data_payload,
+                        timeout=300
+                    )
+                    if resp.status_code == 200:
+                        parsed_json = resp.json()
+                        if parsed_json.get("success"):
+                            ocr_text = parsed_json.get("text", "").strip()
+                            meta_pf = parsed_json.get("metadata", {})
+                            w = meta_pf.get("width")
+                            h = meta_pf.get("height")
+                            if w and h:
+                                img_dims = f"{w}x{h}"
+                            # Save extracted tables to CSV/XLSX if available
+                            tbls = parsed_json.get("tables", [])
+                            if tbls and isinstance(tbls, list):
+                                try:
+                                    import pandas as pd
+                                    import io
+                                    for t_idx, tbl in enumerate(tbls):
+                                        t_headers = tbl.get("headers")
+                                        t_rows = tbl.get("rows")
+                                        t_name = tbl.get("name") or f"table_{t_idx}"
+                                        t_month = tbl.get("month_name") or ""
+                                        if t_headers and t_rows:
+                                            df_tbl = pd.DataFrame(t_rows, columns=t_headers)
+                                            # Put in GLOBAL_PARSED_TABLES for upload after safe_name is computed
+                                            GLOBAL_PARSED_TABLES.append({
+                                                'df': df_tbl,
+                                                'name': t_name,
+                                                'month_name': t_month,
+                                                'index': t_idx
+                                            })
+                                except Exception as e_tbl:
+                                    print(f"Warning: Failed to convert parsed table to DataFrame: {e_tbl}")
+                except Exception as e_pf:
+                    print(f"PaleFire parser service error: {e_pf}")
+
+                # Local fallback via tesseract CLI / pytesseract if direct
+                if not ocr_text:
+                    for psm in [6, 3, 11]:
+                        try:
+                            import subprocess
+                            res = subprocess.run(
+                                ["tesseract", "stdin", "stdout", "-l", "spa+eng", "--psm", str(psm)],
+                                input=content_bytes,
+                                capture_output=True,
+                                timeout=30
+                            )
+                            if res.returncode == 0 and res.stdout.strip():
+                                ocr_text = res.stdout.decode("utf-8", errors="replace").strip()
+                                break
+                        except Exception:
+                            pass
+
+                # Image dimension inspection via fitz/pymupdf if not already detected
+                if not img_dims:
+                    try:
+                        import fitz
+                        doc_img = fitz.open(stream=content_bytes, filetype=url.split('.')[-1].lower() if '.' in url else "jpg")
+                        if len(doc_img) > 0:
+                            p = doc_img[0]
+                            img_dims = f"{int(p.rect.width)}x{int(p.rect.height)}"
+                    except Exception:
+                        pass
+
+                if ocr_text.startswith("# Daily Rainfall Measurements") or ocr_text.startswith("# Map Analysis:"):
+                    text = ocr_text
+                else:
+                    text = f"# Image Document: {url.split('/')[-1]}\n\n"
+                    if img_dims:
+                        text += f"**Dimensions:** {img_dims} pixels\n"
+                    text += f"**OCR Engine:** Tesseract OCR (PaleFire ImageParser)\n\n"
+                    text += "## Extracted Text Content\n\n"
+                    text += ocr_text if ocr_text else "_[No text detected by OCR]_"
+
+                fmt = "image/jpeg" if (url.lower().endswith(('.jpg', '.jpeg')) or content_bytes.startswith(b'\xff\xd8')) else (content_type or "image/png")
+                meta = {
+                    "name": url.split('/')[-1] or "Image File",
+                    "contentUrl": url,
+                    "encodingFormat": fmt,
+                    "contentSize": f"{size} B",
+                    "sha256": checksum,
+                    "retrievalTimestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                if 'meta_pf' in locals() and isinstance(meta_pf, dict):
+                    if meta_pf.get('initial_croissant'):
+                        meta['initial_croissant'] = meta_pf.get('initial_croissant')
+                    if meta_pf.get('visual_category'):
+                        meta['visual_category'] = meta_pf.get('visual_category')
+                    if meta_pf.get('temporal_resolution'):
+                        meta['temporal_resolution'] = meta_pf.get('temporal_resolution')
+                    if meta_pf.get('temporal_period'):
+                        meta['temporal_period'] = meta_pf.get('temporal_period')
+                if traverse:
+                    return text.strip(), meta, []
+                return text.strip(), meta
+            except Exception as e_img:
+                print(f"Failed to process image with OCR: {e_img}")
 
         if is_local:
             try:
@@ -576,7 +818,125 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                                 markdown_content += f"\n\n--- Content from {sub_url} ---\n\n{sub_md}"
                     except Exception as e:
                         print(f"  -> Failed to fetch subpage {sub_url}: {e}")
-                    
+
+            if use_computer_vision and content:
+                try:
+                    import base64 as _b64
+                    import requests as _requests
+                    img_urls = []
+                    seen_imgs = set()
+                    for img in content.find_all('img'):
+                        src = img.get('data-src') or img.get('data-lazy-src') or img.get('src')
+                        if not src or src.startswith('data:'):
+                            continue
+                        full_img_url = urllib.parse.urljoin(url, src)
+                        low = full_img_url.lower()
+                        if any(low.endswith(ext) for ext in ('.svg', '.ico', '.gif')) or any(k in low for k in ('logo', 'icon', 'avatar', 'spinner', 'pixel')):
+                            continue
+                        if full_img_url not in seen_imgs:
+                            seen_imgs.add(full_img_url)
+                            img_urls.append(full_img_url)
+                    if img_urls:
+                        ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.82:11434").rstrip("/")
+                        vision_model = os.environ.get("VISION_MODEL", "gemma4:e4b")
+                        ocr_blocks = []
+                        for idx_cv, img_url in enumerate(img_urls[:5], 1):
+                            try:
+                                img_resp = _requests.get(img_url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+                                if img_resp.status_code != 200 or len(img_resp.content) < 5000:
+                                    continue
+                                # Deposit image to MinIO vault BEFORE OCR / datamaps analysis
+                                try:
+                                    import hashlib as _hl
+                                    from minio import Minio as _Minio
+                                    _murl = os.environ.get("MINIO_URL", "http://minio:9000")
+                                    if (bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")) and any(h in _murl for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+                                        _murl = "http://minio:9000"
+                                    _mc = _Minio(_murl.replace("http://", "").replace("https://", "").rstrip("/"),
+                                                 access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                                                 secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                                                 secure=_murl.startswith("https"))
+                                    _ext = os.path.splitext(img_url.split("?")[0])[1].lower() or ".jpg"
+                                    if _ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                                        _ext = ".jpg"
+                                    _ctype = img_resp.headers.get("Content-Type", "image/jpeg")
+                                    _img_key = f"{_hl.md5(img_resp.content).hexdigest()[:16]}_image_{idx_cv}{_ext}"
+                                    _mc.put_object("vault", _img_key, io.BytesIO(img_resp.content), len(img_resp.content), content_type=_ctype)
+                                    _g_up = globals()
+                                    if 'GLOBAL_HTML_CV_UPLOADED_IMAGES' not in _g_up or _g_up['GLOBAL_HTML_CV_UPLOADED_IMAGES'] is None:
+                                        _g_up['GLOBAL_HTML_CV_UPLOADED_IMAGES'] = []
+                                    _g_up['GLOBAL_HTML_CV_UPLOADED_IMAGES'].append((_img_key, _ctype, img_url))
+                                    print(f"Deposited HTML CV image {_img_key} to vault before OCR analysis.")
+                                except Exception as e_dep:
+                                    print(f"  -> Pre-OCR vault deposit skipped for {img_url}: {e_dep}")
+
+                                # Try PaleFire datamaps polygon-matching pipeline first for map images
+                                try:
+                                    dm_img_resp = _requests.post(
+                                        "http://palefire-api:8000/datamaps/image",
+                                        json={"url": img_url, "page_url": url},
+                                        timeout=600,
+                                    )
+                                    if dm_img_resp.status_code == 200 and dm_img_resp.json().get("status") == "success":
+                                        csv_txt = dm_img_resp.json().get("csv_text", "")
+                                        if csv_txt.strip():
+                                            import io as _io, pandas as _pd
+                                            df_dm = _pd.read_csv(_io.StringIO(csv_txt))
+                                            _g = globals()
+                                            if 'GLOBAL_PARSED_TABLES' not in _g or _g['GLOBAL_PARSED_TABLES'] is None:
+                                                _g['GLOBAL_PARSED_TABLES'] = []
+                                            _g['GLOBAL_PARSED_TABLES'].append({'df': df_dm, 'month_name': f"Datamap_{len(_g['GLOBAL_PARSED_TABLES'])+1}"})
+                                            print(f"PaleFire datamaps extracted {len(df_dm)} polygon rows from {img_url}")
+                                except Exception as e_dm_img:
+                                    print(f"  -> Datamaps image call skipped/failed for {img_url}: {e_dm_img}")
+
+                                img_b64 = _b64.b64encode(img_resp.content).decode("utf-8")
+                                print(f"Running Ollama Vision OCR ({vision_model}) on image: {img_url}")
+                                ov_resp = _requests.post(
+                                    f"{ollama_host}/api/generate",
+                                    json={
+                                        "model": vision_model,
+                                        "prompt": "Perform OCR and extract all visible text, numbers, labels, legends, regions, and tabular data from this image. Format any structured data as clean Markdown tables.",
+                                        "images": [img_b64],
+                                        "stream": False,
+                                    },
+                                    timeout=120,
+                                )
+                                if ov_resp.status_code == 200:
+                                    ocr_text = ov_resp.json().get("response", "").strip()
+                                    if ocr_text:
+                                        ocr_blocks.append(f"### Image: {img_url}\n\n{ocr_text}")
+                                else:
+                                    print(f"  -> Ollama Vision OCR returned HTTP {ov_resp.status_code}: {ov_resp.text[:200]}")
+                            except Exception as e_img:
+                                print(f"  -> Vision OCR failed for {img_url}: {e_img}")
+                        if ocr_blocks:
+                            markdown_content += "\n\n## Computer Vision Extracted Image Data\n\n" + "\n\n".join(ocr_blocks)
+                            try:
+                                import pandas as _pd
+                                _g = globals()
+                                if 'GLOBAL_PARSED_TABLES' not in _g or _g['GLOBAL_PARSED_TABLES'] is None:
+                                    _g['GLOBAL_PARSED_TABLES'] = []
+                                for block in ocr_blocks:
+                                    lines = [ln.strip() for ln in block.splitlines() if ln.strip().startswith('|') and ln.strip().endswith('|')]
+                                    if len(lines) >= 3:
+                                        # Split into separate tables if there are multiple header+separator pairs
+                                        cur_rows = []
+                                        for ln in lines:
+                                            cells = [c.strip() for c in ln.strip('|').split('|')]
+                                            if all(set(c) <= set('-: ') for c in cells if c):
+                                                continue
+                                            cur_rows.append(cells)
+                                        if len(cur_rows) >= 2:
+                                            hdr = cur_rows[0]
+                                            body = [r[:len(hdr)] + [''] * max(0, len(hdr) - len(r)) for r in cur_rows[1:]]
+                                            df_ocr = _pd.DataFrame(body, columns=hdr)
+                                            _g['GLOBAL_PARSED_TABLES'].append({'df': df_ocr, 'month_name': f"Vision_Table_{len(_g['GLOBAL_PARSED_TABLES'])+1}"})
+                            except Exception as e_tbl:
+                                print(f"Warning: Failed to convert Vision OCR Markdown tables to DataFrame: {e_tbl}")
+                except Exception as e_cv:
+                    print(f"Warning: HTML Computer Vision image extraction failed: {e_cv}")
+
             return markdown_content, {"contentUrl": url}, sibling_pages, page_meta
         else:
             print("No main or body content could be extracted.")
@@ -1036,8 +1396,7 @@ def fix_croissant_dataverse_distributions(data):
             if orig_fn: api_by_name[orig_fn] = df
             if lbl: api_by_name[lbl] = df
 
-        MCP_DOMAIN = os.environ.get("MCP_DOMAIN", "localhost")
-        base_host = os.environ.get("HOST", f"https://{MCP_DOMAIN}")
+        base_host = get_base_host()
         ds_for_export = data.get('url') or data.get('identifier')
         for d in dists:
             if not isinstance(d, dict): continue
@@ -1309,7 +1668,32 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
         except Exception:
             pass
 
-    header = f"# Citation: {citation_text}\n\n* **Croissant Metadata**: [{croissant_filename}](./{croissant_filename})\n\n"
+    base_stem = os.path.basename(safe_name)
+    extra_links = []
+    try:
+        minio_url_chk = os.environ.get("MINIO_URL", "http://minio:9000")
+        _in_d = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+        if _in_d and any(h in minio_url_chk for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+            minio_url_chk = "http://minio:9000"
+        from minio import Minio
+        mc_c = Minio(minio_url_chk.replace("http://", "").replace("https://", "").rstrip("/"),
+                     access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                     secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                     secure=minio_url_chk.startswith("https"))
+        for ext, label in [(".xlsx", "Spreadsheet (Excel)"), (".csv", "CSV Data"), (".jpg", "Original Image"), (".jpeg", "Original Image"), (".png", "Original Image")]:
+            fn = f"{base_stem}{ext}"
+            try:
+                mc_c.stat_object("vault", fn)
+                extra_links.append(f"* **{label}**: [{fn}](./{fn})")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    header = f"# Citation: {citation_text}\n\n* **Croissant Metadata**: [{croissant_filename}](./{croissant_filename})\n"
+    if extra_links:
+        header += "\n".join(extra_links) + "\n"
+    header += "\n"
     
     # Don't duplicate if already present
     if not markdown_data.startswith(f"# Citation: {citation_text}"):
@@ -1341,6 +1725,173 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
             if not client.bucket_exists("vault"):
                 client.make_bucket("vault")
             
+            # If any structured tables were parsed by PaleFire API, upload CSV and XLSX to MinIO vault
+            # Supports single month or multiple months (e.g. July & August each in its own file)
+            uploaded_table_stems = []
+            if 'GLOBAL_PARSED_TABLES' in globals() and GLOBAL_PARSED_TABLES:
+                try:
+                    import pandas as pd
+                    base_s = os.path.basename(safe_name)
+                    num_tables = len(GLOBAL_PARSED_TABLES)
+
+                    for t_idx, item in enumerate(GLOBAL_PARSED_TABLES):
+                        if isinstance(item, dict):
+                            df_tbl = item['df']
+                            m_lbl = item.get('month_name', '').lower()
+                            t_stem = f"{base_s}_{m_lbl}" if (num_tables > 1 and m_lbl) else (f"{base_s}_{t_idx+1}" if num_tables > 1 else base_s)
+                            sheet_title = item.get('month_name') or 'Rainfall Measurements'
+                        else:
+                            df_tbl = item
+                            t_stem = f"{base_s}_{t_idx+1}" if num_tables > 1 else base_s
+                            sheet_title = 'Rainfall Measurements'
+
+                        uploaded_table_stems.append((t_stem, sheet_title))
+
+                        # Upload CSV
+                        csv_b = df_tbl.to_csv(index=False).encode('utf-8')
+                        client.put_object("vault", f"{t_stem}.csv", io.BytesIO(csv_b), len(csv_b), content_type="text/csv")
+                        
+                        # Upload XLSX
+                        xl_buf = io.BytesIO()
+                        with pd.ExcelWriter(xl_buf, engine='openpyxl') as wr:
+                            df_tbl.to_excel(wr, sheet_name=sheet_title[:31], index=False)
+                        xl_b = xl_buf.getvalue()
+                        client.put_object("vault", f"{t_stem}.xlsx", io.BytesIO(xl_b), len(xl_b), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        print(f"Uploaded parsed table {t_stem}.csv and {t_stem}.xlsx to vault ({sheet_title}).")
+
+                    # Also keep primary base_s.csv and base_s.xlsx pointing to the latest/first table for backward compatibility
+                    if num_tables > 1:
+                        primary_df = GLOBAL_PARSED_TABLES[-1]['df'] if isinstance(GLOBAL_PARSED_TABLES[-1], dict) else GLOBAL_PARSED_TABLES[-1]
+                        csv_b_main = primary_df.to_csv(index=False).encode('utf-8')
+                        client.put_object("vault", f"{base_s}.csv", io.BytesIO(csv_b_main), len(csv_b_main), content_type="text/csv")
+                        xl_buf_main = io.BytesIO()
+                        with pd.ExcelWriter(xl_buf_main, engine='openpyxl') as wr:
+                            primary_df.to_excel(wr, sheet_name='Rainfall Measurements', index=False)
+                        xl_b_main = xl_buf_main.getvalue()
+                        client.put_object("vault", f"{base_s}.xlsx", io.BytesIO(xl_b_main), len(xl_b_main), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                except Exception as e_up_tbl:
+                    print(f"Warning: Failed to upload parsed tables: {e_up_tbl}")
+
+            if 'GLOBAL_HTML_CV_IMAGES' in globals() and globals()['GLOBAL_HTML_CV_IMAGES']:
+                try:
+                    base_s = os.path.basename(safe_name)
+                    uploaded_cv_imgs = []
+                    for idx, (orig_img_url, img_bytes, ctype) in enumerate(globals()['GLOBAL_HTML_CV_IMAGES'], 1):
+                        ext = os.path.splitext(orig_img_url.split("?")[0])[1].lower() or ".jpg"
+                        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                            ext = ".jpg"
+                        img_fname = f"{base_s}_image_{idx}{ext}"
+                        client.put_object("vault", img_fname, io.BytesIO(img_bytes), len(img_bytes), content_type=ctype)
+                        uploaded_cv_imgs.append((img_fname, ctype, orig_img_url))
+                        print(f"Uploaded HTML CV image {img_fname} to vault.")
+                    globals()['GLOBAL_HTML_CV_UPLOADED_IMAGES'] = uploaded_cv_imgs
+                except Exception as e_cv_up:
+                    print(f"Warning: Failed to upload HTML CV images: {e_cv_up}")
+                    print(f"Warning: Failed to upload parsed tables to vault: {e_up_tbl}")
+
+            # If PDF assets (page renders and embedded images) were generated, upload them to MinIO vault
+            if 'GLOBAL_PDF_ASSETS' in globals() and GLOBAL_PDF_ASSETS:
+                try:
+                    base_s = os.path.basename(safe_name)
+                    print(f"Uploading {len(GLOBAL_PDF_ASSETS)} PDF page renders & images to MinIO vault...")
+                    for asset in GLOBAL_PDF_ASSETS:
+                        asset_fn = f"{base_s}{asset['filename_suffix']}"
+                        asset_bytes = asset['bytes']
+                        if asset_bytes:
+                            client.put_object(
+                                "vault",
+                                asset_fn,
+                                io.BytesIO(asset_bytes),
+                                len(asset_bytes),
+                                content_type=asset.get("mimetype", "image/jpeg")
+                            )
+                    print("Finished uploading PDF assets to MinIO vault.")
+                except Exception as e_pdf_assets:
+                    print(f"Warning: Failed to upload PDF assets to vault: {e_pdf_assets}")
+
+            base_vault_url = f"{get_base_host()}/vault"
+            # If the original input is a local file (e.g. image, csv, pdf), upload it first so it is present in vault
+            if os.path.isfile(url):
+                orig_ext = os.path.splitext(url)[1]
+                orig_vault_name = f"{os.path.basename(safe_name)}{orig_ext}"
+                try:
+                    with open(url, "rb") as f_orig:
+                        orig_bytes = f_orig.read()
+                    import mimetypes
+                    guessed_mime, _ = mimetypes.guess_type(url)
+                    orig_mime = guessed_mime or "application/octet-stream"
+                    client.put_object(
+                        "vault",
+                        orig_vault_name,
+                        data=io.BytesIO(orig_bytes),
+                        length=len(orig_bytes),
+                        content_type=orig_mime
+                    )
+                    print(f"Original source file successfully uploaded to vault: {base_vault_url}/{orig_vault_name}")
+                except Exception as e_orig_up:
+                    print(f"Warning: Failed to upload original file to MinIO vault: {e_orig_up}")
+
+            # Re-generate markdown header with spreadsheet links now that files are in vault
+            base_stem = os.path.basename(safe_name)
+            extra_links = []
+            # Check all uploaded table files
+            for t_stem, s_title in uploaded_table_stems:
+                lbl_suffix = f" ({s_title})" if s_title and s_title != 'Rainfall Measurements' else ""
+                fn_xl = f"{t_stem}.xlsx"
+                fn_csv = f"{t_stem}.csv"
+                try:
+                    client.stat_object("vault", fn_xl)
+                    extra_links.append(f"* **Spreadsheet (Excel){lbl_suffix}**: [{fn_xl}](./{fn_xl})")
+                except Exception:
+                    pass
+                try:
+                    client.stat_object("vault", fn_csv)
+                    extra_links.append(f"* **CSV Data{lbl_suffix}**: [{fn_csv}](./{fn_csv})")
+                except Exception:
+                    pass
+
+            for ext, label in [(".jpg", "Original Image"), (".jpeg", "Original Image"), (".png", "Original Image")]:
+                fn = f"{base_stem}{ext}"
+                try:
+                    client.stat_object("vault", fn)
+                    extra_links.append(f"* **{label}**: [{fn}](./{fn})")
+                except Exception:
+                    pass
+
+            # Upload datamaps CSVs early if datamaps pipeline ran so header links are guaranteed to work
+            try:
+                import sys as _sys
+                _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                import datamaps_runner
+                dm_res_early = datamaps_runner.RESULTS.get(resolve_direct_url(url)) or datamaps_runner.RESULTS.get(url)
+                if dm_res_early:
+                    datamaps_runner.upload_and_distributions(dm_res_early, client, get_base_host(), doc_id=base_stem)
+                    fn_dm_csv = f"{base_stem}.csv"
+                    if not any(fn_dm_csv in l for l in extra_links):
+                        extra_links.append(f"* **Master CSV Data (Heatmap Report)**: [{fn_dm_csv}](./{fn_dm_csv})")
+                    maps_list = dm_res_early.get("maps", [])
+                    if maps_list:
+                        extra_links.append("\n## Extracted Map Datasets (Two Maps Per Page: Left & Right Panels)\n")
+                        extra_links.append("| Page | Panel | Map Variable / Title | CSV Dataset | JSON-LD Observations |")
+                        extra_links.append("|---|---|---|---|---|")
+                        for m_item in maps_list:
+                            p_num = m_item.get("page") or 0
+                            s_side = m_item.get("side") or "single"
+                            m_title = (m_item.get("title") or f"Page {p_num} {s_side}").replace("|", "/")
+                            c_fn = f"{base_stem}_page_{p_num:02d}_{s_side}.csv"
+                            j_fn = f"{base_stem}_page_{p_num:02d}_{s_side}.jsonld"
+                            extra_links.append(f"| Page {p_num:02d} | `{s_side}` | {m_title} | [{c_fn}](./{c_fn}) | [{j_fn}](./{j_fn}) |")
+            except Exception as e_dm_early:
+                print(f"Warning: Early datamaps upload failed: {e_dm_early}")
+
+            if extra_links:
+                clean_header = f"# Citation: {citation_text}\n\n* **Croissant Metadata**: [{croissant_filename}](./{croissant_filename})\n" + "\n".join(extra_links) + "\n\n"
+                # Strip old citation header if present
+                if markdown_data.startswith(f"# Citation: {citation_text}"):
+                    parts = markdown_data.split("\n\n", 2)
+                    body_start = parts[2] if len(parts) > 2 else markdown_data
+                    markdown_data = clean_header + body_start
+
             vault_filename = os.path.basename(md_filename)
             md_bytes = markdown_data.encode('utf-8')
             client.put_object(
@@ -1350,7 +1901,30 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                 length=len(md_bytes),
                 content_type="text/markdown"
             )
-            print(f"Extracted markdown successfully uploaded to vault: https://{MCP_DOMAIN}/vault/{vault_filename}")
+            # If PDF assets (page renders and embedded images) were generated, upload them to MinIO vault
+            if 'GLOBAL_PDF_ASSETS' in globals() and GLOBAL_PDF_ASSETS:
+                try:
+                    base_s = os.path.basename(safe_name)
+                    print(f"Uploading {len(GLOBAL_PDF_ASSETS)} PDF page renders & images to MinIO vault...")
+                    for asset in GLOBAL_PDF_ASSETS:
+                        asset_fn = f"{base_s}{asset['filename_suffix']}"
+                        asset_bytes = asset['bytes']
+                        if asset_bytes:
+                            client.put_object(
+                                "vault",
+                                asset_fn,
+                                io.BytesIO(asset_bytes),
+                                len(asset_bytes),
+                                content_type=asset.get("mimetype", "image/jpeg")
+                            )
+                    print("Finished uploading PDF assets to MinIO vault.")
+                except Exception as e_pdf_assets:
+                    print(f"Warning: Failed to upload PDF assets to vault: {e_pdf_assets}")
+
+            base_vault_url = f"{get_base_host()}/vault"
+            print(f"Extracted markdown successfully uploaded to vault: {base_vault_url}/{vault_filename}")
+
+# Original file upload moved before header generation
     except Exception as e:
         print(f"Warning: Failed to upload markdown to MinIO vault: {e}")
 
@@ -1381,7 +1955,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                     length=len(en_bytes),
                     content_type="text/markdown"
                 )
-                print(f"Translated markdown successfully uploaded to vault: https://{MCP_DOMAIN}/vault/{vault_en_filename}")
+                print(f"Translated markdown successfully uploaded to vault: {get_base_host()}/vault/{vault_en_filename}")
             except Exception as e:
                 print(f"Warning: Failed to upload translated markdown to MinIO vault: {e}")
 
@@ -1542,6 +2116,13 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
         prompt = f"Create Croissant JSON-LD metadata for a machine learning model or dataset. The source URL is {url}."
         if lang != 'en':
             prompt += f" The source documentation is in language code '{lang}'. Please do a precise ONE-to-ONE translation of the relevant metadata to English and output the Croissant JSON-LD entirely in English."
+        
+        # Integrate Computer Vision Croissant knowledge layer if available
+        if extracted_meta and extracted_meta.get("initial_croissant"):
+            import json as _json_layer
+            initial_cr = extracted_meta.get("initial_croissant")
+            prompt += f"\n\n[Computer Vision Knowledge Layer]: Prior analysis with multimodal visual model produced this initial Croissant metadata layer:\n{_json_layer.dumps(initial_cr, indent=2)}\nUse this knowledge layer along with OCR and text content below to produce an integrated, authoritative Croissant JSON-LD metadata.\n"
+
         prompt += f" Here is the documentation and description extracted from its official page:\n\n{llm_context_data}\n\n"
         prompt += "Extract relevant information such as the description, authors, license, keywords, tags, or any dataset dependencies into the Croissant metadata if available. Map keywords/tags to the standard schema:keywords property, and extract them EXACTLY as they appear in the text (do not change casing or invent new tags). Ensure 'keywords' is formatted as a JSON array of strings, not a single comma-separated string. IMPORTANT: For any fields or data that do not have a standard mapping in Croissant, include them in the JSON-LD under a custom field called 'unmappedFields' as a list of key-value pairs.\n"
         prompt += 'Example structure:\n{\n  "@context": {\n    "@vocab": "http://schema.org/",\n    "sc": "http://schema.org/",\n    "schema": "http://schema.org/",\n    "cr": "http://mlcommons.org/croissant/",\n    "dct": "http://purl.org/dc/terms/",\n    "conformsTo": "dct:conformsTo",\n    "distribution": {"@id": "cr:distribution"},\n    "bs4ExtractionPattern": {"@id": "sc:processingRequirement", "@type": "@json"},\n    "unf": "https://guides.dataverse.org/en/6.9/developers/unf/unf-v6.html",\n    "odrl": "http://www.w3.org/ns/odrl/2/",\n    "cdif": "https://cdif.org/1.1/",\n    "did": "https://www.w3.org/ns/did/v1",\n    "url": {"@type": "http://www.w3.org/2001/XMLSchema#string"}\n  },\n  "@type": "sc:SoftwareApplication",\n  "name": "...",\n  "description": "...",\n  "url": "...",\n  "license": "...",\n  "keywords": [],\n  "unmappedFields": [],\n  "contentUrl": "...",\n  "isBasedOn": [],\n  "isPartOf": [{"@type": "Collection", "name": "/expert/croissant"}],\n  "version": "1.0",\n  "creator": {"@type": "Person", "name": "...", "email": "..."}\n}\n\n'
@@ -1616,7 +2197,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                 print("✓ JSON is well-formed")
                 
                 # Inject link to the generated markdown file(s)
-                original_vault_url = f"https://{MCP_DOMAIN}/vault/{os.path.basename(original_md_filename)}"
+                original_vault_url = f"{get_base_host()}/vault/{os.path.basename(original_md_filename)}"
                 doc_links = [{
                     "@type": "CreativeWork",
                     "name": "Scraped Markdown Content",
@@ -1625,7 +2206,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                 }]
                 
                 if original_md_filename != md_filename:
-                    translated_vault_url = f"https://{MCP_DOMAIN}/vault/{os.path.basename(md_filename)}"
+                    translated_vault_url = f"{get_base_host()}/vault/{os.path.basename(md_filename)}"
                     doc_links.append({
                         "@type": "CreativeWork",
                         "name": "Translated Markdown Content (English)",
@@ -1664,7 +2245,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                         doc_links.append({
                             "@type": "CreativeWork",
                             "name": sib['title'],
-                            "contentUrl": f"https://{MCP_DOMAIN}/vault/{os.path.basename(sib_md_filename)}",
+                            "contentUrl": f"{get_base_host()}/vault/{os.path.basename(sib_md_filename)}",
                             "encodingFormat": "text/markdown"
                         })
                 
@@ -1849,6 +2430,195 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                     return
 
 
+        # Attach HTML CV images as distributions if uploaded
+        if 'GLOBAL_HTML_CV_UPLOADED_IMAGES' in globals() and globals()['GLOBAL_HTML_CV_UPLOADED_IMAGES']:
+            try:
+                _cv_dists = []
+                _bhost = get_base_host().rstrip("/")
+                for _fn, _ct, _orig in globals()['GLOBAL_HTML_CV_UPLOADED_IMAGES']:
+                    _cv_dists.append({
+                        "@type": "cr:FileObject",
+                        "@id": _fn,
+                        "name": _fn,
+                        "description": f"Extracted image from {_orig}",
+                        "contentUrl": f"{_bhost}/vault/{_fn}",
+                        "encodingFormat": _ct,
+                    })
+                if isinstance(output, dict):
+                    _cur_d = output.get("distribution", [])
+                    if not isinstance(_cur_d, list):
+                        _cur_d = [_cur_d] if _cur_d else []
+                    _cur_d.extend(_cv_dists)
+                    output["distribution"] = _cur_d
+            except Exception as e_cv_d:
+                print(f"Warning: Failed to attach HTML CV image distributions: {e_cv_d}")
+
+        # Attach datamaps outputs (CSV + JSON-LD) as distributions, uploaded to the vault
+        try:
+            import sys as _sys
+            _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import datamaps_runner
+            dm_result = datamaps_runner.RESULTS.get(resolve_direct_url(url)) or datamaps_runner.RESULTS.get(url)
+            if dm_result:
+                dm_client = None
+                try:
+                    from minio import Minio
+                    _murl = os.environ.get("MINIO_URL", "http://minio:9000")
+                    _in_d_dm = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+                    if _in_d_dm and any(h in _murl for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+                        _murl = "http://minio:9000"
+                    dm_client = Minio(_murl.replace("http://", "").replace("https://", "").rstrip("/"),
+                                      access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                                      secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                                      secure=_murl.startswith("https"))
+                except Exception as e_mc:
+                    print(f"Warning: MinIO unavailable for datamaps upload: {e_mc}")
+                dm_dists = datamaps_runner.upload_and_distributions(dm_result, dm_client, get_base_host(), doc_id=os.path.basename(safe_name))
+                output = datamaps_runner.inject_distributions(output, dm_dists)
+                print(f"Added {len(dm_dists)} datamaps distributions to Croissant.")
+        except ImportError:
+            pass
+        except Exception as e_dm:
+            print(f"Warning: failed to attach datamaps distributions: {e_dm}")
+
+        # If spreadsheet/csv files exist in MinIO vault (e.g. generated for rainfall observation sheets), attach them as distributions
+        try:
+            extra_dists = []
+            minio_url_check = os.environ.get("MINIO_URL", "http://minio:9000")
+            _in_dock = bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")
+            if _in_dock and any(h in minio_url_check for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+                minio_url_check = "http://minio:9000"
+            _ep = minio_url_check.replace("http://", "").replace("https://", "").rstrip("/")
+            from minio import Minio
+            mc_check = Minio(_ep, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                             secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                             secure=minio_url_check.startswith("https"))
+            base_safe = os.path.basename(safe_name)
+            # Find all uploaded files for this dataset in the vault (e.g. base_safe_july.xlsx, base_safe_august.csv, etc.)
+            check_targets = [
+                (f"{base_safe}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Spreadsheet of daily measurements"),
+                (f"{base_safe}.csv", "text/csv", "CSV dataset of daily measurements")
+            ]
+            if 'uploaded_table_stems' in locals() and uploaded_table_stems:
+                for t_st, s_tit in uploaded_table_stems:
+                    if t_st != base_safe:
+                        check_targets.append((f"{t_st}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", f"Spreadsheet of daily measurements ({s_tit})"))
+                        check_targets.append((f"{t_st}.csv", "text/csv", f"CSV dataset of daily measurements ({s_tit})"))
+
+            for obj_name, mime, desc in check_targets:
+                try:
+                    stat = mc_check.stat_object("vault", obj_name)
+                    import hashlib
+                    obj_bytes = mc_check.get_object("vault", obj_name).read()
+                    extra_dists.append({
+                        "@type": "cr:FileObject",
+                        "@id": obj_name,
+                        "name": obj_name,
+                        "description": desc,
+                        "contentUrl": f"{get_base_host()}/vault/{obj_name}",
+                        "encodingFormat": mime,
+                        "contentSize": f"{stat.size} B",
+                        "sha256": hashlib.sha256(obj_bytes).hexdigest()
+                    })
+                except Exception:
+                    pass
+            if extra_dists:
+                try:
+                    j_obj = json.loads(output)
+                    tgt = j_obj[0] if isinstance(j_obj, list) and j_obj else j_obj
+                    if isinstance(tgt, dict):
+                        existing_dist = tgt.get("distribution") or []
+                        if isinstance(existing_dist, dict):
+                            existing_dist = [existing_dist]
+                        for ed in extra_dists:
+                            if not any(d.get("@id") == ed["@id"] for d in existing_dist if isinstance(d, dict)):
+                                existing_dist.append(ed)
+                        tgt["distribution"] = existing_dist
+                        output = json.dumps(j_obj, indent=2, ensure_ascii=False)
+                        print(f"Added {len(extra_dists)} spreadsheet distributions to Croissant.")
+                except Exception as e_ed:
+                    print(f"Warning: Failed to inject extra spreadsheet distributions: {e_ed}")
+        except Exception as e_mc_chk:
+            pass
+
+        # Attach original file as distribution if local file was processed
+        if os.path.isfile(url):
+            try:
+                orig_ext = os.path.splitext(url)[1]
+                orig_vault_name = f"{os.path.basename(safe_name)}{orig_ext}"
+                orig_size = os.path.getsize(url)
+                import mimetypes, hashlib
+                guessed_mime, _ = mimetypes.guess_type(url)
+                orig_mime = guessed_mime or "application/octet-stream"
+                with open(url, "rb") as f_hash:
+                    orig_sha256 = hashlib.sha256(f_hash.read()).hexdigest()
+
+                orig_dist = [{
+                    "@type": "cr:FileObject",
+                    "@id": orig_vault_name,
+                    "name": os.path.basename(url),
+                    "description": f"Original source file ({os.path.basename(url)})",
+                    "contentUrl": f"{get_base_host()}/vault/{orig_vault_name}",
+                    "encodingFormat": orig_mime,
+                    "contentSize": f"{orig_size} B",
+                    "sha256": orig_sha256
+                }]
+                try:
+                    j_obj = json.loads(output)
+                    tgt = j_obj[0] if isinstance(j_obj, list) and j_obj else j_obj
+                    if isinstance(tgt, dict):
+                        existing_dist = tgt.get("distribution") or []
+                        if isinstance(existing_dist, dict):
+                            existing_dist = [existing_dist]
+                        # Don't duplicate if already present
+                        if not any(d.get("@id") == orig_vault_name or d.get("contentUrl") == f"{get_base_host()}/vault/{orig_vault_name}" for d in existing_dist if isinstance(d, dict)):
+                            tgt["distribution"] = existing_dist + orig_dist
+                            output = json.dumps(j_obj, indent=2, ensure_ascii=False)
+                            print(f"Added original file {orig_vault_name} to Croissant distribution.")
+                except Exception as e_dist:
+                    print(f"Warning: Failed to inject original file distribution: {e_dist}")
+            except Exception as e_att:
+                print(f"Warning: Failed to prepare original file distribution: {e_att}")
+
+        # Attach PDF page renders and extracted images as distributions
+        if 'GLOBAL_PDF_ASSETS' in globals() and GLOBAL_PDF_ASSETS:
+            try:
+                base_safe = os.path.basename(safe_name)
+                pdf_dists = []
+                import hashlib
+                for asset in GLOBAL_PDF_ASSETS:
+                    asset_fn = f"{base_safe}{asset['filename_suffix']}"
+                    asset_bytes = asset.get('bytes')
+                    if asset_bytes:
+                        pdf_dists.append({
+                            "@type": "cr:FileObject",
+                            "@id": asset_fn,
+                            "name": asset_fn,
+                            "description": asset.get("description") or f"PDF Resource ({asset_fn})",
+                            "contentUrl": f"{get_base_host()}/vault/{asset_fn}",
+                            "encodingFormat": asset.get("mimetype", "image/jpeg"),
+                            "contentSize": f"{len(asset_bytes)} B",
+                            "sha256": hashlib.sha256(asset_bytes).hexdigest()
+                        })
+                if pdf_dists:
+                    try:
+                        j_obj = json.loads(output)
+                        tgt = j_obj[0] if isinstance(j_obj, list) and j_obj else j_obj
+                        if isinstance(tgt, dict):
+                            existing_dist = tgt.get("distribution") or []
+                            if isinstance(existing_dist, dict):
+                                existing_dist = [existing_dist]
+                            for pd_dist in pdf_dists:
+                                if not any(d.get("@id") == pd_dist["@id"] for d in existing_dist if isinstance(d, dict)):
+                                    existing_dist.append(pd_dist)
+                            tgt["distribution"] = existing_dist
+                            output = json.dumps(j_obj, indent=2, ensure_ascii=False)
+                            print(f"Added {len(pdf_dists)} PDF page renders & extracted image distributions to Croissant.")
+                    except Exception as e_pdf_inj:
+                        print(f"Warning: Failed to inject PDF distributions: {e_pdf_inj}")
+            except Exception as e_pdf_chk:
+                pass
+
         output_filename = f"{safe_name}_croissant.jsonld"
         
         with open(output_filename, "w", encoding='utf-8') as f:
@@ -1883,13 +2653,13 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                     length=len(jsonld_bytes),
                     content_type="application/ld+json"
                 )
-                print(f"Croissant JSON-LD successfully uploaded to vault: https://{MCP_DOMAIN}/vault/{vault_jsonld_filename}")
+                print(f"Croissant JSON-LD successfully uploaded to vault: {get_base_host()}/vault/{vault_jsonld_filename}")
                 
                 # Generate and upload Datacard
                 datacard_filename = vault_jsonld_filename.replace(".jsonld", "_datacard.md")
                 datacard_content = f"**Original Source:** [View URL]({url})\n\n"
-                datacard_content += f"**Markdown Document:** [View Extracted Markdown](https://{MCP_DOMAIN}/vault/{os.path.basename(md_filename)})\n\n"
-                datacard_content += f"**Metadata:** [View Croissant JSON-LD Data](https://{MCP_DOMAIN}/vault/{vault_jsonld_filename})\n\n"
+                datacard_content += f"**Markdown Document:** [View Extracted Markdown]({get_base_host()}/vault/{os.path.basename(md_filename)})\n\n"
+                datacard_content += f"**Metadata:** [View Croissant JSON-LD Data]({get_base_host()}/vault/{vault_jsonld_filename})\n\n"
                 import hashlib
                 datacard_content += f"---\n**Digital Signature:** `{hashlib.sha256(jsonld_bytes).hexdigest()}`\n"
                 
@@ -1901,7 +2671,7 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                     length=len(dc_bytes),
                     content_type="text/markdown"
                 )
-                print(f"Datacard successfully uploaded to vault: https://{MCP_DOMAIN}/vault/{datacard_filename}")
+                print(f"Datacard successfully uploaded to vault: {get_base_host()}/vault/{datacard_filename}")
         except Exception as e:
             print(f"Warning: Failed to upload JSON-LD/Datacard to MinIO vault: {e}")
         
@@ -2148,7 +2918,20 @@ if __name__ == "__main__":
     parser.add_argument("--upload-gdrive-folder", type=str, help="Specific Google Drive folder ID to upload to (bypasses name search)")
     parser.add_argument("--is-file", action="store_true", help="Treat the input URL as a local file to describe (bypasses URL list reading)")
     parser.add_argument("--computer-vision", "--cv", action="store_true", help="Use Computer Vision to extract charts, maps, and tables from PDFs")
+    parser.add_argument("--host", type=str, help="Base host URL or domain (e.g. https://ai.mediaquantum.eu or ai.mediaquantum.eu)")
+    parser.add_argument("--engine", type=str, help="OCR engine(s) to use in PaleFire ImageParser, e.g. ['tesseract', 'ollama_gemma4:31b-cloud', 'microsoft_trocr']")
+    parser.add_argument("--ollama-visual-model", type=str, help="Ollama visual model (e.g. gemma4:31b, gemma4:31b-cloud)")
     args = parser.parse_args()
+    
+    if args.host:
+        h = args.host.strip()
+        if not h.startswith("http://") and not h.startswith("https://"):
+            if h.startswith("localhost") or h.startswith("127.0.0.1") or (":" in h and h.split(":")[0].replace(".", "").isdigit()):
+                h = f"http://{h}"
+            else:
+                h = f"https://{h}"
+        os.environ["HOST"] = h
+        os.environ["MCP_DOMAIN"] = h.replace("http://", "").replace("https://", "").split("/")[0]
     
     if args.index:
         args.expert = args.index
@@ -2169,8 +2952,13 @@ if __name__ == "__main__":
             process_local_file(file_path, args)
 
     elif os.path.isfile(args.url) and not args.is_file:
+        DOC_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.tiff', '.bmp', '.csv', '.tsv', '.xlsx', '.xls', '.ods', '.pdf', '.docx', '.doc')
         if getattr(args, "format", "croissant") == "oai":
             process_local_file(args.url, args)
+            import sys
+            sys.exit(0)
+        elif args.url.lower().endswith(DOC_EXTS):
+            convert_to_croissant(args.url, args.slice, args.traverse, args.reingest, args.user_name, args.user_email, args.index_ollama, args.elastic, args.expert, getattr(args, "upload_gdrive", False), getattr(args, "upload_gdrive_folder", None), getattr(args, "translate", False), getattr(args, "computer_vision", False))
             import sys
             sys.exit(0)
             

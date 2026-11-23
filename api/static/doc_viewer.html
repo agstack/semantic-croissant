@@ -548,7 +548,7 @@
                     <a href="/groups" id="menu-groups" class="nav-pill" style="color: var(--text-color); text-decoration: none; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 14px; transition: all 0.15s ease;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.75;"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg> Groups</a>
                 </nav>
                 <button class="theme-toggle" onclick="document.getElementById('add-text-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-text-input').focus(), 50);" style="background-color: #008855; color: white; border: none; font-weight: 500;">Add text</button>
-                <button class="theme-toggle" onclick="document.getElementById('add-resource-modal').style.display='flex'; setTimeout(()=>document.getElementById('add-resource-input').focus(), 50);" style="background-color: #006bb3; color: white; border: none; font-weight: 500;">Add resource</button>
+                <button class="theme-toggle" onclick="openAddResourceModal()" style="background-color: #006bb3; color: white; border: none; font-weight: 500;">Add resource</button>
                 <input type="text" id="global-search" placeholder="Search across all collections..." style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); width: 300px; font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') window.location.href = '/?q=' + encodeURIComponent('Search Croissant datasets for: ' + this.value)">
             </div>
         </div>
@@ -1346,6 +1346,7 @@
             }
             
             let firstH1 = null;
+            const excludedTocTitles = new Set(['question', 'answer', 'prompt', 'response', 'ask the document']);
             
             headings.forEach(heading => {
                 if (!heading.id) {
@@ -1355,12 +1356,20 @@
                 if (!firstH1 && heading.tagName === 'H1') {
                     firstH1 = heading.textContent;
                 }
+
+                const cleanHeadingText = heading.textContent.trim();
+                if (excludedTocTitles.has(cleanHeadingText.toLowerCase())) {
+                    return;
+                }
+                if (heading.closest('#ask-doc-container')) {
+                    return;
+                }
                 
                 const level = parseInt(heading.tagName.substring(1));
                 const item = document.createElement('a');
                 item.className = 'sidebar-item';
                 item.href = '#' + heading.id;
-                item.textContent = heading.textContent;
+                item.textContent = cleanHeadingText;
                 item.style.paddingLeft = `${(level - 1) * 15 + 10}px`;
                 
                 item.addEventListener('click', (e) => {
@@ -1402,10 +1411,28 @@
                 // Strip existing baked-in Make public button from markdown
                 markdown = markdown.replace(/<button[\s\S]*?>Make public<\/button>/gi, '');
                 
+                // Keep a clean copy of the raw document markdown for the Editor (before UI banners & distribution tables are injected)
+                let editableMarkdown = markdown
+                    .replace(/\n*---\n\*\*Digital Signature:\*\*[\s\S]*$/i, '')
+                    .trim();
+                
                 // Decrease size of large headings
                 markdown = markdown.replace(/^#\s+Citation:/gm, '### Citation:');
                 markdown = markdown.replace(/^#\s+🥐/gm, '## 🥐');
                 
+
+                function normalizeVaultUrl(u) {
+                    if (!u || typeof u !== 'string') return u;
+                    // Fix outdated or mismatched domain ai.mediaquantum.ai -> current origin
+                    if (u.includes('ai.mediaquantum.ai')) {
+                        u = u.replace(/https?:\/\/ai\.mediaquantum\.ai/g, window.location.origin);
+                    }
+                    // Fix any hardcoded localhost, 127.0.0.1 (with or without port) pointing to /vault/
+                    u = u.replace(/https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\/(vault\/[^\s"'>]+)/g, `${window.location.origin}/$1`);
+                    // If it is an absolute vault url on another host or internal container, normalize to current origin
+                    u = u.replace(/https?:\/\/[^\/]+\/(vault\/[^\s"'>]+)/g, `${window.location.origin}/$1`);
+                    return u;
+                }
 
                 function renderJsonLd(data) {
                     let html = `<div style="font-family: var(--font-family, sans-serif); color: var(--text-color);">`;
@@ -1509,18 +1536,19 @@
                             let actHtml = '-';
                             let cdifHtml = '-';
                             let toolsHtml = '-';
-                            if (d.contentUrl) {
-                                actHtml = `<a href="${d.contentUrl}" target="_blank" class="dist-btn-download" title="Download ${name}">
+                            const targetContentUrl = normalizeVaultUrl(d.contentUrl);
+                            if (targetContentUrl) {
+                                actHtml = `<a href="${targetContentUrl}" target="_blank" rel="noopener noreferrer" class="dist-btn-download" title="Download ${name}">
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                                 </a>`;
                                 const dsParam = data.url || data.identifier || '';
-                                const cdifHref = dsParam ? `/export?ds=${encodeURIComponent(dsParam)}&file=${encodeURIComponent(d.contentUrl)}` : `/export?file=${encodeURIComponent(d.contentUrl)}`;
+                                const cdifHref = dsParam ? `/export?ds=${encodeURIComponent(dsParam)}&file=${encodeURIComponent(targetContentUrl)}` : `/export?file=${encodeURIComponent(targetContentUrl)}`;
                                 cdifHtml = `<a href="${cdifHref}" target="_blank" class="dist-btn-cdif" title="Export to CDIF (DDI-CDI JSON-LD)">
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
                                 </a>`;
                                 
                                 const safeName = name.replace(/"/g, '&quot;');
-                                const safeUrl = d.contentUrl.replace(/"/g, '&quot;');
+                                const safeUrl = targetContentUrl.replace(/"/g, '&quot;');
                                 toolsHtml = `
                                 <div class="dist-tools-container">
                                     <button class="dist-btn-tools" onclick="toggleDistToolsMenu(this, event)" title="File Tools">
@@ -1777,30 +1805,62 @@
                         markdown = transformDistributionsToTable(markdown);
 
                         // If markdown still doesn't have a Files & Distributions section, but companion Croissant has distributions, append table
-                        if (!markdown.includes('### Files & Distributions') && companionCroissant) {
-                            const dists = companionCroissant.distribution || companionCroissant.fileObject || companionCroissant.fileSet;
+                        if (!markdown.includes('### Files & Distributions')) {
+                            let dists = null;
+                            let dsForExport = '';
+                            if (companionCroissant) {
+                                dists = companionCroissant.distribution || companionCroissant.fileObject || companionCroissant.fileSet;
+                                dsForExport = companionCroissant.url || companionCroissant.identifier || '';
+                            } else if (markdown.includes('* **CSV Data') || markdown.includes('* **Spreadsheet') || markdown.includes('* **Croissant Metadata') || markdown.includes('* **Original Image')) {
+                                const citationFileLines = markdown.match(/^\*\s+\*\*([^*]+)\*\*:\s*\[([^\]]+)\]\(([^)]+)\)/gm);
+                                if (citationFileLines && citationFileLines.length > 0) {
+                                    dists = [];
+                                    citationFileLines.forEach(cLine => {
+                                        const m = cLine.match(/^\*\s+\*\*([^*]+)\*\*:\s*\[([^\]]+)\]\(([^)]+)\)/);
+                                        if (m) {
+                                            const label = m[1].trim();
+                                            const fileName = m[2].trim();
+                                            let targetUrl = m[3].trim();
+                                            if (targetUrl.startsWith('./')) targetUrl = '/vault/' + targetUrl.substring(2);
+                                            let fmt = '-';
+                                            if (fileName.endsWith('.csv')) fmt = 'text/csv';
+                                            else if (fileName.endsWith('.xlsx')) fmt = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+                                            else if (fileName.endsWith('.jsonld')) fmt = 'application/ld+json';
+                                            else if (fileName.endsWith('.jpg') || fileName.endsWith('.jpeg')) fmt = 'image/jpeg';
+                                            else if (fileName.endsWith('.png')) fmt = 'image/png';
+                                            else if (fileName.endsWith('.md')) fmt = 'text/markdown';
+                                            dists.push({
+                                                name: fileName,
+                                                title: label,
+                                                encodingFormat: fmt,
+                                                contentUrl: targetUrl
+                                            });
+                                        }
+                                    });
+                                }
+                            }
+
                             if (dists && Array.isArray(dists) && dists.length > 0) {
                                 const distRows = [
                                     '\n\n---\n### Files & Distributions\n',
                                     '| File | Title | Format | Size | Download | CDIF | Tools |',
                                     '|---|---|---|---|:---:|:---:|:---:|'
                                 ];
-                                const dsForExport = companionCroissant.url || companionCroissant.identifier || '';
                                 dists.forEach(d => {
                                     const dName = d.name || d['@id'] || 'File';
                                     let dTitle = d.title || d.description || d.headline || d.alternateName || '';
                                     if (!dTitle || dTitle === '-') {
                                         if (dName.endsWith('.md') || (d.contentUrl && d.contentUrl.endsWith('.md'))) {
-                                            dTitle = companionCroissant.name || companionCroissant.headline || 'Document Content (Markdown)';
+                                            dTitle = (companionCroissant && (companionCroissant.name || companionCroissant.headline)) || 'Document Content (Markdown)';
                                         } else if (dName === 'cdif_export.jsonld' || (d.contentUrl && d.contentUrl.includes('/export?'))) {
-                                            dTitle = `Complete CDIF 1.1 / DDI-CDI Export Payload (${companionCroissant.name || 'Dataset'})`;
+                                            dTitle = `Complete CDIF 1.1 / DDI-CDI Export Payload (${(companionCroissant && companionCroissant.name) || 'Dataset'})`;
                                         } else {
                                             dTitle = '-';
                                         }
                                     }
                                     const fmt = d.encodingFormat || '-';
                                     const size = d.contentSize || '-';
-                                    const curl = d.contentUrl || '';
+                                    const curl = normalizeVaultUrl(d.contentUrl || '');
                                     const dlStr = curl ? `[📥](${curl})` : '-';
                                     const toolsStr = curl ? '[⚙️](#tools)' : '-';
                                     let cdifStr = '-';
@@ -1829,10 +1889,23 @@
                     }
                 }
                 
+                // Normalize vault links in markdown body (e.g. [doc.csv](./doc.csv) or absolute localhost urls)
+                markdown = markdown.replace(/\[([^\]]+)\]\(\.\/([^\)]+)\)/g, '[$1](/vault/$2)');
+                markdown = markdown.replace(/https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\/(vault\/[^\s\)\"\'\>]+)/g, `${window.location.origin}/$1`);
+                markdown = markdown.replace(/https?:\/\/[^\/\s\)\"\'\>]+\/(vault\/[^\s\)\"\'\>]+)/g, `${window.location.origin}/$1`);
+
                 const htmlContent = marked.parse(markdown);
                 
                 const contentDiv = document.getElementById('md-content');
                 contentDiv.innerHTML = htmlContent;
+
+                // Ensure all headings have deterministic slug IDs so Table of Contents anchor links (#1-title) scroll smoothly
+                contentDiv.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(h => {
+                    if (!h.id) {
+                        const slug = h.textContent.toLowerCase().replace(/[^a-z0-9\s-]/g, '').trim().replace(/[\s-]+/g, '-');
+                        if (slug) h.id = slug;
+                    }
+                });
 
                 // Post-process table to style download, CDIF links, and Tools dropdown nicely with pictograms
                 contentDiv.querySelectorAll('table').forEach(tbl => {
@@ -1855,11 +1928,15 @@
                             let fileUrl = '';
                             if (dlColIdx !== -1 && tr.children[dlColIdx]) {
                                 const dlLink = tr.children[dlColIdx].querySelector('a');
-                                if (dlLink) fileUrl = dlLink.href;
+                                if (dlLink) {
+                                    if (dlLink.href) dlLink.href = normalizeVaultUrl(dlLink.href);
+                                    fileUrl = dlLink.href;
+                                }
                             }
 
                             // Convert download links
                             tr.querySelectorAll('a').forEach(a => {
+                                if (a.href) a.href = normalizeVaultUrl(a.href);
                                 const txt = a.textContent.trim();
                                 if (txt === 'Download' || txt === '📥') {
                                     a.className = 'dist-btn-download';
@@ -2009,10 +2086,77 @@
                 const askDocContainer = document.createElement('div');
                 askDocContainer.style.cssText = "margin-bottom: 20px; padding: 15px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--header-bg);";
                 
+                const askDocHeaderRow = document.createElement('div');
+                askDocHeaderRow.style.cssText = "display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;";
+
+                const askDocHeaderLeft = document.createElement('div');
+                askDocHeaderLeft.style.cssText = "display: flex; align-items: center; gap: 10px;";
+
                 const askDocHeader = document.createElement('h3');
-                askDocHeader.style.cssText = "margin-top: 0; color: var(--accent-color); font-size: 1.1rem;";
+                askDocHeader.style.cssText = "margin: 0; color: var(--accent-color); font-size: 1.1rem;";
                 askDocHeader.innerText = "Ask the Document";
-                askDocContainer.appendChild(askDocHeader);
+                askDocHeaderLeft.appendChild(askDocHeader);
+
+                const refreshSubchaptersBtn = document.createElement('button');
+                refreshSubchaptersBtn.type = 'button';
+                refreshSubchaptersBtn.title = 'Generate subchapters from Question / Answer sections';
+                refreshSubchaptersBtn.style.cssText = "display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 0.82rem; font-weight: 600; border-radius: 5px; border: 1px solid var(--border-color); background: var(--bg-color); color: var(--text-color); cursor: pointer; transition: all 0.15s ease;";
+                const refreshIconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>`;
+                refreshSubchaptersBtn.innerHTML = `${refreshIconSvg} <span>Refresh</span>`;
+
+                const refreshStatusSpan = document.createElement('span');
+                refreshStatusSpan.style.cssText = "font-size: 0.82rem; color: var(--text-color); opacity: 0.85;";
+
+                refreshSubchaptersBtn.onclick = async () => {
+                    refreshSubchaptersBtn.disabled = true;
+                    refreshSubchaptersBtn.innerHTML = `${refreshIconSvg} <span>Generating subchapters...</span>`;
+                    refreshStatusSpan.textContent = '';
+                    try {
+                        const selectedModel = askDocModelSelect && askDocModelSelect.value ? askDocModelSelect.value : '';
+                        const res = await fetch(`/vault/doc/refresh-subchapters/${docId}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ model: selectedModel })
+                        });
+                        const data = await res.json();
+                        if (!res.ok || data.status !== 'success') {
+                            throw new Error(data.detail || 'Failed to generate subchapters');
+                        }
+                        refreshStatusSpan.innerHTML = `<span style="color: #008855; font-weight: 600;">✅ Generated ${data.subchapters} subchapters! Reloading...</span>`;
+                        setTimeout(() => {
+                            if (!window.location.pathname.endsWith('.md')) {
+                                window.location.href = `/vault/doc/${docId}.md`;
+                            } else {
+                                window.location.reload();
+                            }
+                        }, 500);
+                    } catch (err) {
+                        console.error('Refresh subchapters error:', err);
+                        refreshStatusSpan.innerHTML = `<span style="color: #dc2626;">❌ ${err.message}</span>`;
+                        refreshSubchaptersBtn.disabled = false;
+                        refreshSubchaptersBtn.innerHTML = `${refreshIconSvg} <span>Refresh</span>`;
+                    }
+                };
+
+                askDocHeaderLeft.appendChild(refreshSubchaptersBtn);
+
+                const moveToChatBtn = document.createElement('button');
+                moveToChatBtn.type = 'button';
+                moveToChatBtn.title = 'Open this document in Chat mode to ask questions, save, edit, and update';
+                moveToChatBtn.style.cssText = "display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 0.82rem; font-weight: 600; border-radius: 5px; border: 1px solid #006bb3; background: #006bb3; color: #ffffff; cursor: pointer; transition: all 0.15s ease;";
+                const chatIconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`;
+                moveToChatBtn.innerHTML = `${chatIconSvg} <span>Ask</span>`;
+                moveToChatBtn.onclick = () => {
+                    const qVal = (askDocInput && askDocInput.value.trim()) ? askDocInput.value.trim() : '';
+                    let targetUrl = `/?doc=${encodeURIComponent(docId)}`;
+                    if (qVal) targetUrl += `&q=${encodeURIComponent(qVal)}`;
+                    window.location.href = targetUrl;
+                };
+                askDocHeaderLeft.appendChild(moveToChatBtn);
+
+                askDocHeaderLeft.appendChild(refreshStatusSpan);
+                askDocHeaderRow.appendChild(askDocHeaderLeft);
+                askDocContainer.appendChild(askDocHeaderRow);
                 
                 const askDocFlex = document.createElement('div');
                 askDocFlex.style.cssText = "display: flex; gap: 10px; align-items: center;";
@@ -2178,27 +2322,86 @@
                 };
                 toolbarLeft.appendChild(btnPublic);
 
-                // Edit button (GitHub style)
+                // Edit & Save buttons
                 const btnEdit = document.createElement('button');
-                btnEdit.innerHTML = '<span title="Edit">✏️</span>';
+                btnEdit.type = 'button';
+                btnEdit.innerHTML = '✏️ <span>Edit</span>';
+                btnEdit.title = 'Edit document markdown';
                 btnEdit.style.cssText = btnStyle;
+
+                const btnSaveToolbar = document.createElement('button');
+                btnSaveToolbar.type = 'button';
+                btnSaveToolbar.innerHTML = '💾 <span>Save</span>';
+                btnSaveToolbar.title = 'Save changes to document';
+                btnSaveToolbar.style.cssText = btnStyle + ' display: none; background: #008855; color: #ffffff; border-color: #008855; font-weight: 600;';
+
+                const btnCancelToolbar = document.createElement('button');
+                btnCancelToolbar.type = 'button';
+                btnCancelToolbar.innerHTML = 'Cancel';
+                btnCancelToolbar.title = 'Cancel editing';
+                btnCancelToolbar.style.cssText = btnStyle + ' display: none; color: #d73a49;';
                 
                 let isEditing = false;
                 let githubEditContainer = null;
+
+                async function saveEditedDocument(newMarkdown, triggerBtn) {
+                    const origText = triggerBtn ? triggerBtn.innerHTML : '';
+                    if (triggerBtn) {
+                        triggerBtn.innerHTML = '⏳ Saving...';
+                        triggerBtn.disabled = true;
+                    }
+                    btnSaveToolbar.disabled = true;
+                    try {
+                        const res = await fetch(`/vault/doc/update/${docId}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ markdown: newMarkdown, message: 'Update document' })
+                        });
+                        if (res.ok) {
+                            editableMarkdown = newMarkdown;
+                            window.location.reload();
+                        } else {
+                            const errData = await res.json().catch(() => ({}));
+                            alert('Failed to save document: ' + (errData.message || res.status));
+                        }
+                    } catch (err) {
+                        console.error(err);
+                        alert('Error saving document: ' + err.message);
+                    } finally {
+                        if (triggerBtn) {
+                            triggerBtn.innerHTML = origText;
+                            triggerBtn.disabled = false;
+                        }
+                        btnSaveToolbar.disabled = false;
+                    }
+                }
                 
                 btnEdit.onclick = () => {
                     if (!isEditing) {
                         isEditing = true;
-                        contentDiv.style.display = 'none';
+                        btnEdit.style.display = 'none';
+                        btnSaveToolbar.style.display = 'flex';
+                        btnCancelToolbar.style.display = 'flex';
+
+                        // Hide rendered markdown elements inside contentDiv while keeping askDocContainer and actionToolbar visible
+                        Array.from(contentDiv.children).forEach(ch => {
+                            if (ch !== askDocContainer && ch !== actionToolbar && ch !== githubEditContainer) {
+                                ch.dataset.prevDisplay = ch.style.display || '';
+                                ch.style.display = 'none';
+                            }
+                        });
                         
                         if (!githubEditContainer) {
                             githubEditContainer = document.createElement('div');
                             githubEditContainer.style.cssText = "border: 1px solid var(--border-color); border-radius: 6px; margin-bottom: 20px; background: var(--bg-color); font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;";
                             
-                            // Header with tabs
+                            // Header with tabs and top Save button
                             const header = document.createElement('div');
-                            header.style.cssText = "background: var(--header-bg); border-bottom: 1px solid var(--border-color); padding: 10px 15px 0 15px; display: flex; border-radius: 6px 6px 0 0;";
+                            header.style.cssText = "background: var(--header-bg); border-bottom: 1px solid var(--border-color); padding: 10px 15px 0 15px; display: flex; justify-content: space-between; align-items: center; border-radius: 6px 6px 0 0;";
                             
+                            const tabsLeft = document.createElement('div');
+                            tabsLeft.style.cssText = "display: flex;";
+
                             const tabEdit = document.createElement('div');
                             tabEdit.innerText = "Edit file";
                             tabEdit.style.cssText = "padding: 8px 16px; cursor: pointer; border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; font-size: 14px; font-weight: 600;";
@@ -2207,8 +2410,9 @@
                             tabPreview.innerText = "Preview";
                             tabPreview.style.cssText = "padding: 8px 16px; cursor: pointer; border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; font-size: 14px;";
                             
-                            header.appendChild(tabEdit);
-                            header.appendChild(tabPreview);
+                            tabsLeft.appendChild(tabEdit);
+                            tabsLeft.appendChild(tabPreview);
+                            header.appendChild(tabsLeft);
                             githubEditContainer.appendChild(header);
                             
                             // Body
@@ -2216,6 +2420,7 @@
                             body.style.cssText = "padding: 10px;";
                             
                             const textarea = document.createElement('textarea');
+                            textarea.id = 'doc-editor-textarea';
                             textarea.style.cssText = "width: 100%; height: calc(100vh - 280px); font-family: monospace; font-size: 14px; padding: 15px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-color); color: var(--text-color); box-sizing: border-box; resize: vertical;";
                             
                             const previewArea = document.createElement('div');
@@ -2226,45 +2431,30 @@
                             body.appendChild(previewArea);
                             githubEditContainer.appendChild(body);
                             
-                            // Footer with Commit Button
+                            // Footer with Save & Cancel Buttons
                             const footer = document.createElement('div');
-                            footer.style.cssText = "padding: 15px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end;";
+                            footer.style.cssText = "padding: 15px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 10px;";
                             
-                            const btnCommit = document.createElement('button');
-                            btnCommit.innerText = "Commit changes...";
-                            btnCommit.style.cssText = "background: #2ea44f; color: white; border: none; padding: 5px 16px; border-radius: 6px; font-weight: 500; cursor: pointer; font-size: 14px; line-height: 20px;";
+                            const btnSaveFooter = document.createElement('button');
+                            btnSaveFooter.type = 'button';
+                            btnSaveFooter.innerHTML = "💾 Save changes";
+                            btnSaveFooter.style.cssText = "background: #008855; color: white; border: none; padding: 6px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 14px; line-height: 20px;";
                             
                             const btnCancel = document.createElement('button');
+                            btnCancel.type = 'button';
                             btnCancel.innerText = "Cancel";
-                            btnCancel.style.cssText = "background: transparent; color: #d73a49; border: none; padding: 5px 16px; font-weight: 500; cursor: pointer; font-size: 14px; line-height: 20px; margin-right: 10px;";
+                            btnCancel.style.cssText = "background: transparent; color: #d73a49; border: 1px solid var(--border-color); padding: 6px 16px; border-radius: 6px; font-weight: 500; cursor: pointer; font-size: 14px; line-height: 20px;";
                             
                             footer.appendChild(btnCancel);
-                            footer.appendChild(btnCommit);
+                            footer.appendChild(btnSaveFooter);
                             githubEditContainer.appendChild(footer);
                             
-                            contentDiv.parentNode.insertBefore(githubEditContainer, contentDiv);
+                            if (actionToolbar.nextSibling) {
+                                contentDiv.insertBefore(githubEditContainer, actionToolbar.nextSibling);
+                            } else {
+                                contentDiv.appendChild(githubEditContainer);
+                            }
                             
-                            // Modal for commit
-                            const commitModal = document.createElement('div');
-                            commitModal.style.cssText = "display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;";
-                            commitModal.innerHTML = `
-                                <div style="background: var(--bg-color); width: 400px; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border: 1px solid var(--border-color); overflow: hidden;">
-                                    <div style="padding: 16px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: var(--header-bg);">
-                                        <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-color);">Commit changes</h3>
-                                        <span style="cursor: pointer; font-weight: bold; color: var(--text-color);" id="closeCommitModal">&times;</span>
-                                    </div>
-                                    <div style="padding: 16px;">
-                                        <input type="text" id="commitMsg" placeholder="Update document" style="width: 100%; box-sizing: border-box; padding: 5px 12px; margin-bottom: 15px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 14px; line-height: 20px; background: var(--bg-color); color: var(--text-color);">
-                                        <div style="display: flex; justify-content: flex-end; gap: 10px;">
-                                            <button id="cancelCommitBtn" style="background: var(--header-bg); color: var(--text-color); border: 1px solid var(--border-color); padding: 5px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px;">Cancel</button>
-                                            <button id="confirmCommitBtn" style="background: #2ea44f; color: white; border: none; padding: 5px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 14px;">Commit changes</button>
-                                        </div>
-                                    </div>
-                                </div>
-                            `;
-                            document.body.appendChild(commitModal);
-                            
-                            // Logic
                             const activateTab = (active, inactive, showEl, hideEl) => {
                                 active.style.border = "1px solid var(--border-color)";
                                 active.style.borderBottom = "1px solid var(--bg-color)";
@@ -2286,56 +2476,33 @@
                                 previewArea.innerHTML = marked.parse(textarea.value);
                             };
                             
-                            textarea.value = markdown;
+                            textarea.value = editableMarkdown;
                             activateTab(tabEdit, tabPreview, textarea, previewArea);
                             
-                            btnCancel.onclick = () => {
+                            const exitEditMode = () => {
                                 githubEditContainer.style.display = 'none';
-                                contentDiv.style.display = 'block';
-                                isEditing = false;
-                            };
-                            
-                            btnCommit.onclick = () => {
-                                commitModal.style.display = 'flex';
-                            };
-                            
-                            commitModal.querySelector('#closeCommitModal').onclick = () => commitModal.style.display = 'none';
-                            commitModal.querySelector('#cancelCommitBtn').onclick = () => commitModal.style.display = 'none';
-                            
-                            commitModal.querySelector('#confirmCommitBtn').onclick = async () => {
-                                const btnConfirm = commitModal.querySelector('#confirmCommitBtn');
-                                btnConfirm.innerText = "Committing...";
-                                btnConfirm.disabled = true;
-                                
-                                try {
-                                    const newMarkdown = textarea.value;
-                                    const res = await fetch(`/vault/doc/update/${docId}`, {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ markdown: newMarkdown, message: commitModal.querySelector('#commitMsg').value })
-                                    });
-                                    
-                                    if (res.ok) {
-                                        markdown = newMarkdown;
-                                        window.location.reload();
-                                    } else {
-                                        alert('Failed to save document');
+                                Array.from(contentDiv.children).forEach(ch => {
+                                    if (ch !== askDocContainer && ch !== actionToolbar && ch !== githubEditContainer) {
+                                        ch.style.display = ch.dataset.prevDisplay || '';
                                     }
-                                } catch (err) {
-                                    console.error(err);
-                                    alert('Error saving document');
-                                }
-                                btnConfirm.innerText = "Commit changes";
-                                btnConfirm.disabled = false;
+                                });
+                                isEditing = false;
+                                btnEdit.style.display = 'flex';
+                                btnSaveToolbar.style.display = 'none';
+                                btnCancelToolbar.style.display = 'none';
                             };
+
+                            btnCancel.onclick = exitEditMode;
+                            btnCancelToolbar.onclick = exitEditMode;
+                            btnSaveFooter.onclick = () => saveEditedDocument(textarea.value, btnSaveFooter);
+                            btnSaveToolbar.onclick = () => saveEditedDocument(textarea.value, btnSaveToolbar);
                         } else {
-                            githubEditContainer.querySelector('textarea').value = markdown;
+                            const textarea = githubEditContainer.querySelector('#doc-editor-textarea');
+                            const previewArea = githubEditContainer.querySelector('.markdown-body');
+                            const tabEdit = githubEditContainer.children[0].children[0].children[0];
+                            const tabPreview = githubEditContainer.children[0].children[0].children[1];
+                            textarea.value = editableMarkdown;
                             githubEditContainer.style.display = 'block';
-                            
-                            const tabEdit = githubEditContainer.children[0].children[0];
-                            const tabPreview = githubEditContainer.children[0].children[1];
-                            const textarea = githubEditContainer.children[1].children[0];
-                            const previewArea = githubEditContainer.children[1].children[1];
                             
                             tabEdit.style.border = "1px solid var(--border-color)";
                             tabEdit.style.borderBottom = "1px solid var(--bg-color)";
@@ -2351,6 +2518,26 @@
                     }
                 };
                 toolbarLeft.appendChild(btnEdit);
+                toolbarLeft.appendChild(btnSaveToolbar);
+                toolbarLeft.appendChild(btnCancelToolbar);
+
+                // Refresh Subchapters button in the menu toolbar
+                const btnRefreshMenu = document.createElement('button');
+                btnRefreshMenu.type = 'button';
+                btnRefreshMenu.title = 'Refresh / Generate subchapters from Question & Answer sections';
+                btnRefreshMenu.style.cssText = btnStyle;
+                btnRefreshMenu.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>`;
+                btnRefreshMenu.onclick = () => refreshSubchaptersBtn.click();
+                toolbarLeft.appendChild(btnRefreshMenu);
+
+                // Ask button in the menu toolbar (moves document to Chat mode on /)
+                const btnAskMenu = document.createElement('button');
+                btnAskMenu.type = 'button';
+                btnAskMenu.title = 'Open document in Chat mode to ask questions, save, edit, and update';
+                btnAskMenu.style.cssText = btnStyle;
+                btnAskMenu.innerHTML = `${chatIconSvg} <span>Ask</span>`;
+                btnAskMenu.onclick = () => moveToChatBtn.click();
+                toolbarLeft.appendChild(btnAskMenu);
                 
                 // Collections button
                 const btnCols = document.createElement('button');
@@ -2637,7 +2824,7 @@
                             if (toolbarRight) {
                                 if (csvDist) {
                                     const btnCsv = document.createElement('a');
-                                    btnCsv.href = csvDist.contentUrl;
+                                    btnCsv.href = normalizeVaultUrl(csvDist.contentUrl);
                                     btnCsv.target = '_blank';
                                     btnCsv.innerHTML = '📊 CSV';
                                     btnCsv.style.cssText = 'padding: 4px 12px; border-radius: 4px; border: 1px solid var(--border-color); cursor: pointer; background: var(--header-bg); color: var(--text-color); font-size: 0.85rem; text-decoration: none; display: flex; align-items: center; gap: 5px;';
@@ -2646,7 +2833,8 @@
                                 if (anyDataDist) {
                                     const btnCdif = document.createElement('a');
                                     const dsParam = data.url || data.identifier || '';
-                                    btnCdif.href = dsParam ? `/export?ds=${encodeURIComponent(dsParam)}&file=${encodeURIComponent(anyDataDist.contentUrl)}` : `/export?file=${encodeURIComponent(anyDataDist.contentUrl)}`;
+                                    const normalizedDataDistUrl = normalizeVaultUrl(anyDataDist.contentUrl);
+                                    btnCdif.href = dsParam ? `/export?ds=${encodeURIComponent(dsParam)}&file=${encodeURIComponent(normalizedDataDistUrl)}` : `/export?file=${encodeURIComponent(normalizedDataDistUrl)}`;
                                     btnCdif.target = '_blank';
                                     btnCdif.innerHTML = '⚡ Export to CDIF';
                                     btnCdif.title = 'Convert dataset file to DDI-CDI JSON-LD';
@@ -2877,6 +3065,43 @@
                 } catch (e) {
                     console.error("Failed to load provenance", e);
                 }
+
+                // Fallback: If toolbar doesn't have CSV/CDIF buttons yet, check markdown Citation block
+                const rightToolbarEl = document.getElementById('action-toolbar-right');
+                if (rightToolbarEl && !rightToolbarEl.querySelector('a[href*=".csv"]')) {
+                    const csvMatch = markdown.match(/\* \*\*CSV Data[^*]*\*\*:\s*\[([^\]]+)\]\(([^)]+)\)/i);
+                    const xlMatch = markdown.match(/\* \*\*Spreadsheet[^*]*\*\*:\s*\[([^\]]+)\]\(([^)]+)\)/i);
+                    if (csvMatch) {
+                        let cUrl = csvMatch[2].trim();
+                        if (cUrl.startsWith('./')) cUrl = '/vault/' + cUrl.substring(2);
+                        cUrl = normalizeVaultUrl(cUrl);
+                        const btnCsv = document.createElement('a');
+                        btnCsv.href = cUrl;
+                        btnCsv.target = '_blank';
+                        btnCsv.innerHTML = '📊 CSV';
+                        btnCsv.style.cssText = 'padding: 4px 12px; border-radius: 4px; border: 1px solid var(--border-color); cursor: pointer; background: var(--header-bg); color: var(--text-color); font-size: 0.85rem; text-decoration: none; display: flex; align-items: center; gap: 5px;';
+                        rightToolbarEl.appendChild(btnCsv);
+
+                        const btnCdif = document.createElement('a');
+                        btnCdif.href = `/export?file=${encodeURIComponent(cUrl)}`;
+                        btnCdif.target = '_blank';
+                        btnCdif.innerHTML = '⚡ Export to CDIF';
+                        btnCdif.title = 'Convert dataset file to DDI-CDI JSON-LD';
+                        btnCdif.style.cssText = 'padding: 4px 12px; border-radius: 4px; border: 1px solid #c3e6cb; cursor: pointer; background: #d4edda; color: #155724; font-size: 0.85rem; text-decoration: none; display: flex; align-items: center; gap: 5px; font-weight: 500;';
+                        rightToolbarEl.appendChild(btnCdif);
+                    } else if (xlMatch) {
+                        let xlUrl = xlMatch[2].trim();
+                        if (xlUrl.startsWith('./')) xlUrl = '/vault/' + xlUrl.substring(2);
+                        xlUrl = normalizeVaultUrl(xlUrl);
+                        const btnCdif = document.createElement('a');
+                        btnCdif.href = `/export?file=${encodeURIComponent(xlUrl)}`;
+                        btnCdif.target = '_blank';
+                        btnCdif.innerHTML = '⚡ Export to CDIF';
+                        btnCdif.title = 'Convert dataset file to DDI-CDI JSON-LD';
+                        btnCdif.style.cssText = 'padding: 4px 12px; border-radius: 4px; border: 1px solid #c3e6cb; cursor: pointer; background: #d4edda; color: #155724; font-size: 0.85rem; text-decoration: none; display: flex; align-items: center; gap: 5px; font-weight: 500;';
+                        rightToolbarEl.appendChild(btnCdif);
+                    }
+                }
                 
                 document.getElementById('loading').style.display = 'none';
                 contentDiv.style.display = 'block';
@@ -3038,19 +3263,342 @@
         }
     </script>
     <div id="add-resource-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 10001; justify-content: center; align-items: center;">
-        <div style="background: var(--bg-color); padding: 20px; border-radius: 8px; width: 400px; max-width: 90%; border: 1px solid var(--border-color);">
-            <h3 style="margin-top: 0; color: var(--text-color);">Add Resource</h3>
-            <p style="font-size: 0.9rem; margin-bottom: 10px; color: var(--text-color);">Enter the URL of the resource you want to ingest:</p>
-            <input type="text" id="add-resource-input" placeholder="https://..." style="width: 100%; padding: 8px; margin-bottom: 12px; border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; background: var(--panel-bg); color: var(--text-color); font-family: inherit; font-size: 14px;" onkeydown="if(event.key === 'Enter') document.getElementById('add-resource-submit').click()">
+        <div style="background: var(--bg-color); padding: 22px; border-radius: 8px; width: 480px; max-width: 90%; border: 1px solid var(--border-color); box-shadow: 0 4px 16px rgba(0,0,0,0.2); max-height: 90vh; overflow-y: auto;">
+            <h3 style="margin-top: 0; margin-bottom: 12px; color: var(--text-color); font-size: 1.15rem;">Add Resource</h3>
+            
+            <!-- Ingest via URL -->
+            <p style="font-size: 0.9rem; margin-bottom: 6px; color: var(--text-color); font-weight: 500;">Enter the URL of the resource you want to ingest:</p>
+            <input type="text" id="add-resource-input" placeholder="https://..." style="width: 100%; padding: 8px; margin-bottom: 12px; border: 1px solid var(--border-color); border-radius: 4px; box-sizing: border-box; background: var(--panel-bg); color: var(--text-color); font-family: inherit; font-size: 14px;" oninput="onResourceInputChanged()" onkeydown="if(event.key === 'Enter') document.getElementById('add-resource-submit').click()">
+            
+            <!-- Local file upload option if PALEFIRE is True -->
+            <div id="add-resource-file-container" style="display: {{PALEFIRE_DISPLAY}}; flex-direction: column; margin-bottom: 14px; padding: 10px; border: 1px dashed var(--border-color); border-radius: 6px; background: rgba(128,128,128,0.05);">
+                <label style="font-size: 0.85rem; color: var(--text-color); font-weight: 500; margin-bottom: 6px; display: block;">Or upload local file (Image, PDF, Document):</label>
+                <input type="file" id="add-resource-file-input" onchange="onResourceFileChanged()" style="font-size: 0.85rem; color: var(--text-color); width: 100%;">
+            </div>
+
+            <!-- Collection Options -->
+            <div style="margin-bottom: 14px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 6px; background: rgba(0,0,0,0.02);">
+                <label style="font-size: 0.85rem; color: var(--text-color); font-weight: 600; display: block; margin-bottom: 8px;">Collection Options:</label>
+                
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <label style="font-size: 0.82rem; color: var(--text-color); display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="radio" name="add-col-option" value="none" checked onchange="toggleCollectionInputs()">
+                        <span>Do not add to collection</span>
+                    </label>
+
+                    <label style="font-size: 0.82rem; color: var(--text-color); display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="radio" name="add-col-option" value="existing" onchange="toggleCollectionInputs()">
+                        <span>Add to existing collection</span>
+                    </label>
+                    <div id="add-col-existing-container" style="display: none; margin-left: 20px; margin-bottom: 4px;">
+                        <select id="add-resource-col-select" style="width: 100%; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); font-size: 0.85rem;">
+                            <option value="">Loading collections...</option>
+                        </select>
+                    </div>
+
+                    <label style="font-size: 0.82rem; color: var(--text-color); display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                        <input type="radio" name="add-col-option" value="new" onchange="toggleCollectionInputs()">
+                        <span>Create new collection</span>
+                    </label>
+                    <div id="add-col-new-container" style="display: none; margin-left: 20px;">
+                        <input type="text" id="add-resource-new-col-name" placeholder="Collection name..." style="width: 100%; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--bg-color); color: var(--text-color); font-size: 0.85rem; box-sizing: border-box; margin-bottom: 4px;">
+                        <div style="font-size: 0.72rem; color: #888;">Suggested automatically from URL / filename, or customize as desired.</div>
+                    </div>
+                </div>
+            </div>
+
             <label id="add-resource-vision-label" style="display: {{PALEFIRE_DISPLAY}}; align-items: center; gap: 8px; margin-bottom: 15px; font-size: 0.85rem; color: var(--text-color); cursor: pointer; user-select: none;">
                 <input type="checkbox" id="add-resource-vision" style="cursor: pointer; width: 15px; height: 15px;">
                 <span>Use Computer Vision</span>
             </label>
+            
+            <div id="add-resource-progress-container" style="display: none; margin-bottom: 14px;">
+                <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-color); margin-bottom: 6px; font-weight: 500;">
+                    <span id="add-resource-status-text">Processing file with PaleFire OCR & Ingestion...</span>
+                    <span id="add-resource-progress-percent">0%</span>
+                </div>
+                <div style="width: 100%; height: 8px; background: rgba(128,128,128,0.2); border-radius: 4px; overflow: hidden;">
+                    <div id="add-resource-progress-bar" style="width: 0%; height: 100%; background: #006bb3; transition: width 0.3s ease; border-radius: 4px;"></div>
+                </div>
+                <div id="add-resource-status-subtext" style="font-size: 0.75rem; color: var(--text-color); opacity: 0.8; margin-top: 4px;">Uploading file...</div>
+            </div>
+            <div id="add-resource-error" style="display: none; font-size: 0.85rem; color: #d32f2f; margin-bottom: 10px;"></div>
             <div style="display: flex; justify-content: flex-end; gap: 10px;">
                 <button onclick="document.getElementById('add-resource-modal').style.display='none'" class="theme-toggle">Cancel</button>
-                <button id="add-resource-submit" onclick="var url = document.getElementById('add-resource-input').value; var cv = document.getElementById('add-resource-vision').checked; if(url) window.location.href='/dataverse?url=' + encodeURIComponent(url) + (cv ? '&vision=true' : '');" style="background-color: #006bb3; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
+                <button id="add-resource-submit" onclick="submitAddResource()" style="background-color: #006bb3; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 500;">Ingest</button>
             </div>
         </div>
+    </div>
+
+    <script>
+        var cachedCollectionsList = null;
+
+        function openAddResourceModal() {
+            var modal = document.getElementById("add-resource-modal");
+            if (!modal) return;
+            modal.style.display = "flex";
+            setTimeout(function() {
+                var inp = document.getElementById("add-resource-input");
+                if (inp) inp.focus();
+            }, 50);
+            loadResourceCollections();
+        }
+
+        async function loadResourceCollections() {
+            var select = document.getElementById("add-resource-col-select");
+            if (!select) return;
+            if (cachedCollectionsList) {
+                populateCollectionSelect(cachedCollectionsList);
+                return;
+            }
+            try {
+                var r = await fetch("/api/collections");
+                if (r.ok) {
+                    var data = await r.json();
+                    cachedCollectionsList = data.collections || [];
+                    populateCollectionSelect(cachedCollectionsList);
+                } else {
+                    select.innerHTML = "<option value=>Failed to load collections</option>";
+                }
+            } catch (e) {
+                select.innerHTML = "<option value=>Error loading collections</option>";
+            }
+        }
+
+        function populateCollectionSelect(cols) {
+            var select = document.getElementById("add-resource-col-select");
+            if (!select) return;
+            select.innerHTML = "<option value=>-- Select a collection --</option>";
+            cols.forEach(function(c) {
+                var opt = document.createElement("option");
+                opt.value = c.id;
+                opt.textContent = c.name + (c.is_private ? " (Private)" : "");
+                select.appendChild(opt);
+            });
+        }
+
+        function toggleCollectionInputs() {
+            var opt = document.querySelector('input[name="add-col-option"]:checked');
+            var val = opt ? opt.value : "none";
+            var existCont = document.getElementById("add-col-existing-container");
+            var newCont = document.getElementById("add-col-new-container");
+            if (existCont) existCont.style.display = (val === "existing") ? "block" : "none";
+            if (newCont) newCont.style.display = (val === "new") ? "block" : "none";
+            if (val === "new") {
+                suggestCollectionName();
+            }
+        }
+
+        function suggestCollectionName() {
+            var newColInp = document.getElementById("add-resource-new-col-name");
+            if (!newColInp || (newColInp.value && newColInp.getAttribute("data-user-edited") === "true")) return;
+            
+            var fileInput = document.getElementById("add-resource-file-input");
+            var urlInput = document.getElementById("add-resource-input");
+            var raw = "";
+            if (fileInput && fileInput.files && fileInput.files.length > 0) {
+                raw = fileInput.files[0].name;
+            } else if (urlInput && urlInput.value.trim()) {
+                raw = urlInput.value.trim();
+            }
+            if (!raw) return;
+
+            var name = "";
+            if (raw.indexOf("://") !== -1) {
+                try {
+                    var u = new URL(raw);
+                    var qParams = ["q", "query", "title", "name", "persistentId"];
+                    for (var i = 0; i < qParams.length; i++) {
+                        var qv = u.searchParams.get(qParams[i]);
+                        if (qv) {
+                            var cleanQv = qv.replace(/^doi:/i, "").replace(/[^a-zA-Z0-9_-]/g, " ").trim();
+                            if (cleanQv.length > 2) {
+                                name = cleanQv;
+                                break;
+                            }
+                        }
+                    }
+                    if (!name) {
+                        var parts = u.pathname.split("/").filter(function(p) { return p && !p.match(/\.(html|xhtml|php|asp)$/i); });
+                        if (parts.length > 0) {
+                            name = parts[parts.length - 1].replace(/\.[a-zA-Z0-9]+$/, "").replace(/[^a-zA-Z0-9_-]/g, " ").trim();
+                        }
+                    }
+                    if (!name) {
+                        var hostParts = u.hostname.split(".");
+                        name = hostParts.length >= 2 ? hostParts[hostParts.length - 2] : u.hostname;
+                    }
+                } catch(e) {
+                    name = raw.replace(/[^a-zA-Z0-9_-]/g, " ").trim();
+                }
+            } else {
+                var fname = raw.split("/").pop().split("\\").pop();
+                name = fname.replace(/\.[a-zA-Z0-9]+$/, "").replace(/[^a-zA-Z0-9_-]/g, " ").trim();
+            }
+
+            if (name) {
+                name = name.split(/\s+/).map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(" ");
+                newColInp.value = name;
+            }
+        }
+
+        function onResourceInputChanged() {
+            var opt = document.querySelector('input[name="add-col-option"]:checked');
+            if (opt && opt.value === "new") {
+                suggestCollectionName();
+            }
+        }
+
+        function onResourceFileChanged() {
+            var opt = document.querySelector('input[name="add-col-option"]:checked');
+            if (opt && opt.value === "new") {
+                suggestCollectionName();
+            }
+        }
+
+        async function handlePostIngestCollection(docId) {
+            var opt = document.querySelector('input[name="add-col-option"]:checked');
+            var val = opt ? opt.value : "none";
+            if (val === "none" || !docId) return;
+
+            if (val === "existing") {
+                var select = document.getElementById("add-resource-col-select");
+                var cid = select ? select.value : "";
+                if (cid) {
+                    try {
+                        await fetch("/api/collections/" + encodeURIComponent(cid) + "/add", {
+                            method: "POST",
+                            headers: {"Content-Type": "application/json"},
+                            body: JSON.stringify({docId: docId})
+                        });
+                    } catch(e) {
+                        console.error("Failed to add to existing collection:", e);
+                    }
+                }
+            } else if (val === "new") {
+                var newColInp = document.getElementById("add-resource-new-col-name");
+                var cname = newColInp ? newColInp.value.trim() : "";
+                if (cname) {
+                    try {
+                        await fetch("/api/collections", {
+                            method: "POST",
+                            headers: {"Content-Type": "application/json"},
+                            body: JSON.stringify({
+                                name: cname,
+                                description: "Created during ingestion of resource " + docId,
+                                items: [docId]
+                            })
+                        });
+                    } catch(e) {
+                        console.error("Failed to create new collection:", e);
+                    }
+                }
+            }
+        }
+
+        function submitAddResource() {
+            var fileInput = document.getElementById("add-resource-file-input");
+            var urlInput = document.getElementById("add-resource-input");
+            var cvEl = document.getElementById("add-resource-vision");
+            var cv = cvEl ? cvEl.checked : false;
+            var btn = document.getElementById("add-resource-submit");
+            var progContainer = document.getElementById("add-resource-progress-container");
+            var progText = document.getElementById("add-resource-status-text");
+            var progSubtext = document.getElementById("add-resource-status-subtext");
+            var progPercent = document.getElementById("add-resource-progress-percent");
+            var progBar = document.getElementById("add-resource-progress-bar");
+            var errBox = document.getElementById("add-resource-error");
+            
+            if (fileInput && fileInput.files && fileInput.files.length > 0) {
+                btn.disabled = true;
+                btn.innerText = "Processing...";
+                if (errBox) errBox.style.display = "none";
+                if (progContainer) progContainer.style.display = "block";
+                if (progText) progText.innerText = "Processing file with PaleFire OCR & Ingestion...";
+                if (progSubtext) progSubtext.innerText = "Uploading file to server...";
+                if (progBar) progBar.style.width = "15%";
+                if (progPercent) progPercent.innerText = "15%";
+
+                var progressInterval = setInterval(function() {
+                    var cur = parseInt(progBar ? progBar.style.width : "15") || 15;
+                    if (cur < 35) {
+                        cur += 5;
+                        if (progSubtext) progSubtext.innerText = "Extracting text and tables via PaleFire Tesseract OCR...";
+                    } else if (cur < 65) {
+                        cur += 3;
+                        if (progSubtext) progSubtext.innerText = "Detecting structured sheets and generating Excel & CSV...";
+                    } else if (cur < 90) {
+                        cur += 1;
+                        if (progSubtext) progSubtext.innerText = "Creating Croissant JSON-LD & saving to MinIO Vault...";
+                    }
+                    if (progBar) progBar.style.width = cur + "%";
+                    if (progPercent) progPercent.innerText = cur + "%";
+                }, 800);
+
+                var formData = new FormData();
+                formData.append("file", fileInput.files[0]);
+                if (cv) formData.append("vision", "true");
+                fetch("/api/generic/upload", {
+                    method: "POST",
+                    body: formData
+                })
+                .then(function(r) { return r.json().then(function(data) { return {ok: r.ok, data: data}; }); })
+                .then(async function(res) {
+                    clearInterval(progressInterval);
+                    if (res.ok && res.data.redirect_url) {
+                        if (progBar) progBar.style.width = "100%";
+                        if (progPercent) progPercent.innerText = "100%";
+                        if (progSubtext) progSubtext.innerText = "Updating collection & redirecting to Vault...";
+                        
+                        var docId = res.data.redirect_url.split("/vault/doc/")[1];
+                        if (docId) {
+                            docId = docId.split("?")[0].split("#")[0].replace(/\.md$/, "");
+                            await handlePostIngestCollection(docId);
+                        }
+                        setTimeout(function() {
+                            window.location.href = res.data.redirect_url;
+                        }, 400);
+                    } else {
+                        if (progContainer) progContainer.style.display = "none";
+                        if (errBox) {
+                            errBox.style.display = "block";
+                            errBox.innerText = "Error: " + (res.data.detail || "Upload failed");
+                        }
+                        btn.disabled = false;
+                        btn.innerText = "Ingest";
+                    }
+                })
+                .catch(function(err) {
+                    clearInterval(progressInterval);
+                    if (progContainer) progContainer.style.display = "none";
+                    if (errBox) {
+                        errBox.style.display = "block";
+                        errBox.innerText = "Upload error: " + err;
+                    }
+                    btn.disabled = false;
+                    btn.innerText = "Ingest";
+                });
+            } else if (urlInput && urlInput.value.trim()) {
+                var url = urlInput.value.trim();
+                var target = "/dataverse?url=" + encodeURIComponent(url) + (cv ? "&vision=true" : "");
+                
+                var opt = document.querySelector('input[name="add-col-option"]:checked');
+                var val = opt ? opt.value : "none";
+                if (val === "existing") {
+                    var select = document.getElementById("add-resource-col-select");
+                    if (select && select.value) {
+                        target += "&col_id=" + encodeURIComponent(select.value);
+                    }
+                } else if (val === "new") {
+                    var newColInp = document.getElementById("add-resource-new-col-name");
+                    if (newColInp && newColInp.value.trim()) {
+                        target += "&new_col_name=" + encodeURIComponent(newColInp.value.trim());
+                    }
+                }
+                window.location.href = target;
+            }
+        }
+    </script>
     </div>
 
     <script>

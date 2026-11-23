@@ -465,10 +465,7 @@ def render_html_template(file_path: str, request=None, auth_status=None):
     logo_url = os.environ.get("VAULT_LOGO_URL", "/logo.png")
     logo_html = f'<a href="/" style="display:flex; align-items:center; justify-content:center; text-decoration:none; padding: 5px; height: 100%; box-sizing: border-box;"><img src="{logo_url}" style="max-width: 250px; max-height: 100%; width: auto; height: 100%; object-fit: contain;" alt="Logo" /></a>' if logo_url else ""
     
-    footer_html = os.environ.get("VAULT_FOOTER_HTML", """            <span>Ghostwriter 2.0 UI | Semantic Croissant with CDIF 1.1 (v2.3)</span>
-            <span style="color: #ccc;">|</span>
-            <span>Created by <a href="https://codata.org" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CODATA</a> in <a href="https://cdif4eosc.eu" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CDIF4EOSC</a> under Grant Agreement 101292473</span>
-            <img src="https://www.cdif4eosc.eu/assets/images/eu_flag.svg" alt="EU Flag" style="height: 20px;">""")
+    footer_html = os.environ.get("VAULT_FOOTER_HTML", """            <span>Ghostwriter 2.0 UI | Semantic Croissant engine with CDIF playbook 1.1</span>""")
     
     html = html.replace('{{VAULT_LOGO_HTML}}', logo_html)
     html = html.replace('{{VAULT_FOOTER_HTML}}', footer_html)
@@ -5158,7 +5155,7 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="describe_resource",
-            description="Describes a resource (local file or URL) by generating a Croissant JSON-LD file and a Markdown summary file.",
+            description="Describes a resource (local file or URL) by generating a Croissant JSON-LD file and a Markdown summary file. Always extract the predicted value definition and units of measure, and map them into the 'value' field in the Croissant metadata.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -5520,44 +5517,88 @@ def main(port: int, transport: str) -> int:
 
         async def vault_es_doc_update(request):
             es_id = request.path_params["es_id"]
-            import json, os
+            if es_id.endswith(".md"):
+                es_id = es_id[:-3]
+            import json, os, re, io, asyncio
             import httpx
             from starlette.responses import JSONResponse
             body = await request.json()
             new_markdown = body.get("markdown")
             if not new_markdown:
                 return JSONResponse({"status": "error", "message": "No markdown provided"}, status_code=400)
-            
+
+            # Strip any UI-injected Croissant Dataset banner or Files & Distributions table if present
+            new_markdown = re.sub(
+                r"<div[^>]*>[\s\S]*?Croissant Dataset:[\s\S]*?View Croissant Dataset[\s\S]*?</div>\s*",
+                "",
+                new_markdown,
+                flags=re.IGNORECASE
+            )
+            new_markdown = re.sub(
+                r"\n+---\n### Files & Distributions\n\| File \| Title \| Format \| Size \| Download \| CDIF \| Tools \|[\s\S]*?(?=\n+---\n\*\*Digital Signature:\*\*|$)",
+                "",
+                new_markdown
+            )
+
+            minio_success = False
+            es_success = False
+
+            # 1. Always update MinIO Vault first (preserving top header button & Digital Signature if needed)
+            try:
+                m_client = get_minio_client()
+                existing_md = ""
+                try:
+                    r_old = await asyncio.to_thread(m_client.get_object, "vault", f"{es_id}.md")
+                    existing_md = r_old.read().decode("utf-8")
+                    r_old.close()
+                    r_old.release_conn()
+                except Exception:
+                    pass
+
+                header_part = ""
+                footer_part = ""
+                if existing_md:
+                    hm = re.match(r"^(\[View Croissant JSON-LD Data\][^\n]*\n+)", existing_md)
+                    if hm and "[View Croissant JSON-LD Data]" not in new_markdown:
+                        header_part = hm.group(1)
+                    fm = re.search(r"(\n*---\n\*\*Digital Signature:\*\*[\s\S]*)$", existing_md)
+                    if fm and "**Digital Signature:**" not in new_markdown:
+                        footer_part = "\n\n" + fm.group(1).lstrip()
+
+                final_md = header_part + new_markdown.strip() + (footer_part if footer_part else "\n")
+                data_bytes = final_md.encode("utf-8")
+                await asyncio.to_thread(
+                    m_client.put_object,
+                    "vault",
+                    f"{es_id}.md",
+                    io.BytesIO(data_bytes),
+                    len(data_bytes),
+                    content_type="text/markdown"
+                )
+                new_markdown = final_md
+                minio_success = True
+            except Exception as e:
+                import sys
+                print(f"MinIO Update error: {e}", file=sys.stderr)
+
+            # 2. Also update Elasticsearch across croissant and user indices
             es_url = get_vault_elasticsearch_url()
-            success = False
-            async with httpx.AsyncClient() as client:
-                try:
-                    update_body = {"doc": {"_markdown_text": new_markdown}}
-                    r = await client.post(f"{es_url}/croissant/_update/{es_id}", json=update_body)
-                    if r.status_code in (200, 201):
-                        success = True
-                except Exception as e:
-                    import sys
-                    print(f"ES Update error: {e}", file=sys.stderr)
-            
-            if not success:
-                # Try MinIO fallback
-                minio_base = get_minio_base_url()
-                try:
-                    from minio import Minio
-                    import io
-                    endpoint = minio_base.replace("http://", "").replace("https://", "")
-                    m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
-                    
-                    data_bytes = new_markdown.encode('utf-8')
-                    m_client.put_object("vault", es_id + ".md", io.BytesIO(data_bytes), len(data_bytes), content_type="text/markdown")
-                    success = True
-                except Exception as e:
-                    import sys
-                    print(f"MinIO Update error: {e}", file=sys.stderr)
-                    
-            if success:
-                return JSONResponse({"status": "success"})
+            local_es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                for base_u in {es_url, local_es_url}:
+                    if not base_u:
+                        continue
+                    try:
+                        update_body = {"doc": {"_markdown_text": new_markdown}, "doc_as_upsert": True}
+                        r = await client.post(f"{base_u}/croissant/_update/{es_id}", json=update_body)
+                        if r.status_code in (200, 201):
+                            es_success = True
+                    except Exception as e:
+                        import sys
+                        print(f"ES Update error ({base_u}): {e}", file=sys.stderr)
+
+            if minio_success or es_success:
+                return JSONResponse({"status": "success", "doc_id": es_id})
             else:
                 return JSONResponse({"status": "error", "message": "Failed to update document"}, status_code=500)
 
@@ -5592,6 +5633,7 @@ def main(port: int, transport: str) -> int:
             return Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
 
         async def vault_ask(request):
+            import asyncio, sys, os
             try:
                 data = await request.json()
                 question = data.get("question", "").strip()
@@ -5660,7 +5702,7 @@ def main(port: int, transport: str) -> int:
                 if doc_id:
                     try:
                         clean_id = doc_id.replace(".jsonld", "").replace(".md", "")
-                        # Fetch the full Croissant record from the Vault (try MinIO first, then fallback to local endpoint)
+                        # Fetch the full Croissant record from the Vault (try MinIO first, then local endpoints, then ES)
                         croissant_json = ""
                         try:
                             m_client = get_minio_client()
@@ -5669,28 +5711,73 @@ def main(port: int, transport: str) -> int:
                             j_resp.close()
                             j_resp.release_conn()
                         except Exception as m_err:
-                            # Fallback via local HTTP if MinIO direct call fails
+                            pass
+
+                        if not croissant_json:
+                            # Fallback to Elasticsearch search across configured ES nodes
                             try:
-                                import urllib.request
-                                with urllib.request.urlopen(f"http://127.0.0.1:7070/vault/doc/raw/{clean_id}.jsonld", timeout=5) as u_resp:
-                                    croissant_json = u_resp.read().decode("utf-8")
+                                import httpx, json
+                                es_urls = get_elasticsearch_lookup_urls()
+                                for es_base in es_urls:
+                                    try:
+                                        def do_es_post(u_val):
+                                            return httpx.post(
+                                                f"{u_val}/_search",
+                                                json={"query": {"ids": {"values": [clean_id]}}, "size": 1},
+                                                timeout=3.0
+                                            )
+                                        r_es = await asyncio.to_thread(do_es_post, es_base)
+                                        if r_es.status_code == 200:
+                                            hits = r_es.json().get("hits", {}).get("hits", [])
+                                            if hits:
+                                                croissant_doc_dict = hits[0].get("_source", {})
+                                                croissant_json = json.dumps(croissant_doc_dict)
+                                                break
+                                    except Exception:
+                                        pass
                             except Exception:
                                 pass
 
                         if croissant_json:
                             try:
                                 import json
-                                croissant_doc_dict = json.loads(croissant_json)
+                                if not croissant_doc_dict:
+                                    croissant_doc_dict = json.loads(croissant_json)
                             except Exception:
                                 pass
 
-                            # Build an explicit, high-level summary of the dataset distributions and count
+                            # Build an explicit, high-level summary of the dataset (title, creators, publisher, files)
                             if croissant_doc_dict:
+                                ds_name = croissant_doc_dict.get("name") or croissant_doc_dict.get("title") or ""
+                                ds_creators = []
+                                raw_creators = croissant_doc_dict.get("creator") or croissant_doc_dict.get("author") or []
+                                if isinstance(raw_creators, list):
+                                    for c in raw_creators:
+                                        if isinstance(c, dict):
+                                            c_nm = c.get("name") or f"{c.get('givenName', '')} {c.get('familyName', '')}".strip()
+                                            aff = c.get("affiliation", {})
+                                            aff_nm = aff.get("name") if isinstance(aff, dict) else (str(aff) if aff else "")
+                                            if c_nm:
+                                                ds_creators.append(f"{c_nm} ({aff_nm})" if aff_nm else c_nm)
+                                        elif isinstance(c, str) and c.strip():
+                                            ds_creators.append(c.strip())
+                                elif isinstance(raw_creators, dict):
+                                    c_nm = raw_creators.get("name") or ""
+                                    if c_nm: ds_creators.append(c_nm)
+                                elif isinstance(raw_creators, str) and raw_creators.strip():
+                                    ds_creators.append(raw_creators.strip())
+
+                                ds_pub = croissant_doc_dict.get("publisher", {})
+                                ds_pub_name = ds_pub.get("name") if isinstance(ds_pub, dict) else (str(ds_pub) if ds_pub else "")
+                                ds_date = croissant_doc_dict.get("datePublished") or croissant_doc_dict.get("dateModified") or ""
+                                ds_desc = croissant_doc_dict.get("description") or ""
+
                                 dists_list = croissant_doc_dict.get("distribution") or croissant_doc_dict.get("fileObject") or []
+                                total_files = len(dists_list) if isinstance(dists_list, list) else 0
+                                ext_summary = ""
+                                sample_names = []
                                 if isinstance(dists_list, list):
-                                    total_files = len(dists_list)
                                     ext_counts = {}
-                                    sample_names = []
                                     for d_item in dists_list:
                                         if isinstance(d_item, dict):
                                             nm = d_item.get("name", "")
@@ -5699,28 +5786,300 @@ def main(port: int, transport: str) -> int:
                                             if len(sample_names) < 15 and nm:
                                                 sample_names.append(nm)
                                     ext_summary = ", ".join(f"{k}: {v}" for k, v in sorted(ext_counts.items(), key=lambda x: -x[1]))
-                                    croissant_summary_snippet = (
-                                        f"=== CROISSANT DATASET FILES SUMMARY (Record: {clean_id}) ===\n"
-                                        f"- Total Distribution Files in Dataset: {total_files}\n"
-                                        f"- Total Number of Files / Distributions in Dataset: {total_files}\n"
-                                        f"- File Formats Breakdown: {ext_summary}\n"
-                                        f"- Sample Files (first {len(sample_names)}): {', '.join(sample_names)}\n\n"
-                                    )
 
-                                # If distributions list is massive (e.g. hundreds of items), trim the distribution array inside the JSON-LD snippet
-                                # to preserve complete dataset metadata (name, creators, datePublished, license, description) under LLM context limits
+                                croissant_summary_snippet = (
+                                    f"=== CROISSANT DATASET SUMMARY (Record: {clean_id}) ===\n"
+                                    f"- Dataset Title / Name: {ds_name}\n"
+                                    f"- Authors / Creators: {', '.join(ds_creators) if ds_creators else 'Not specified'}\n"
+                                    f"- Publisher: {ds_pub_name or 'Not specified'}\n"
+                                    f"- Publication Date: {ds_date or 'Not specified'}\n"
+                                    f"- Total Files / Distributions: {total_files}\n"
+                                    f"- File Types Breakdown: {ext_summary or 'None'}\n"
+                                    f"- Sample Files: {', '.join(sample_names) if sample_names else 'None'}\n"
+                                    f"- Description: {ds_desc[:300]}...\n\n"
+                                )
+
+                                # If distributions or recordSets are massive, trim them to preserve complete metadata
                                 jsonld_to_inject = croissant_json
-                                if croissant_doc_dict and isinstance(croissant_doc_dict.get("distribution"), list) and len(croissant_doc_dict["distribution"]) > 15:
+                                need_trim = (
+                                    (isinstance(croissant_doc_dict.get("distribution"), list) and len(croissant_doc_dict["distribution"]) > 10) or
+                                    (isinstance(croissant_doc_dict.get("recordSet"), list) and len(croissant_doc_dict["recordSet"]) > 0) or
+                                    len(croissant_json) > 15000
+                                )
+                                if need_trim:
                                     import copy, json
                                     trimmed_doc = copy.deepcopy(croissant_doc_dict)
-                                    trimmed_doc["distribution"] = trimmed_doc["distribution"][:10]
-                                    trimmed_doc["distribution_note"] = f"Showing first 10 of {total_files} distributions. See CROISSANT DATASET FILES SUMMARY above for complete totals and format breakdown."
-                                    trimmed_doc["distribution_total_count"] = total_files
-                                    trimmed_doc["distribution_note"] = f"CRITICAL: The complete dataset contains {total_files} files in total. Only the first 10 sample files are shown in this array snippet for brevity."
+                                    if isinstance(trimmed_doc.get("distribution"), list):
+                                        trimmed_doc["distribution"] = trimmed_doc["distribution"][:10]
+                                        trimmed_doc["distribution_total_count"] = total_files
+                                        trimmed_doc["distribution_note"] = f"CRITICAL: The complete dataset contains {total_files} files in total. Only the first 10 sample files are shown in this array snippet for brevity."
+                                    if "recordSet" in trimmed_doc and isinstance(trimmed_doc["recordSet"], list):
+                                        trimmed_rs = []
+                                        for rs_item in trimmed_doc["recordSet"][:2]:
+                                            if isinstance(rs_item, dict):
+                                                rs_copy = copy.deepcopy(rs_item)
+                                                if "field" in rs_copy and isinstance(rs_copy["field"], list) and len(rs_copy["field"]) > 15:
+                                                    total_flds = len(rs_copy["field"])
+                                                    rs_copy["field"] = rs_copy["field"][:10]
+                                                    rs_copy["field_total_count"] = total_flds
+                                                    rs_copy["field_note"] = f"Showing first 10 of {total_flds} fields in this recordSet."
+                                                trimmed_rs.append(rs_copy)
+                                            else:
+                                                trimmed_rs.append(rs_item)
+                                        trimmed_doc["recordSet"] = trimmed_rs
+                                        if len(trimmed_doc["recordSet"]) < len(croissant_doc_dict.get("recordSet", [])):
+                                            trimmed_doc["recordSet_note"] = f"Showing first {len(trimmed_rs)} of {len(croissant_doc_dict['recordSet'])} recordSets for brevity."
                                     jsonld_to_inject = json.dumps(trimmed_doc, indent=2)
 
-                            context_text = croissant_summary_snippet + "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + jsonld_to_inject + "\n\n" + context_text
-                            context_text = f"IMPORTANT DATASET OVERVIEW:\n- Total files in dataset: {total_files}\n\n" + croissant_summary_snippet + "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + jsonld_to_inject + "\n\n" + context_text
+                                # Check if there are datamaps JSON-LD distributions in MinIO and build a complete page-by-page index
+                                datamaps_page_summary = ""
+                                try:
+                                    dm_keys = []
+                                    if isinstance(dists_list, list):
+                                        for d_item in dists_list:
+                                            if isinstance(d_item, dict):
+                                                did = str(d_item.get("@id", ""))
+                                                durl = str(d_item.get("contentUrl", ""))
+                                                if did.startswith("datamaps/") and did.endswith(".json"):
+                                                    dm_keys.append((did, durl or f"/vault/{did}"))
+                                                elif "/vault/datamaps/" in durl and durl.endswith(".json"):
+                                                    k = durl.split("/vault/")[-1]
+                                                    dm_keys.append((k, durl))
+                                    if dm_keys:
+                                        m_client = get_minio_client()
+                                        dm_pages = []
+                                        q_lower = question.lower()
+                                        matched_loc_details = []
+                                        for dm_key, dm_url in dm_keys:
+                                            try:
+                                                r_dm = m_client.get_object("vault", dm_key)
+                                                dm_obj = json.loads(r_dm.read().decode("utf-8"))
+                                                r_dm.close()
+                                                r_dm.release_conn()
+                                                pg = dm_obj.get("page")
+                                                side = dm_obj.get("side") or ""
+                                                vtitle = dm_obj.get("variable_page_title") or os.path.basename(dm_key)
+                                                leg = dm_obj.get("legend") or []
+                                                leg_str = " | ".join(leg[:2]) if leg else ""
+                                                obs_graph = dm_obj.get("@graph") or []
+                                                color_ranges = dm_obj.get("color_ranges") or {}
+                                                color_palette = dm_obj.get("color_palette") or {}
+                                                active_locs = []
+                                                for obs in obs_graph:
+                                                    lnm = obs.get("name", "")
+                                                    col = obs.get("color", "Unknown")
+                                                    hx = obs.get("hex") or obs.get("palette_hex") or ""
+                                                    p_hx = obs.get("palette_hex") or hx
+                                                    val = obs.get("value", "")
+                                                    vr = obs.get("value_range") or obs.get("value_percentage") or obs.get("value_temperature") or ""
+                                                    ar = obs.get("absolute_range") or ""
+                                                    lbl = obs.get("label") or ""
+                                                    anom = obs.get("anomaly", "")
+                                                    # Also resolve from color_palette or color_ranges if present
+                                                    cp_info = (color_palette.get(p_hx) or color_palette.get(hx) or {}) if isinstance(color_palette, dict) else {}
+                                                    cr_info = color_ranges.get(col, {}) if isinstance(color_ranges, dict) else {}
+                                                    if not p_hx:
+                                                        p_hx = cp_info.get("hex") or cr_info.get("hex") or ""
+                                                    if (not vr or vr in ("Unknown", "N/A")) and (cp_info.get("value_range") or cr_info.get("value_range")) not in (None, "Unknown", "N/A"):
+                                                        vr = cp_info.get("value_range") if cp_info.get("value_range") not in (None, "Unknown", "N/A") else cr_info.get("value_range")
+                                                    if (not ar or ar in ("Unknown", "N/A")) and (cp_info.get("absolute_range") or cr_info.get("absolute_range")) not in (None, "Unknown", "N/A"):
+                                                        ar = cp_info.get("absolute_range") if cp_info.get("absolute_range") not in (None, "Unknown", "N/A") else cr_info.get("absolute_range")
+                                                    if (not lbl or lbl in ("Unknown", "N/A")) and (cp_info.get("label") or cr_info.get("label")) not in (None, "Unknown", "N/A"):
+                                                        lbl = cp_info.get("label") if cp_info.get("label") not in (None, "Unknown", "N/A") else cr_info.get("label")
+                                                    range_parts = []
+                                                    if vr and vr not in ("Unknown", "N/A", "No Map"):
+                                                        range_parts.append(f"Range={vr}")
+                                                    if ar and ar not in ("Unknown", "N/A") and ar != vr:
+                                                        range_parts.append(f"Absolute={ar}")
+                                                    if lbl and lbl not in ("Unknown", "N/A") and lbl != vr:
+                                                        range_parts.append(f"Label={lbl}")
+                                                    range_desc = ", ".join(range_parts) if range_parts else (val if val not in ("Unknown", "Unknown (Unknown)") else "N/A")
+                                                    col_hex = f"{col} ({hx})" if hx else col
+                                                    has_valid_data = col not in ("Unknown", "No Map", "Map White") and (col != "Grey" or (vr and vr not in ("Unknown", "N/A", "No Map")) or (ar and ar not in ("Unknown", "N/A")))
+                                                    if has_valid_data:
+                                                        active_locs.append(f"{lnm}:{col_hex}" + (f"[{vr or ar}]" if (vr or ar) and (vr or ar) not in ("Unknown", "N/A") else ""))
+                                                    if lnm and (lnm.lower() in q_lower or (lnm == "Bay Islands" and ("islas" in q_lower or "bahia" in q_lower or "bahía" in q_lower or "guanaja" in q_lower or "roatan" in q_lower))):
+                                                        if col not in ("Unknown", "No Map") and range_desc not in ("No Map", "N/A"):
+                                                            lat_lon_str = f" (Coords: `{obs.get('latitude')}, {obs.get('longitude')}`)" if obs.get("latitude") is not None else ""
+                                                            matched_loc_details.append((pg or 999, side, f"- **Page {pg} ({side})** — `{vtitle}`" + (f" | Legend Text: _{leg_str}_" if leg_str else "") + f" | **{lnm}**{lat_lon_str}: Color=`{col}`" + (f" (Hex=`{hx}`, PaletteHex=`{p_hx}`)" if hx and hx != "N/A" else "") + f", Legend Range=`{range_desc}` | File: `{os.path.basename(dm_key)}`"))
+                                                if isinstance(color_palette, dict) and color_palette:
+                                                    cr_summary = ", ".join(f"{cv.get('color', ck)} ({ck}): {cv.get('value_range') if cv.get('value_range') not in (None, 'N/A', 'Unknown') else cv.get('absolute_range', 'N/A')}" + (f" ({cv.get('label')})" if cv.get('label') not in (None, 'N/A', 'Unknown') else "") for ck, cv in color_palette.items())
+                                                elif isinstance(color_ranges, dict) and color_ranges:
+                                                    cr_summary = ", ".join(f"{ck}: {cv.get('value_range') if cv.get('value_range') not in (None, 'N/A', 'Unknown') else cv.get('absolute_range', 'N/A')}" + (f" ({cv.get('label')})" if cv.get('label') not in (None, 'N/A', 'Unknown') else "") for ck, cv in color_ranges.items())
+                                                else:
+                                                    cr_summary = ""
+                                                if active_locs:
+                                                    dm_pages.append((pg or 999, side, f"Page {pg} ({side}): {vtitle}" + (f" [Legend Text: {leg_str}]" if leg_str else "") + (f" [Color Palette Scale: {cr_summary}]" if cr_summary else "") + f" -> Departments: {', '.join(active_locs)} (File: {os.path.basename(dm_key)})"))
+                                            except Exception:
+                                                pass
+                                        dm_pages.sort(key=lambda x: (x[0], x[1]))
+                                        matched_loc_details.sort(key=lambda x: (x[0], x[1]))
+                                        datamaps_page_summary = f"=== DATAMAPS PAGE-BY-PAGE SPATIAL EXTRACTIONS ({len(dm_pages)} active map datasets across all 28 pages) ===\n"
+                                        if matched_loc_details:
+                                            datamaps_page_summary += f"COMPLETE MATCHING LOCATION DATA ACROSS ALL {len(matched_loc_details)} MAPS (YOU MUST LIST EVERY SINGLE ONE OF THESE {len(matched_loc_details)} PAGES IN YOUR ANSWER WITH ITS PAGE NUMBER, SIDE, COLOR, HEX CODE, AND LEGEND RANGE):\n" + "\n".join(x[2] for x in matched_loc_details) + "\n\n"
+                                        datamaps_page_summary += "ALL PAGES MAP SUMMARY:\n" + "\n".join(x[2] for x in dm_pages) + "\n\n"
+                                except Exception as dm_sum_err:
+                                    print(f"Warning: datamaps_page_summary error: {dm_sum_err}")
+
+                                # Also load any *_cdif.jsonld file from distribution (e.g. PaleFire polygon CDIF exports)
+                                cdif_file_summary = ""
+                                try:
+                                    cdif_keys = [
+                                        d.get("name") or d.get("@id")
+                                        for d in (croissant_doc_dict.get("distribution") or [])
+                                        if isinstance(d, dict) and str(d.get("name") or d.get("@id") or "").endswith("_cdif.jsonld")
+                                    ]
+                                    for ckey in cdif_keys[:2]:
+                                        try:
+                                            c_resp = m_client.get_object("vault", ckey)
+                                            c_data = json.loads(c_resp.read().decode("utf-8"))
+                                            c_resp.close()
+                                            c_resp.release_conn()
+                                            obs_list = c_data.get("observations") or []
+                                            range_by_color = {
+                                                lb.get("color_name") or lb.get("label"): lb.get("label")
+                                                for lb in (c_data.get("legend") or [])
+                                                if isinstance(lb, dict)
+                                            }
+                                            q_low = question.lower()
+                                            matched_obs = [o for o in obs_list if o.get("name") and o["name"].lower() in q_low]
+                                            geo_note = ""
+                                            if not matched_obs and obs_list:
+                                                # Geocode place name from question via Nominatim to resolve department/region or nearest observation
+                                                import re as _re, urllib.request as _ureq, urllib.parse as _uparse
+                                                place_m = _re.search(r'\b(?:in|of|at|for|near)\s+([A-Z][a-zA-ZÀ-ÿ\-]+(?:\s+[A-Z][a-zA-ZÀ-ÿ\-]+)*)', question)
+                                                place_q = place_m.group(1) if place_m else ""
+                                                if place_q:
+                                                    try:
+                                                        nom_url = f"https://nominatim.openstreetmap.org/search?q={_uparse.quote(place_q)}&format=json&addressdetails=1&limit=1"
+                                                        nom_req = _ureq.Request(nom_url, headers={"User-Agent": "SemanticCroissant/1.0"})
+                                                        with _ureq.urlopen(nom_req, timeout=5) as nr:
+                                                            nom_res = json.loads(nr.read().decode("utf-8"))
+                                                        if nom_res:
+                                                            addr = nom_res[0].get("address", {})
+                                                            admin_cands = [
+                                                                str(addr.get(k, "")).lower()
+                                                                for k in ("county", "state_district", "state", "region", "province")
+                                                                if addr.get(k)
+                                                            ]
+                                                            matched_obs = [
+                                                                o for o in obs_list
+                                                                if o.get("name") and any(o["name"].lower() in ac or ac in o["name"].lower() for ac in admin_cands)
+                                                            ]
+                                                            if not matched_obs:
+                                                                # Nearest observation by lat/lon
+                                                                qlat, qlon = float(nom_res[0]["lat"]), float(nom_res[0]["lon"])
+                                                                with_coords = [o for o in obs_list if o.get("latitude") is not None and o.get("longitude") is not None]
+                                                                if with_coords:
+                                                                    nearest = min(with_coords, key=lambda o: (float(o["latitude"]) - qlat)**2 + (float(o["longitude"]) - qlon)**2)
+                                                                    matched_obs = [nearest]
+                                                            if matched_obs:
+                                                                geo_note = f"(Geocoded '{place_q}' -> {', '.join(addr.get(k) for k in ('county', 'state', 'country') if addr.get(k))})\n"
+                                                            # If spatialTransform + map image exist, sample exact pixel color at (qlat, qlon)
+                                                            st = c_data.get("spatialTransform")
+                                                            if st and st.get("lonlat_affine"):
+                                                                try:
+                                                                    import fitz
+                                                                    img_keys = [
+                                                                        d.get("name") or d.get("@id")
+                                                                        for d in (croissant_doc_dict.get("distribution") or [])
+                                                                        if isinstance(d, dict) and str(d.get("encodingFormat", "")).startswith("image/")
+                                                                    ]
+                                                                    if img_keys:
+                                                                        im_resp = m_client.get_object("vault", img_keys[0])
+                                                                        pix = fitz.Pixmap(im_resp.read())
+                                                                        im_resp.close()
+                                                                        im_resp.release_conn()
+                                                                        a, b, d_aff, e_aff, xoff, yoff = st["lonlat_affine"]
+                                                                        qlon, qlat = float(nom_res[0]["lon"]), float(nom_res[0]["lat"])
+                                                                        px = int(round(a * qlon + b * qlat + xoff))
+                                                                        py = int(round(d_aff * qlon + e_aff * qlat + yoff))
+                                                                        if 0 <= px < pix.width and 0 <= py < pix.height:
+                                                                            legend_list = c_data.get("legend") or []
+                                                                            best_lb = None
+                                                                            best_dist = float("inf")
+                                                                            pbgr = [0, 0, 0]
+                                                                            phex = "#000000"
+                                                                            # Check exact center pixel first; expand to 15x15 only if center is background/border/ocean
+                                                                            offsets = [(0, 0)] + [(dx, dy) for dy in range(-3, 4) for dx in range(-3, 4) if (dx, dy) != (0, 0)]
+                                                                            for dx, dy in offsets:
+                                                                                sx, sy = px + dx, py + dy
+                                                                                if 0 <= sx < pix.width and 0 <= sy < pix.height:
+                                                                                    pv = pix.pixel(sx, sy)
+                                                                                    r_px, g_px, b_px = pv[0], pv[1], pv[2]
+                                                                                    if (r_px > 235 and g_px > 235 and b_px > 235) or (r_px < 45 and g_px < 45 and b_px < 45) or (b_px > 225 and g_px > 205 and r_px < 215):
+                                                                                        continue
+                                                                                    cand_bgr = [int(b_px), int(g_px), int(r_px)]
+                                                                                    for lb in legend_list:
+                                                                                        d_c = sum((u - v) ** 2 for u, v in zip(cand_bgr, lb.get("bgr", [0, 0, 0])))
+                                                                                        if d_c < best_dist:
+                                                                                            best_dist = d_c
+                                                                                            best_lb = lb
+                                                                                            pbgr = cand_bgr
+                                                                                            phex = "#{:02x}{:02x}{:02x}".format(r_px, g_px, b_px)
+                                                                                    if dx == 0 and dy == 0 and best_lb is not None:
+                                                                                        break
+                                                                            if best_lb:
+                                                                                geo_note = f"PRECISE POINT SAMPLE for '{place_q}' ({nom_res[0]['lat']}, {nom_res[0]['lon']}) at pixel ({px}, {py}): Color={phex}, Climate/Legend={best_lb.get('label')}\n" + geo_note
+                                                                except Exception:
+                                                                    pass
+                                                    except Exception:
+                                                        pass
+                                            rows_to_show = matched_obs if matched_obs else obs_list[:60]
+                                            obs_lines = []
+                                            for o in rows_to_show:
+                                                vrange = o.get("value_range") or range_by_color.get(o.get("color_name", ""), "")
+                                                val_display = o.get("value") if o.get("value") not in (None, "", "N/A", "None") else (f"{vrange} (from Value_Range)" if vrange else "N/A")
+                                                obs_lines.append(
+                                                    f"- {o.get('name')} (GeoID: {o.get('geoid')}, Lat/Lon: {o.get('latitude')}, {o.get('longitude')}): Color={o.get('color_name')} ({o.get('color_hex')}), Value={val_display}, Value_Range={vrange or 'N/A'}, Legend={o.get('legend_label')}"
+                                                )
+                                            cdif_file_summary += f"=== CDIF OBSERVATIONS ({ckey}, {len(obs_list)} total) ===\n" + geo_note + "\n".join(obs_lines) + "\n\n"
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+
+                                # Also load any .csv distribution from MinIO vault
+                                try:
+                                    csv_keys = [
+                                        d.get("name") or d.get("@id")
+                                        for d in (croissant_doc_dict.get("distribution") or [])
+                                        if isinstance(d, dict) and str(d.get("name") or d.get("@id") or "").endswith(".csv")
+                                    ]
+                                    for csv_key in csv_keys[:2]:
+                                        try:
+                                            csv_resp = m_client.get_object("vault", csv_key)
+                                            csv_text = csv_resp.read().decode("utf-8", errors="replace")
+                                            csv_resp.close()
+                                            csv_resp.release_conn()
+                                            csv_lines = csv_text.splitlines()[:150]
+                                            cdif_file_summary += f"=== CSV DATA ({csv_key}) ===\n" + "\n".join(csv_lines) + "\n\n"
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+
+                                # Also load any .csv distribution from MinIO vault
+                                try:
+                                    csv_keys = [
+                                        d.get("name") or d.get("@id")
+                                        for d in (croissant_doc_dict.get("distribution") or [])
+                                        if isinstance(d, dict) and str(d.get("name") or d.get("@id") or "").endswith(".csv")
+                                    ]
+                                    for csv_key in csv_keys[:2]:
+                                        try:
+                                            csv_resp = m_client.get_object("vault", csv_key)
+                                            csv_text = csv_resp.read().decode("utf-8", errors="replace")
+                                            csv_resp.close()
+                                            csv_resp.release_conn()
+                                            csv_lines = csv_text.splitlines()[:150]
+                                            cdif_file_summary += f"=== CSV DATA ({csv_key}) ===\n" + "\n".join(csv_lines) + "\n\n"
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+
+                                context_text = f"IMPORTANT DATASET OVERVIEW:\n- Title: {ds_name}\n- Authors / Creators: {', '.join(ds_creators) if ds_creators else 'Unknown'}\n- Total files: {total_files}\n\n" + croissant_summary_snippet + datamaps_page_summary + cdif_file_summary + "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + jsonld_to_inject + "\n\n" + context_text
                     except Exception as doc_err:
                         print(f"Warning: doc_id handling error in vault_ask: {doc_err}")
                 model_name = data.get("model", OLLAMA_DEFAULT_MODEL).strip()
@@ -5942,27 +6301,52 @@ def main(port: int, transport: str) -> int:
                                         "ValueAndConceptDescription", "MeasureComponent"
                                     }
                                     if isinstance(models, list):
-                                        cdif_data["DDICDIModels"] = [m for m in models if isinstance(m, dict) and m.get("@type") not in heavy_types]
+                                        filtered_models = [m for m in models if isinstance(m, dict) and m.get("@type") not in heavy_types]
+                                        # InstanceVariable can have hundreds/thousands of columns. Cap them to prevent context overflow.
+                                        iv_models = [m for m in filtered_models if m.get("@type") == "InstanceVariable"]
+                                        non_iv_models = [m for m in filtered_models if m.get("@type") != "InstanceVariable"]
+                                        if len(iv_models) > 20:
+                                            total_ivs = len(iv_models)
+                                            sample_iv_names = [m.get("name", {}).get("name") if isinstance(m.get("name"), dict) else str(m.get("name", "")) for m in iv_models[:15]]
+                                            iv_models = iv_models[:15]
+                                            non_iv_models.append({
+                                                "@type": "VariableSummary",
+                                                "totalVariables": total_ivs,
+                                                "sampleVariables": sample_iv_names,
+                                                "note": f"Showing first 15 of {total_ivs} instance variables. Full list trimmed to fit context."
+                                            })
+                                        cdif_data["DDICDIModels"] = non_iv_models + iv_models
 
                                     cdif_json_str = json.dumps(cdif_data, indent=2)
+                                    if len(cdif_json_str) > 8000:
+                                        cdif_json_str = cdif_json_str[:8000] + "\n... [CDIF models payload truncated for length]"
                                     cdif_snippets.append(f"{cdif_stat_summary}=== CDIF (DDI-CDI) EXPORT ({exp_target}) ===\n{cdif_json_str}\n{sample_table_str}")
                             except Exception as exp_err:
                                 print(f"Warning: Failed to fetch CDIF export for QA prompt ({exp_target}): {exp_err}")
 
                     if cdif_snippets:
-                        context_text = "\n\n".join(cdif_snippets) + "\n\n" + context_text
+                        context_text = context_text + "\n\n" + "\n\n".join(cdif_snippets)
                 except Exception as ex_cdif:
                     print(f"Warning: Error processing CDIF export for QA prompt: {ex_cdif}")
                     
+                qa_instruction = "Please answer the question based ONLY on the context provided above (including the downloaded file content and DATAMAPS PAGE-BY-PAGE SPATIAL EXTRACTIONS if available). Always state explicitly: (1) EVERY page and side (e.g., Page 2 Right, Page 4 Left/Right, Page 5 Left/Right, Page 6 Left/Right, Pages 7-19 Left/Right, etc.) and JSON-LD map file where data is available (do NOT stop after the first page—list all matching pages!), and (2) the exact color name, hex code (#RRGGBB), coordinates, and numerical value range / absolute range / label from the map legend corresponding to the observed color."
                 prompt = f"""Context:
 {context_text}
 
 Question: {question}
 
-Please answer the question based ONLY on the context provided above (including the downloaded file content if available), or by using your tools if you need to fetch additional files or data."""
+{qa_instruction}"""
 
                 # Clean any null characters or control characters that could break C/POSIX subprocess or shells
                 prompt = prompt.replace("\x00", "").replace("\r", "")
+
+                # Safety guard: Ensure overall prompt never exceeds Ollama context limits (~32k characters max)
+                MAX_PROMPT_CHARS = 32000
+                if len(prompt) > MAX_PROMPT_CHARS:
+                    # Keep question and prompt instructions intact at the end
+                    suffix = f"\n\nQuestion: {question}\n\n{qa_instruction}"
+                    allowed_ctx_len = MAX_PROMPT_CHARS - len(suffix) - 50
+                    prompt = f"Context:\n{context_text[:allowed_ctx_len]}\n... [Context truncated to fit model context limit]\n{suffix}"
 
                 import asyncio
                 import subprocess
@@ -5974,10 +6358,16 @@ Please answer the question based ONLY on the context provided above (including t
                 def run_agent():
                     env = os.environ.copy()
                     env["MCP_URL"] = "http://localhost:7070/sse"
-                    ollama_h = os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444")
+                    ollama_h = os.environ.get("OLLAMA_HOST", "http://host.docker.internal:11434")
+                    if os.path.exists("/.dockerenv") and ("localhost:" in ollama_h or "127.0.0.1:" in ollama_h):
+                        ollama_h = ollama_h.replace("localhost:", "host.docker.internal:").replace("127.0.0.1:", "host.docker.internal:")
                     env["OLLAMA_HOST"] = ollama_h
                     env["MODEL"] = model_name
                     env["OLLAMA_TOKEN"] = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY") or "test-api-key-12345"
+                    if "SYSTEM_PROMPT" not in os.environ:
+                        env["SYSTEM_PROMPT"] = "You are an expert AI data analyst assistant connected to an MCP tool ecosystem. When context is already provided in the prompt, answer the user's question directly, accurately, and concisely based on the provided context. Only invoke MCP tools if additional external data not already in the context is explicitly required."
+                    if "USER_PROMPT_TEMPLATE" not in os.environ:
+                        env["USER_PROMPT_TEMPLATE"] = "{query}"
                     
                     proc = subprocess.run(
                         ["python3", "/app/agents/agent_reference_script.py", "-q", "-"],
@@ -6013,30 +6403,34 @@ Please answer the question based ONLY on the context provided above (including t
 
         async def vault_models(request):
             import os, httpx
-            ollama_host = os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444")
+            ollama_host = os.environ.get("OLLAMA_HOST", "http://host.docker.internal:11434").strip()
+            if os.path.exists("/.dockerenv") and ("localhost:" in ollama_host or "127.0.0.1:" in ollama_host):
+                ollama_host = ollama_host.replace("localhost:", "host.docker.internal:").replace("127.0.0.1:", "host.docker.internal:")
             ollama_token = os.environ.get("OLLAMA_TOKEN") or os.environ.get("OLLAMA_API_KEY")
             headers = {}
             if ollama_token:
                 headers["Authorization"] = f"Bearer {ollama_token}"
             try:
                 import json
-                endpoints = ["http://10.147.18.24:11434", "http://10.147.18.24:11444"]
-                if ollama_host and ollama_host not in endpoints:
-                    endpoints.insert(0, ollama_host)
-                    endpoints.append(ollama_host)
-                if "http://10.147.18.82:11435" not in endpoints:
-                    endpoints.append("http://10.147.18.82:11435")
-                cfg_candidates = ["gateway_config.json", os.path.join(os.path.dirname(__file__), "gateway_config.json")]
-                for cfg_file in cfg_candidates:
-                    if os.path.exists(cfg_file):
-                        try:
-                            with open(cfg_file, "r") as f:
-                                cfg = json.load(f)
-                                for ep in cfg.get("ollama_endpoints", []):
-                                    if ep not in endpoints:
-                                        endpoints.append(ep)
-                        except Exception:
-                            pass
+                endpoints = []
+                if ollama_host:
+                    endpoints.append(ollama_host.rstrip("/"))
+                for env_k in ("OLLAMA_HOST_2", "OLLAMA_HOST_3"):
+                    extra_ep = os.environ.get(env_k, "").strip().rstrip("/")
+                    if extra_ep and extra_ep not in endpoints:
+                        endpoints.append(extra_ep)
+                if not endpoints:
+                    cfg_candidates = ["gateway_config.json", os.path.join(os.path.dirname(__file__), "gateway_config.json")]
+                    for cfg_file in cfg_candidates:
+                        if os.path.exists(cfg_file):
+                            try:
+                                with open(cfg_file, "r") as f:
+                                    cfg = json.load(f)
+                                    for ep in cfg.get("ollama_endpoints", []):
+                                        if ep not in endpoints:
+                                            endpoints.append(ep)
+                            except Exception:
+                                pass
                 
                 all_models = []
                 seen_ids = set()
@@ -6054,11 +6448,6 @@ Please answer the question based ONLY on the context provided above (including t
                         except Exception as e:
                             print(f"Failed to fetch models from {ep}: {e}")
                             
-                # Ensure OLLAMA_DEFAULT_MODEL alias is available and prioritized
-                if OLLAMA_DEFAULT_MODEL not in seen_ids:
-                    all_models.insert(0, {"id": OLLAMA_DEFAULT_MODEL, "object": "model", "created": 1788289193, "owned_by": "ollama.com"})
-                    seen_ids.add(OLLAMA_DEFAULT_MODEL)
-
                 # Sort models so OLLAMA_DEFAULT_MODEL is first
                 all_models.sort(key=lambda m: 0 if m.get("id") == OLLAMA_DEFAULT_MODEL else (1 if "cloud" in m.get("id", "") else 2))
 
@@ -6272,7 +6661,9 @@ Please answer the question based ONLY on the context provided above (including t
 
         async def proxy_vault(request):
             filename = request.path_params["filename"]
-            if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".json") and not filename.endswith(".gz") and not filename.endswith(".csv"):
+            KNOWN_VAULT_EXTS = ('.md', '.jsonld', '.json', '.gz', '.csv', '.xlsx', '.xls', '.ods', '.tsv', '.html',
+                                '.jpg', '.jpeg', '.png', '.webp', '.tiff', '.bmp', '.pdf', '.txt', '.doc', '.docx')
+            if not any(filename.lower().endswith(ext) for ext in KNOWN_VAULT_EXTS):
                 filename += ".md"
             minio_base = get_minio_base_url()
             from minio import Minio
@@ -6500,21 +6891,36 @@ Please answer the question based ONLY on the context provided above (including t
                 signposting_links = [
                     f'<{base_url}/vault/{filename}>; rel="cite-as"',
                     f'<{base_url}/vault/{filename}.jsonld>; rel="describedby" type="application/ld+json"',
-                    f'<{base_url}/vault/{filename}>; rel="item" type="text/markdown"',
                     '<https://schema.org/Dataset>; rel="type"',
                     '<https://creativecommons.org/licenses/by/4.0/>; rel="license"'
                 ]
+                if filename.endswith(".md"):
+                    signposting_links.append(f'<{base_url}/vault/{filename}>; rel="item" type="text/markdown"')
+                elif filename.endswith(".csv"):
+                    signposting_links.append(f'<{base_url}/vault/{filename}>; rel="item" type="text/csv"')
                 
                 headers = {
                     "Link": ", ".join(signposting_links),
-                    "X-Fair-Signposting": "enabled"
+                    "X-Fair-Signposting": "enabled",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Expose-Headers": "Link, Content-Disposition, Content-Type, Content-Length"
                 }
                 
-                media_type = "text/markdown; charset=utf-8"
-                if filename.endswith(".jsonld") or filename.endswith(".jsonld.gz"):
+                import mimetypes
+                guessed_type, _ = mimetypes.guess_type(filename)
+                media_type = guessed_type or "text/markdown; charset=utf-8"
+                if filename.endswith(".jsonld") or filename.endswith(".jsonld.gz") or filename.endswith(".json"):
                     media_type = "application/ld+json; charset=utf-8"
                 elif filename.endswith(".csv"):
-                    media_type = "text/csv"
+                    media_type = "text/csv; charset=utf-8"
+                elif filename.endswith(".xlsx"):
+                    media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                elif filename.endswith(".tsv"):
+                    media_type = "text/tab-separated-values; charset=utf-8"
+                elif filename.endswith(".md"):
+                    media_type = "text/markdown; charset=utf-8"
                 
                 if filename.endswith(".gz"):
                     headers["Content-Encoding"] = "gzip"
@@ -6680,6 +7086,29 @@ Please answer the question based ONLY on the context provided above (including t
                     return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
                 except Exception as e:
                     return JSONResponse({"error": f"Failed to reach Palefire spatial query service: {str(e)}"}, status_code=502)
+
+        async def proxy_mcp_geoid(request):
+            """Proxy geoid reverse geocode and docid search requests to palefire-api."""
+            import httpx
+            from starlette.responses import Response, JSONResponse
+            body = await request.body()
+            headers = dict(request.headers)
+            headers.pop("host", None)
+            palefire_base = os.environ.get("PALEFIRE_SERVER_URL", "http://palefire-api:8000")
+            geoid_url = f"{palefire_base.rstrip('/')}/api/geoid"
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                try:
+                    resp = await client.request(
+                        request.method,
+                        geoid_url,
+                        headers=headers,
+                        params=dict(request.query_params),
+                        content=body
+                    )
+                    return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+                except Exception as e:
+                    return JSONResponse({"error": f"Failed to reach Palefire GeoID service: {str(e)}"}, status_code=502)
+
 
         async def export_to_cdif(request):
             """
@@ -7409,6 +7838,7 @@ Please answer the question based ONLY on the context provided above (including t
                         resp_headers = stream_resp.headers
                         content_type_header = resp_headers.get("content-type", "").lower()
                         cd = resp_headers.get("content-disposition", "")
+                        filename = None
                         if "filename=" in cd or "filename*=" in cd:
                             m = re.search(r"filename\*?=['\"]?(?:UTF-8'')?([^;'\"]+)", cd)
                             if m:
@@ -8677,14 +9107,16 @@ Please answer the question based ONLY on the context provided above (including t
             if not is_authorized:
                 return Response(json.dumps({"detail": "Unauthorized: Invalid API Key"}), status_code=401, media_type="application/json")
                 
-            endpoints = config.get("ollama_endpoints", [])
-            env_endpoint = os.environ.get("OLLAMA_HOST", "http://10.147.18.24:11444")
-            if "http://10.147.18.24:11444" not in endpoints:
-                endpoints.insert(0, "http://10.147.18.24:11444")
-            if "http://10.147.18.24:11434" not in endpoints:
-                endpoints.append("http://10.147.18.24:11434")
-            if env_endpoint and env_endpoint not in endpoints:
+            endpoints = []
+            env_endpoint = os.environ.get("OLLAMA_HOST")
+            if env_endpoint:
                 endpoints.append(env_endpoint)
+            for ep in config.get("ollama_endpoints", []):
+                if ep not in endpoints:
+                    endpoints.append(ep)
+            for fallback_ep in ["http://10.147.18.24:11444", "http://10.147.18.24:11434"]:
+                if fallback_ep not in endpoints:
+                    endpoints.append(fallback_ep)
                 
             if not endpoints:
                 return Response(json.dumps({"detail": "Gateway Error: No backend Ollama endpoints configured"}), status_code=500, media_type="application/json")
@@ -8708,7 +9140,11 @@ Please answer the question based ONLY on the context provided above (including t
             async def get_all_models_and_mapping():
                 all_models = []
                 model_to_endpoint = {}
-                async with httpx.AsyncClient(timeout=10.0) as temp_client:
+                # Also include headers for endpoints that need Ollama authentication
+                ep_headers = {}
+                if env_key:
+                    ep_headers["Authorization"] = f"Bearer {env_key}"
+                async with httpx.AsyncClient(timeout=10.0, headers=ep_headers) as temp_client:
                     for ep in endpoints:
                         try:
                             resp = await temp_client.get(f"{ep}/api/tags")
@@ -11496,6 +11932,50 @@ Instructions:
                 if doc_id.endswith(".md"):
                     doc_id = doc_id[:-3]
                 redirect_url = f"/vault/doc/{doc_id}"
+
+                if col_id_param:
+                    try:
+                        m_client = get_minio_client()
+                        resp = m_client.get_object("collections", f"{col_id_param}.json")
+                        c_data = json.loads(resp.read().decode("utf-8"))
+                        resp.close()
+                        resp.release_conn()
+                        if "items" not in c_data: c_data["items"] = []
+                        if doc_id not in c_data["items"]:
+                            c_data["items"].append(doc_id)
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{col_id_param}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{col_id_param}", json=c_data)
+                    except Exception as e_col:
+                        print(f"Warning: Failed to add item {doc_id} to collection {col_id_param}: {e_col}")
+                elif new_col_name_param:
+                    try:
+                        import uuid, datetime, io
+                        cid = str(uuid.uuid4())
+                        c_data = {
+                            "id": cid,
+                            "name": new_col_name_param.strip(),
+                            "description": f"Created during ingestion of resource {doc_id}",
+                            "link": "",
+                            "parent_id": None,
+                            "is_supercollection": False,
+                            "is_private": False,
+                            "owner": None,
+                            "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+                            "items": [doc_id]
+                        }
+                        m_client = get_minio_client()
+                        if not m_client.bucket_exists("collections"):
+                            m_client.make_bucket("collections")
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{cid}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{cid}", json=c_data)
+                    except Exception as e_new_col:
+                        print(f"Warning: Failed to create new collection {new_col_name_param}: {e_new_col}")
                     
                 return JSONResponse({"status": "success", "redirect_url": redirect_url})
                 
@@ -11514,6 +11994,8 @@ Instructions:
             dataset_pid = request.query_params.get("datasetPid")
             site_url_param = request.query_params.get("siteUrl")
             vision_param = request.query_params.get("vision", "").lower() in ("true", "1", "yes")
+            col_id_param = request.query_params.get("col_id")
+            new_col_name_param = request.query_params.get("new_col_name")
             
             if not callback and not direct_url and not dataset_pid:
                 return JSONResponse({"detail": "Missing callback, url, or datasetPid parameter"}, status_code=400)
@@ -11590,6 +12072,50 @@ Instructions:
                 if doc_id.endswith(".md"):
                     doc_id = doc_id[:-3]
                 redirect_url = f"/vault/doc/{doc_id}"
+
+                if col_id_param:
+                    try:
+                        m_client = get_minio_client()
+                        resp = m_client.get_object("collections", f"{col_id_param}.json")
+                        c_data = json.loads(resp.read().decode("utf-8"))
+                        resp.close()
+                        resp.release_conn()
+                        if "items" not in c_data: c_data["items"] = []
+                        if doc_id not in c_data["items"]:
+                            c_data["items"].append(doc_id)
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{col_id_param}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{col_id_param}", json=c_data)
+                    except Exception as e_col:
+                        print(f"Warning: Failed to add item {doc_id} to collection {col_id_param}: {e_col}")
+                elif new_col_name_param:
+                    try:
+                        import uuid, datetime, io
+                        cid = str(uuid.uuid4())
+                        c_data = {
+                            "id": cid,
+                            "name": new_col_name_param.strip(),
+                            "description": f"Created during ingestion of resource {doc_id}",
+                            "link": "",
+                            "parent_id": None,
+                            "is_supercollection": False,
+                            "is_private": False,
+                            "owner": None,
+                            "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+                            "items": [doc_id]
+                        }
+                        m_client = get_minio_client()
+                        if not m_client.bucket_exists("collections"):
+                            m_client.make_bucket("collections")
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{cid}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{cid}", json=c_data)
+                    except Exception as e_new_col:
+                        print(f"Warning: Failed to create new collection {new_col_name_param}: {e_new_col}")
                     
                 return JSONResponse({"status": "success", "redirect_url": redirect_url})
                 
@@ -13779,6 +14305,50 @@ Output a JSON object with:
                 if doc_id.endswith(".md"):
                     doc_id = doc_id[:-3]
                 redirect_url = f"/vault/doc/{doc_id}"
+
+                if col_id_param:
+                    try:
+                        m_client = get_minio_client()
+                        resp = m_client.get_object("collections", f"{col_id_param}.json")
+                        c_data = json.loads(resp.read().decode("utf-8"))
+                        resp.close()
+                        resp.release_conn()
+                        if "items" not in c_data: c_data["items"] = []
+                        if doc_id not in c_data["items"]:
+                            c_data["items"].append(doc_id)
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{col_id_param}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{col_id_param}", json=c_data)
+                    except Exception as e_col:
+                        print(f"Warning: Failed to add item {doc_id} to collection {col_id_param}: {e_col}")
+                elif new_col_name_param:
+                    try:
+                        import uuid, datetime, io
+                        cid = str(uuid.uuid4())
+                        c_data = {
+                            "id": cid,
+                            "name": new_col_name_param.strip(),
+                            "description": f"Created during ingestion of resource {doc_id}",
+                            "link": "",
+                            "parent_id": None,
+                            "is_supercollection": False,
+                            "is_private": False,
+                            "owner": None,
+                            "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+                            "items": [doc_id]
+                        }
+                        m_client = get_minio_client()
+                        if not m_client.bucket_exists("collections"):
+                            m_client.make_bucket("collections")
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{cid}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{cid}", json=c_data)
+                    except Exception as e_new_col:
+                        print(f"Warning: Failed to create new collection {new_col_name_param}: {e_new_col}")
                     
                 return JSONResponse({"status": "success", "redirect_url": redirect_url})
                 
@@ -14024,11 +14594,11 @@ Output a JSON object with:
 
         async def view_add(request):
             import os
-            from starlette.responses import FileResponse
+            from starlette.responses import HTMLResponse
             file_path = os.path.join(os.path.dirname(__file__), "static/generic_loading.html")
             if not os.path.exists(file_path):
                 file_path = "api/static/generic_loading.html"
-            return FileResponse(file_path)
+            return HTMLResponse(content=render_html_template(file_path, request=request))
 
         async def process_generic(request):
             import asyncio
@@ -14038,18 +14608,51 @@ Output a JSON object with:
             
             url = request.query_params.get("url")
             vision_param = request.query_params.get("vision", "").lower() in ("true", "1", "yes")
+            col_id_param = request.query_params.get("col_id")
+            new_col_name_param = request.query_params.get("new_col_name")
+            host_param = request.query_params.get("host")
+            
+            if not url:
+                try:
+                    body = await request.json()
+                    if isinstance(body, dict):
+                        url = body.get("url") or url
+                        if "vision" in body:
+                            vision_param = bool(body.get("vision"))
+                        if "host" in body:
+                            host_param = body.get("host") or host_param
+                except Exception:
+                    pass
             
             if not url:
                 return JSONResponse({"detail": "Missing url parameter"}, status_code=400)
             
             try:
+                # Resolve relative or test file paths if target exists on disk
+                resolved_url = url
+                if not url.startswith("http://") and not url.startswith("https://") and not os.path.exists(resolved_url):
+                    base_dirs = ["/app/palefire", "/mediaquantum/qlever/semantic-croissant/palefire", "/mediaquantum/qlever/semantic-croissant", "/app", os.getcwd()]
+                    for b in base_dirs:
+                        cand = os.path.join(b, url.lstrip("/"))
+                        if os.path.exists(cand):
+                            resolved_url = cand
+                            break
+
+                client_host = host_param
+                if not client_host:
+                    client_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+                if not client_host:
+                    client_host = os.environ.get("HOST") or os.environ.get("MCP_DOMAIN")
+
                 script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../convertors/url_to_croissant.py"))
                 if not os.path.exists(script_path):
                     script_path = "convertors/url_to_croissant.py"
                     
-                cmd = ["python3", script_path, url, "--elastic"]
+                cmd = ["python3", script_path, resolved_url, "--elastic"]
                 if vision_param:
                     cmd.append("--computer-vision")
+                if client_host:
+                    cmd.extend(["--host", str(client_host).strip()])
                 
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -14081,11 +14684,180 @@ Output a JSON object with:
                 if doc_id.endswith(".md"):
                     doc_id = doc_id[:-3]
                 redirect_url = f"/vault/doc/{doc_id}"
+
+                if col_id_param:
+                    try:
+                        m_client = get_minio_client()
+                        resp = m_client.get_object("collections", f"{col_id_param}.json")
+                        c_data = json.loads(resp.read().decode("utf-8"))
+                        resp.close()
+                        resp.release_conn()
+                        if "items" not in c_data: c_data["items"] = []
+                        if doc_id not in c_data["items"]:
+                            c_data["items"].append(doc_id)
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{col_id_param}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{col_id_param}", json=c_data)
+                    except Exception as e_col:
+                        print(f"Warning: Failed to add item {doc_id} to collection {col_id_param}: {e_col}")
+                elif new_col_name_param:
+                    try:
+                        import uuid, datetime, io
+                        cid = str(uuid.uuid4())
+                        c_data = {
+                            "id": cid,
+                            "name": new_col_name_param.strip(),
+                            "description": f"Created during ingestion of resource {doc_id}",
+                            "link": "",
+                            "parent_id": None,
+                            "is_supercollection": False,
+                            "is_private": False,
+                            "owner": None,
+                            "created_at": datetime.datetime.utcnow().isoformat() + "Z",
+                            "items": [doc_id]
+                        }
+                        m_client = get_minio_client()
+                        if not m_client.bucket_exists("collections"):
+                            m_client.make_bucket("collections")
+                        content = json.dumps(c_data).encode("utf-8")
+                        m_client.put_object("collections", f"{cid}.json", io.BytesIO(content), len(content), content_type="application/json")
+                        import httpx
+                        async with httpx.AsyncClient() as cl:
+                            await cl.put(f"http://elasticsearch:9200/collections/_doc/{cid}", json=c_data)
+                    except Exception as e_new_col:
+                        print(f"Warning: Failed to create new collection {new_col_name_param}: {e_new_col}")
                     
                 return JSONResponse({"status": "success", "redirect_url": redirect_url})
                 
             except Exception as e:
                 print(f"Error processing generic url: {e}")
+                return JSONResponse({"detail": str(e)}, status_code=500)
+
+        async def process_generic_upload(request):
+            import asyncio
+            import re
+            import os
+            import shutil
+            from starlette.responses import JSONResponse
+            
+            try:
+                form = await request.form()
+                file_obj = form.get("file")
+                vision_val = form.get("vision", "false")
+                vision_param = str(vision_val).lower() in ("true", "1", "yes", "on")
+                host_val = form.get("host")
+                
+                if not file_obj or not hasattr(file_obj, "filename") or not file_obj.filename:
+                    return JSONResponse({"detail": "No file uploaded"}, status_code=400)
+                    
+                filename = file_obj.filename
+                upload_dir = "/tmp/palefire_uploads"
+                os.makedirs(upload_dir, exist_ok=True)
+                tmp_path = os.path.join(upload_dir, filename)
+                
+                with open(tmp_path, "wb") as buffer:
+                    shutil.copyfileobj(file_obj.file, buffer)
+                    
+                client_host = host_val
+                if not client_host:
+                    client_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+                if not client_host:
+                    client_host = os.environ.get("HOST") or os.environ.get("MCP_DOMAIN")
+
+                script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../convertors/url_to_croissant.py"))
+                if not os.path.exists(script_path):
+                    script_path = "convertors/url_to_croissant.py"
+                    
+                cmd = ["python3", script_path, tmp_path, "--elastic"]
+                if vision_param:
+                    cmd.append("--computer-vision")
+                else:
+                    cmd.extend(["--engine", "tesseract"])
+                if client_host:
+                    cmd.extend(["--host", str(client_host).strip()])
+                    
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await process.communicate()
+                
+                if process.returncode != 0:
+                    return JSONResponse({"detail": f"File processing failed: {stderr.decode('utf-8')}"}, status_code=500)
+                    
+                output = stdout.decode('utf-8')
+                match = re.search(r"Extracted markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+                translated_match = re.search(r"Translated markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+                
+                if translated_match:
+                    redirect_url = translated_match.group(1)
+                elif match:
+                    redirect_url = match.group(1)
+                else:
+                    file_match = re.search(r"Extracted markdown saved to [^/]+/([^/]+)/([a-zA-Z0-9_-]+\.md)", output)
+                    if file_match:
+                        redirect_url = f"/vault/doc/{file_match.group(2)}"
+                    else:
+                        return JSONResponse({"detail": "Could not determine generated filename from output"}, status_code=500)
+                        
+                doc_id = redirect_url.rstrip("/").split("/")[-1]
+                if doc_id.endswith(".md"):
+                    doc_id = doc_id[:-3]
+                redirect_url = f"/vault/doc/{doc_id}"
+
+                # Ensure CDIF JSON-LD is generated and registered in MinIO vault
+                try:
+                    import csv as _csv, hashlib as _hashlib, io as _io
+                    _m = get_minio_client()
+                    _jld = json.loads(_m.get_object("vault", f"{doc_id}.jsonld").read().decode("utf-8"))
+                    _dists = _jld.get("distribution") or []
+                    if isinstance(_dists, dict):
+                        _dists = [_dists]
+                    if not any(str(d.get("@id") or d.get("name") or "").endswith("_cdif.jsonld") for d in _dists if isinstance(d, dict)):
+                        _rows = []
+                        try:
+                            _csv_txt = _m.get_object("vault", f"{doc_id}.csv").read().decode("utf-8", errors="replace")
+                            _rows = list(_csv.DictReader(_io.StringIO(_csv_txt)))
+                        except Exception:
+                            pass
+                        _cols = list(_rows[0].keys()) if _rows else ["value"]
+                        _cdif = {
+                            "@context": [
+                                "https://ddialliance.org/Specification/DDI-CDI/1.0/context.jsonld",
+                                {"schema": "https://schema.org/", "cr": "http://mlcommons.org/croissant/", "cdif": "https://w3id.org/cdif/core/1.1/"},
+                            ],
+                            "@type": ["schema:Dataset", "cr:Dataset"],
+                            "conformsTo": ["https://w3id.org/cdif/core/1.1", "https://ddialliance.org/Specification/DDI-CDI/1.0/"],
+                            "schema:name": _jld.get("name") or doc_id,
+                            "schema:description": _jld.get("description") or "",
+                            "DDICDIModels": [{"@type": "InstanceVariable", "@id": f"#var-{c}", "name": {"name": c}} for c in _cols],
+                            "observations": _rows,
+                        }
+                        _cb = json.dumps(_cdif, indent=2, ensure_ascii=False).encode("utf-8")
+                        _m.put_object("vault", f"{doc_id}_cdif.jsonld", _io.BytesIO(_cb), len(_cb), content_type="application/ld+json")
+                        _host_pfx = f"https://{client_host}" if client_host and "http" not in str(client_host) else (str(client_host).rstrip("/") if client_host else "http://localhost:7070")
+                        _dists.insert(0, {
+                            "@type": "cr:FileObject",
+                            "@id": f"{doc_id}_cdif.jsonld",
+                            "name": f"{doc_id}_cdif.jsonld",
+                            "description": "DDI-CDI / CDIF JSON-LD observations",
+                            "contentUrl": f"{_host_pfx}/vault/{doc_id}_cdif.jsonld",
+                            "encodingFormat": "application/ld+json",
+                            "contentSize": f"{len(_cb)} B",
+                            "sha256": _hashlib.sha256(_cb).hexdigest(),
+                        })
+                        _jld["distribution"] = _dists
+                        _jb = json.dumps(_jld, indent=2, ensure_ascii=False).encode("utf-8")
+                        _m.put_object("vault", f"{doc_id}.jsonld", _io.BytesIO(_jb), len(_jb), content_type="application/ld+json")
+                except Exception as _cdif_err:
+                    print(f"Warning: auto-CDIF generation in MCP upload failed: {_cdif_err}", flush=True)
+
+                return JSONResponse({"status": "success", "redirect_url": redirect_url})
+            except Exception as e:
+                print(f"Error in generic upload: {e}")
                 return JSONResponse({"detail": str(e)}, status_code=500)
         
     if transport == "sse":
@@ -14114,6 +14886,7 @@ Output a JSON object with:
                 Route("/add", endpoint=view_add),
                 Route("/url", endpoint=view_add),
                 Route("/api/generic/process", endpoint=process_generic, methods=["POST"]),
+                Route("/api/generic/upload", endpoint=process_generic_upload, methods=["POST"]),
                 Route("/collectionsindex", endpoint=view_collections_index),
                 Route("/variableindex", endpoint=view_variables_index),
                 Route("/validate", endpoint=view_validate_html),
@@ -14166,6 +14939,8 @@ Output a JSON object with:
                 Route("/api/export", endpoint=export_to_cdif, methods=["GET", "POST"]),
                 Route("/spatial-query", endpoint=proxy_mcp_spatial_query, methods=["GET", "POST"]),
                 Route("/api/spatial-query", endpoint=proxy_mcp_spatial_query, methods=["GET", "POST"]),
+                Route("/geoid", endpoint=proxy_mcp_geoid, methods=["GET", "POST"]),
+                Route("/api/geoid", endpoint=proxy_mcp_geoid, methods=["GET", "POST"]),
                 Route("/vault/doc/{es_id}", endpoint=vault_es_doc_html),
                 Route("/vault/doc/{es_id}/annotations", endpoint=vault_es_doc_html),
                 Route("/vault/history", endpoint=vault_get_history, methods=["GET"]),
@@ -14176,8 +14951,8 @@ Output a JSON object with:
                 Route("/vault/approve/{es_id}", endpoint=vault_approve_highlight, methods=["POST"]),
                 Route("/vault/doc/raw/{es_id}", endpoint=vault_es_doc_raw),
                 Route("/vault/print/{es_id}", endpoint=vault_es_doc_raw),
-                Route("/vault/{filename}", endpoint=proxy_vault),
-                Route("/downloads/{filename}", endpoint=proxy_downloads),
+                Route("/vault/{filename:path}", endpoint=proxy_vault),
+                Route("/downloads/{filename:path}", endpoint=proxy_downloads),
                 Route("/expert/{index_name}", endpoint=proxy_expert, methods=["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"]),
                 Route("/expert/{index_name}/{path:path}", endpoint=proxy_expert, methods=["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"]),
                 Route("/gateway/v1/tools", endpoint=gateway_tools, methods=["GET"]),

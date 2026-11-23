@@ -1,4 +1,9 @@
 from fastapi import FastAPI, Request, BackgroundTasks
+from pydantic import BaseModel
+from typing import Optional
+class GenericProcessRequest(BaseModel):
+    url: Optional[str] = None
+    vision: bool = False
 import os
 import time
 import subprocess
@@ -16,6 +21,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 from fastapi.staticfiles import StaticFiles
@@ -154,9 +160,11 @@ DATA_DIR = "/data"
 INDEX_DIR = "/volumes/server"
 DATA_FILE = os.path.join(DATA_DIR, "data.nt")
 QLEVER_FILE = os.path.join(INDEX_DIR, "Qleverfile")
+QLEVER_URL = os.environ.get("QLEVER_URL", "http://server:7011").rstrip("/")
+PROFILE_NAME = os.environ.get("PROFILE_NAME", "default")
 
 def generate_qleverfile():
-    content = """[data]
+    content = f"""[data]
 NAME = croissant
 GET_DATA_CMD = cat data.nt > croissant.nt
 INDEX_INPUT_FILES = croissant.nt
@@ -164,10 +172,10 @@ INDEX_INPUT_FILES = croissant.nt
 [server]
 PORT = 7011
 ACCESS_TOKEN = croissant_7643543846_Zs6nw7yi3Z9m
-HOST_NAME = server-croissant-live
+HOST_NAME = {PROFILE_NAME}-server
 
 [runtime]
-SERVER_CONTAINER = codata-server
+SERVER_CONTAINER = {PROFILE_NAME}-server
 SYSTEM = native
 """
     with open(QLEVER_FILE, "w") as f:
@@ -189,7 +197,7 @@ def rebuild_index():
         
         # 2. Restart QLever Server
         subprocess.run(
-            ["docker", "restart", "codata-server"],
+            ["docker", "restart", f"{PROFILE_NAME}-server"],
             check=True
         )
         print("Index rebuild completed and server restarted.", flush=True)
@@ -250,7 +258,7 @@ async def add_record(request: Request, background_tasks: BackgroundTasks, rebuil
         if nt_data.strip():
             insert_query = f"INSERT DATA {{ {nt_data} }}".encode("utf-8")
             req = urllib.request.Request(
-                "http://server:7041/", 
+                f"{QLEVER_URL}/", 
                 data=insert_query,
                 headers={
                     "Content-type": "application/sparql-update",
@@ -309,7 +317,7 @@ def search_datasets(q: str):
         }} LIMIT 5000
         """
         
-        url = "http://server:7041/"
+        url = f"{QLEVER_URL}/"
         data = urllib.parse.urlencode({"query": query}).encode('ascii')
         req = urllib.request.Request(url, data=data, headers={"User-Agent": "curl/7.68.0"})
         try:
@@ -369,7 +377,7 @@ def get_datasets_properties(dataset_ids):
     """
     
     encoded = urllib.parse.urlencode({"query": sparql}).encode("utf-8")
-    url = "http://server:7041/"
+    url = f"{QLEVER_URL}/"
     req = urllib.request.Request(
         url, 
         data=encoded,
@@ -517,22 +525,76 @@ async def process_dspace(url: str):
     return croissant
 
 @app.post("/api/generic/process")
-async def process_generic(url: str = None, vision: bool = False):
+async def process_generic(
+    request: Request,
+    url: str = None,
+    vision: bool = False,
+    host: str = None,
+    engine: str = None,
+    ollama_visual_model: str = None
+):
     import asyncio
     import re
     from fastapi import HTTPException
     
     if not url:
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                url = body.get("url") or url
+                if "vision" in body:
+                    vision = bool(body.get("vision"))
+                if "host" in body:
+                    host = body.get("host") or host
+                if "engine" in body:
+                    engine = body.get("engine") or engine
+                if "ollama_visual_model" in body:
+                    ollama_visual_model = body.get("ollama_visual_model") or ollama_visual_model
+                elif "OLLAMA_VISUAL_MODEL" in body:
+                    ollama_visual_model = body.get("OLLAMA_VISUAL_MODEL") or ollama_visual_model
+        except Exception:
+            pass
+    if not url:
         raise HTTPException(status_code=400, detail="Missing required parameter url")
         
     import os
+    # Resolve relative or test file paths if target exists on disk
+    resolved_url = url
+    if not url.startswith("http://") and not url.startswith("https://") and not os.path.exists(resolved_url):
+        base_dirs = ["/app/palefire", "/mediaquantum/qlever/semantic-croissant/palefire", "/mediaquantum/qlever/semantic-croissant", "/app", os.getcwd()]
+        for b in base_dirs:
+            cand = os.path.join(b, url.lstrip("/"))
+            if os.path.exists(cand):
+                resolved_url = cand
+                break
+
+    # Determine host: explicit parameter > Host header > environment variable
+    client_host = host
+    # If client_host was passed with legacy or incorrect tld .ai, normalize to .eu unless explicitly configured
+    if client_host:
+        client_host = str(client_host).strip()
+        if "ai.mediaquantum.ai" in client_host:
+            client_host = client_host.replace("ai.mediaquantum.ai", "ai.mediaquantum.eu")
+    if not client_host:
+        client_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if not client_host:
+        client_host = os.environ.get("HOST") or os.environ.get("MCP_DOMAIN") or "ai.mediaquantum.eu"
+    if client_host and "ai.mediaquantum.ai" in str(client_host):
+        client_host = str(client_host).replace("ai.mediaquantum.ai", "ai.mediaquantum.eu")
+
     script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../convertors/url_to_croissant.py"))
     if not os.path.exists(script_path):
         script_path = "convertors/url_to_croissant.py"
         
-    cmd = ["python3", script_path, url, "--elastic"]
+    cmd = ["python3", script_path, resolved_url, "--elastic"]
     if vision:
         cmd.append("--computer-vision")
+    if client_host:
+        cmd.extend(["--host", str(client_host).strip()])
+    if engine:
+        cmd.extend(["--engine", str(engine).strip()])
+    if ollama_visual_model:
+        cmd.extend(["--ollama-visual-model", str(ollama_visual_model).strip()])
     
     process = await asyncio.create_subprocess_exec(
         *cmd,
@@ -562,7 +624,188 @@ async def process_generic(url: str = None, vision: bool = False):
             
     if redirect_url.startswith("http"):
         redirect_url = "/vault/doc/" + redirect_url.split("/vault/")[-1]
+
+    # Ensure CDIF JSON-LD is generated and registered for uploaded files with CSV data
+    try:
+        import csv as _csv, hashlib as _hashlib, io as _io
+        from minio import Minio as _Minio
+        _doc_id = redirect_url.rstrip("/").split("/")[-1].replace(".md", "")
+        _m_url = os.environ.get("MINIO_URL", "http://minio:9000").replace("http://", "").replace("https://", "")
+        _m = _Minio(_m_url, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
+        _jld = json.loads(_m.get_object("vault", f"{_doc_id}.jsonld").read().decode("utf-8"))
+        _dists = _jld.get("distribution") or []
+        if isinstance(_dists, dict):
+            _dists = [_dists]
+        _has_cdif = any(str(d.get("@id") or d.get("name") or "").endswith("_cdif.jsonld") for d in _dists if isinstance(d, dict))
+        if not _has_cdif:
+            _rows = []
+            try:
+                _csv_txt = _m.get_object("vault", f"{_doc_id}.csv").read().decode("utf-8", errors="replace")
+                _rows = list(_csv.DictReader(_io.StringIO(_csv_txt)))
+            except Exception:
+                pass
+            _cols = list(_rows[0].keys()) if _rows else ["value"]
+            _cdif = {
+                "@context": [
+                    "https://ddialliance.org/Specification/DDI-CDI/1.0/context.jsonld",
+                    {"schema": "https://schema.org/", "cr": "http://mlcommons.org/croissant/", "cdif": "https://w3id.org/cdif/core/1.1/"},
+                ],
+                "@type": ["schema:Dataset", "cr:Dataset"],
+                "conformsTo": ["https://w3id.org/cdif/core/1.1", "https://ddialliance.org/Specification/DDI-CDI/1.0/"],
+                "schema:name": _jld.get("name") or _doc_id,
+                "schema:description": _jld.get("description") or "",
+                "DDICDIModels": [{"@type": "InstanceVariable", "@id": f"#var-{c}", "name": {"name": c}} for c in _cols],
+                "observations": _rows,
+            }
+            _cb = json.dumps(_cdif, indent=2, ensure_ascii=False).encode("utf-8")
+            _m.put_object("vault", f"{_doc_id}_cdif.jsonld", _io.BytesIO(_cb), len(_cb), content_type="application/ld+json")
+            _host_pfx = f"https://{client_host}" if client_host and "http" not in str(client_host) else (str(client_host).rstrip("/") if client_host else "http://localhost:7070")
+            _dists.insert(0, {
+                "@type": "cr:FileObject",
+                "@id": f"{_doc_id}_cdif.jsonld",
+                "name": f"{_doc_id}_cdif.jsonld",
+                "description": "DDI-CDI / CDIF JSON-LD observations",
+                "contentUrl": f"{_host_pfx}/vault/{_doc_id}_cdif.jsonld",
+                "encodingFormat": "application/ld+json",
+                "contentSize": f"{len(_cb)} B",
+                "sha256": _hashlib.sha256(_cb).hexdigest(),
+            })
+            _jld["distribution"] = _dists
+            _jb = json.dumps(_jld, indent=2, ensure_ascii=False).encode("utf-8")
+            _m.put_object("vault", f"{_doc_id}.jsonld", _io.BytesIO(_jb), len(_jb), content_type="application/ld+json")
+    except Exception as _cdif_err:
+        print(f"Warning: auto-CDIF generation in upload failed: {_cdif_err}", flush=True)
+
+    return {"status": "success", "redirect_url": redirect_url}
+
+
+@app.post("/api/generic/upload")
+async def process_generic_upload(request: Request):
+    import os
+    import tempfile
+    import shutil
+    import asyncio
+    import re
+    from fastapi import HTTPException
+    
+    form = await request.form()
+    file_obj = form.get("file")
+    vision_val = form.get("vision", "false")
+    vision = str(vision_val).lower() in ("true", "1", "yes", "on")
+    host_val = form.get("host")
+    engine = form.get("engine")
+    ollama_visual_model = form.get("ollama_visual_model")
+    
+    if not file_obj or not hasattr(file_obj, "filename") or not file_obj.filename:
+        raise HTTPException(status_code=400, detail="No file uploaded")
         
+    filename = file_obj.filename
+    upload_dir = "/tmp/palefire_uploads"
+    os.makedirs(upload_dir, exist_ok=True)
+    tmp_path = os.path.join(upload_dir, filename)
+    
+    with open(tmp_path, "wb") as buffer:
+        shutil.copyfileobj(file_obj.file, buffer)
+        
+    client_host = host_val
+    if not client_host:
+        client_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if not client_host:
+        client_host = os.environ.get("HOST") or os.environ.get("MCP_DOMAIN")
+
+    script_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../convertors/url_to_croissant.py"))
+    if not os.path.exists(script_path):
+        script_path = "convertors/url_to_croissant.py"
+        
+    cmd = ["python3", script_path, tmp_path, "--elastic"]
+    if vision:
+        cmd.append("--computer-vision")
+    if client_host:
+        cmd.extend(["--host", str(client_host).strip()])
+    if engine:
+        cmd.extend(["--engine", str(engine).strip()])
+    if ollama_visual_model:
+        cmd.extend(["--ollama-visual-model", str(ollama_visual_model).strip()])
+        
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await process.communicate()
+    
+    if process.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"File processing failed: {stderr.decode('utf-8')}")
+        
+    output = stdout.decode('utf-8')
+    match = re.search(r"Extracted markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+    translated_match = re.search(r"Translated markdown successfully uploaded to vault: (https?://.*?/vault/[^\s]+)", output)
+    
+    if translated_match:
+        redirect_url = translated_match.group(1)
+    elif match:
+        redirect_url = match.group(1)
+    else:
+        file_match = re.search(r"Extracted markdown saved to [^/]+/([^/]+)/([a-zA-Z0-9_-]+\.md)", output)
+        if file_match:
+            redirect_url = f"/vault/doc/{file_match.group(2)}"
+        else:
+            raise HTTPException(status_code=500, detail="Could not determine generated filename from output")
+            
+    if redirect_url.startswith("http"):
+        redirect_url = "/vault/doc/" + redirect_url.split("/vault/")[-1]
+
+    # Ensure CDIF JSON-LD is generated and registered for uploaded files with CSV data
+    try:
+        import csv as _csv, hashlib as _hashlib, io as _io
+        from minio import Minio as _Minio
+        _doc_id = redirect_url.rstrip("/").split("/")[-1].replace(".md", "")
+        _m_url = os.environ.get("MINIO_URL", "http://minio:9000").replace("http://", "").replace("https://", "")
+        _m = _Minio(_m_url, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
+        _jld = json.loads(_m.get_object("vault", f"{_doc_id}.jsonld").read().decode("utf-8"))
+        _dists = _jld.get("distribution") or []
+        if isinstance(_dists, dict):
+            _dists = [_dists]
+        _has_cdif = any(str(d.get("@id") or d.get("name") or "").endswith("_cdif.jsonld") for d in _dists if isinstance(d, dict))
+        if not _has_cdif:
+            _rows = []
+            try:
+                _csv_txt = _m.get_object("vault", f"{_doc_id}.csv").read().decode("utf-8", errors="replace")
+                _rows = list(_csv.DictReader(_io.StringIO(_csv_txt)))
+            except Exception:
+                pass
+            _cols = list(_rows[0].keys()) if _rows else ["value"]
+            _cdif = {
+                "@context": [
+                    "https://ddialliance.org/Specification/DDI-CDI/1.0/context.jsonld",
+                    {"schema": "https://schema.org/", "cr": "http://mlcommons.org/croissant/", "cdif": "https://w3id.org/cdif/core/1.1/"},
+                ],
+                "@type": ["schema:Dataset", "cr:Dataset"],
+                "conformsTo": ["https://w3id.org/cdif/core/1.1", "https://ddialliance.org/Specification/DDI-CDI/1.0/"],
+                "schema:name": _jld.get("name") or _doc_id,
+                "schema:description": _jld.get("description") or "",
+                "DDICDIModels": [{"@type": "InstanceVariable", "@id": f"#var-{c}", "name": {"name": c}} for c in _cols],
+                "observations": _rows,
+            }
+            _cb = json.dumps(_cdif, indent=2, ensure_ascii=False).encode("utf-8")
+            _m.put_object("vault", f"{_doc_id}_cdif.jsonld", _io.BytesIO(_cb), len(_cb), content_type="application/ld+json")
+            _host_pfx = f"https://{client_host}" if client_host and "http" not in str(client_host) else (str(client_host).rstrip("/") if client_host else "http://localhost:7070")
+            _dists.insert(0, {
+                "@type": "cr:FileObject",
+                "@id": f"{_doc_id}_cdif.jsonld",
+                "name": f"{_doc_id}_cdif.jsonld",
+                "description": "DDI-CDI / CDIF JSON-LD observations",
+                "contentUrl": f"{_host_pfx}/vault/{_doc_id}_cdif.jsonld",
+                "encodingFormat": "application/ld+json",
+                "contentSize": f"{len(_cb)} B",
+                "sha256": _hashlib.sha256(_cb).hexdigest(),
+            })
+            _jld["distribution"] = _dists
+            _jb = json.dumps(_jld, indent=2, ensure_ascii=False).encode("utf-8")
+            _m.put_object("vault", f"{_doc_id}.jsonld", _io.BytesIO(_jb), len(_jb), content_type="application/ld+json")
+    except Exception as _cdif_err:
+        print(f"Warning: auto-CDIF generation in upload failed: {_cdif_err}", flush=True)
+
     return {"status": "success", "redirect_url": redirect_url}
 
 @app.post("/api/dataverse/process")
@@ -654,7 +897,9 @@ async def process_dataverse(callback: str = None, url: str = None, siteUrl: str 
         print(f"Error processing dataverse callback: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-from pydantic import BaseModel
+class GenericProcessRequest(BaseModel):
+    url: str
+    vision: bool = False
 class TextProcessRequest(BaseModel):
     text: str
 
@@ -811,10 +1056,7 @@ def render_html_template(file_path: str, request=None, auth_status=None):
     logo_url = os.environ.get("VAULT_LOGO_URL", "/logo.png")
     logo_html = f'<a href="/" style="display:flex; align-items:center; justify-content:center; text-decoration:none; padding: 10px;"><img src="{logo_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Logo" /></a>' if logo_url else ""
     
-    footer_html = os.environ.get("VAULT_FOOTER_HTML", """            <span>Ghostwriter 2.0 UI | Semantic Croissant with CDIF 1.1 (v2.3)</span>
-            <span style="color: #ccc;">|</span>
-            <span>Created by <a href="https://codata.org" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CODATA</a> in <a href="https://cdif4eosc.eu" target="_blank" style="color: #888; text-decoration: none; font-weight: 500;">CDIF4EOSC</a> under Grant Agreement 101292473</span>
-            <img src="https://www.cdif4eosc.eu/assets/images/eu_flag.svg" alt="EU Flag" style="height: 20px;">""")
+    footer_html = os.environ.get("VAULT_FOOTER_HTML", """            <span>Ghostwriter 2.0 UI | Semantic Croissant engine with CDIF playbook 1.1</span>""")
     
     html = html.replace('{{VAULT_LOGO_HTML}}', logo_html)
     html = html.replace('{{VAULT_FOOTER_HTML}}', footer_html)
@@ -990,7 +1232,7 @@ async def view_index(request: Request):
     if not os.path.exists(file_path):
         file_path = "api/static/index.html" # fallback
     
-        return HTMLResponse(content=render_html_template(file_path, request))
+    return HTMLResponse(content=render_html_template(file_path, request))
 
 @app.get("/vault/doc/raw/{es_id}")
 async def proxy_vault_doc_raw(es_id: str, request: Request):
@@ -1074,7 +1316,9 @@ async def proxy_vault_approve(request: Request, es_id: str):
 async def get_vault_file(filename: str):
     minio_base = os.environ.get("MINIO_GLOBAL_HOST", "").strip().rstrip("/") or os.environ.get("MINIO_URL", "http://minio:9000")
     
-    if not filename.endswith(".md") and not filename.endswith(".jsonld") and not filename.endswith(".json") and not filename.endswith(".gz") and not filename.endswith(".csv"):
+    KNOWN_VAULT_EXTS = ('.md', '.jsonld', '.json', '.gz', '.csv', '.xlsx', '.xls', '.ods', '.tsv', '.html',
+                        '.jpg', '.jpeg', '.png', '.webp', '.tiff', '.bmp', '.pdf', '.txt', '.doc', '.docx')
+    if not any(filename.lower().endswith(ext) for ext in KNOWN_VAULT_EXTS):
         filename += ".md"
         
     from minio import Minio
@@ -1083,10 +1327,14 @@ async def get_vault_file(filename: str):
     m_client = Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
 
     # Determine media type
-    media_type = "application/octet-stream"
+    import mimetypes
+    guessed_type, _ = mimetypes.guess_type(filename)
+    media_type = guessed_type or "application/octet-stream"
     if filename.endswith(".md"): media_type = "text/markdown; charset=utf-8"
     elif filename.endswith(".jsonld") or filename.endswith(".json"): media_type = "application/ld+json; charset=utf-8"
     elif filename.endswith(".csv"): media_type = "text/csv; charset=utf-8"
+    elif filename.endswith(".xlsx"): media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    elif filename.endswith(".tsv"): media_type = "text/tab-separated-values; charset=utf-8"
     elif filename.endswith(".html"): media_type = "text/html; charset=utf-8"
     elif filename.endswith(".gz"): media_type = "application/gzip"
 
@@ -1273,7 +1521,7 @@ def get_croissant_catalog(id: str = None, q: str = None, limit: int = 500, page:
         
         def run_q(query):
             encoded = urllib.parse.urlencode({"query": query})
-            url = f"http://server:7041/?{encoded}"
+            url = f"{QLEVER_URL}/?{encoded}"
             req = urllib.request.Request(url, headers={"Accept": "application/json"})
             with urllib.request.urlopen(req) as response:
                 return json.loads(response.read().decode()).get("results", {}).get("bindings", [])
@@ -1450,7 +1698,7 @@ def get_croissant_catalog(id: str = None, q: str = None, limit: int = 500, page:
                 OFFSET {offset}
                 """
                 encoded_query = urllib.parse.urlencode({"query": sparql}).encode("utf-8")
-                url = "http://server:7041/"
+                url = f"{QLEVER_URL}/"
                 req = urllib.request.Request(
                     url, 
                     data=encoded_query,
@@ -1591,7 +1839,7 @@ def get_variables_sparql(id: str):
         }} LIMIT 1
         """
         enc_res = urllib.parse.urlencode({"query": resolve_query}).encode("utf-8")
-        req_res = urllib.request.Request("http://server:7041/", data=enc_res, headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"})
+        req_res = urllib.request.Request(f"{QLEVER_URL}/", data=enc_res, headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"})
         try:
             with urllib.request.urlopen(req_res) as response_res:
                 res_bindings = json.loads(response_res.read().decode()).get("results", {}).get("bindings", [])
@@ -1653,7 +1901,7 @@ def get_variables_sparql(id: str):
     """
     
     encoded = urllib.parse.urlencode({"query": query}).encode("utf-8")
-    url = "http://server:7041/"
+    url = f"{QLEVER_URL}/"
     req = urllib.request.Request(
         url, 
         data=encoded,
@@ -1705,7 +1953,9 @@ def get_variables_sparql(id: str):
     except Exception as e:
         return {"error": str(e), "variables": []}
 
-from pydantic import BaseModel
+class GenericProcessRequest(BaseModel):
+    url: str
+    vision: bool = False
 
 class RawJsonLDPayload(BaseModel):
     jsonld: dict
@@ -2140,6 +2390,7 @@ async def api_collections_proxy(request: Request):
             raise HTTPException(status_code=500, detail=str(e))
 
 @app.api_route("/spatial-query", methods=["POST", "GET"])
+@app.api_route("/api/spatial-query", methods=["POST", "GET"])
 async def proxy_spatial_query(request: Request):
     """Proxy spatial queries to palefire-api."""
     import httpx
@@ -2161,6 +2412,33 @@ async def proxy_spatial_query(request: Request):
             return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Failed to reach Palefire spatial query service: {str(e)}")
+
+
+@app.api_route("/api/geoid", methods=["POST", "GET"])
+@app.api_route("/geoid", methods=["POST", "GET"])
+async def proxy_geoid(request: Request):
+    """Proxy geoid reverse geocode and docid search queries to palefire-api."""
+    import httpx
+    from fastapi import Response, HTTPException
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    body = await request.body()
+    
+    palefire_base = os.environ.get("PALEFIRE_SERVER_URL", "http://palefire-api:8000")
+    geoid_url = f"{palefire_base.rstrip('/')}/api/geoid"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            resp = await client.request(
+                request.method,
+                geoid_url,
+                headers=headers,
+                params=dict(request.query_params),
+                content=body
+            )
+            return Response(content=resp.content, status_code=resp.status_code, media_type=resp.headers.get("content-type", "application/json"))
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to reach Palefire GeoID service: {str(e)}")
+
 
 
 

@@ -44,8 +44,9 @@ All agents acting in this environment SHOULD identify themselves through a **Dec
 ### Content Generation & Ingestion
 | Tool | Description |
 |---|---|
-| `url_to_croissant` | Convert any URL (web, YouTube, Google Sheets batch) to Croissant JSON-LD. |
+| `url_to_croissant` | Convert any URL (web, YouTube, Google Sheets batch) or document (PDF, image, CSV, Excel) to Croissant JSON-LD. |
 | `describe_resource` | Describe any resource (file or URL) → Croissant JSON-LD + summary. |
+| `process_generic` | Generic ingestion API (`/api/generic/process` & `/api/generic/upload`) for processing PDF, image, spreadsheet, and URL assets into Excel, CSV, Croissant metadata, and Vault storage. |
 | `ingest_to_qlever` | Ingest JSON-LD into the QLever database. |
 
 ### Vault Operations
@@ -170,15 +171,136 @@ The embedded [Croissant Toolkit](https://github.com/codata/croissant-toolkit) pr
 
 ---
 
-## 8. Data Pipeline
+## 8. Data Pipeline & File Processing (PDF / Image → Excel, CSV & Croissant)
+
+### 8.1 Ingestion Methods Overview
 
 | Method | Command / Tool | Description |
 |---|---|---|
+| Generic Process API | `POST /api/generic/process` | Ingest local path, image, PDF, or URL → outputs `.xlsx`, `.csv`, `.jpg`/`.pdf`, `.jsonld`, `.md` in Vault |
+| Generic File Upload API | `POST /api/generic/upload` | Multipart file upload for image or document ingestion |
+| CLI Conversion | `python3 convertors/url_to_croissant.py <file_or_url> --elastic --host <host>` | Direct CLI ingestion pipeline |
 | Batch Conversion | `python3 pipeline/convert_all.py <dir> <out.nt>` | JSON-LD → NTriples |
 | Live Ingestion | `POST /add_record` or `ingest_to_qlever` tool | Zero-downtime append to QLever |
 | Full Rebuild | `POST /rebuild` | Background index rebuild |
 | URL Scraping | `url_to_croissant` tool | Web → Croissant JSON-LD |
 | Google Sheets Batch | `url_to_croissant` with Sheets URL | Process all URLs from spreadsheet |
+
+---
+
+### 8.2 Processing PDFs & Images to Excel, CSV, and Croissant
+
+When processing document files (PDFs, scanned images, monitoring sheets, tabular photos), the pipeline employs OCR, table extraction, and Croissant generation to produce structured data formats.
+
+#### 1. Pipeline Architecture
+```mermaid
+flowchart TD
+    Input["Input: PDF / Image File or URL"] --> Ingestion["/api/generic/process or convertors/url_to_croissant.py"]
+    Ingestion --> PaleFire["PaleFire Parser Service (/parse)<br/>ImageParser / PDF Parser (Tesseract OCR)"]
+    PaleFire --> Detection["Detect Document Structure & Tables<br/>(e.g., Pluviometer Logs, WhatsApp records, forms)"]
+    Detection --> Extraction["Extract Day-by-Day / Tabular Records"]
+    Extraction --> Storage["Vault (MinIO) Upload"]
+    Storage --> XLSX["Excel Spreadsheet (.xlsx)"]
+    Storage --> CSV["CSV Dataset (.csv)"]
+    Storage --> Orig["Original Source (.jpg / .pdf)"]
+    Storage --> Croissant["Croissant Metadata (.jsonld)<br/>(cr:FileObject for .xlsx, .csv, and source)"]
+    Storage --> Markdown["Markdown Document (.md)<br/>(Rendered table + download links)"]
+    Croissant --> QLever["Index into QLever & Elasticsearch"]
+```
+
+#### 2. Key Steps in Document & Image Processing
+1. **PaleFire Image & PDF Parsing**:
+   - The document or image is submitted to the PaleFire API endpoint (`http://palefire-api:8000/parse`).
+   - PaleFire's `ImageParser` runs Tesseract OCR (`lang='spa+eng'` or configured language) and checks for structured data sheets (e.g. Bioversity/CIAT community rainfall monitoring sheets, rainfall tables, or accompanying chat records).
+   - The parser returns a `ParseResult` with structured `tables` (`headers` and `rows`) and metadata (e.g. community, municipality, observer, year, month).
+2. **Generating Excel & CSV Datasets**:
+   - Extracted table rows and headers are mapped into Pandas DataFrames.
+   - For every extracted table, the pipeline serializes both:
+     - **CSV**: `{doc_id}.csv` (`text/csv`)
+     - **Excel**: `{doc_id}.xlsx` (`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`)
+   - Both files are uploaded to the MinIO `vault` bucket.
+3. **Persisting the Original File**:
+   - The original image (`.jpg`, `.png`, etc.) or PDF (`.pdf`) is preserved and uploaded to the `vault` bucket as `{doc_id}.{ext}` so raw source data remains accessible.
+4. **Croissant JSON-LD Distribution Creation**:
+   - Each generated file is registered as a `cr:FileObject` in the Croissant `distribution` block:
+     ```json
+     "distribution": [
+       {
+         "@type": "cr:FileObject",
+         "@id": "{doc_id}.xlsx",
+         "name": "{doc_id}.xlsx",
+         "description": "Spreadsheet of daily measurements",
+         "contentUrl": "https://{host}/vault/{doc_id}.xlsx",
+         "encodingFormat": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+         "sha256": "..."
+       },
+       {
+         "@type": "cr:FileObject",
+         "@id": "{doc_id}.csv",
+         "name": "{doc_id}.csv",
+         "description": "CSV dataset of daily measurements",
+         "contentUrl": "https://{host}/vault/{doc_id}.csv",
+         "encodingFormat": "text/csv",
+         "sha256": "..."
+       },
+       {
+         "@type": "cr:FileObject",
+         "@id": "{doc_id}.jpg",
+         "name": "{original_filename}",
+         "description": "Original source file",
+         "contentUrl": "https://{host}/vault/{doc_id}.jpg",
+         "encodingFormat": "image/jpeg",
+         "sha256": "..."
+       }
+     ]
+     ```
+5. **Markdown Document Generation**:
+   - The markdown document (`{doc_id}.md`) includes a `# Citation` header with relative links to:
+     - Croissant Metadata (`./{doc_id}.jsonld`)
+     - Spreadsheet (`./{doc_id}.xlsx`)
+     - CSV Data (`./{doc_id}.csv`)
+     - Original file (`./{doc_id}.jpg` / `./{doc_id}.pdf`)
+   - Displays a day-by-day Markdown table and summary metrics in the body.
+
+#### 3. API & CLI Usage Examples
+
+**A. Ingest via Generic Process API (Local path or URL)**:
+```bash
+curl -s -X POST "http://localhost:7013/api/generic/process" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "test/Conversa do WhatsApp com Red Pluviómetros Honduras/IMG-20230820-WA0000.jpg",
+    "host": "ai.mediaquantum.eu"
+  }'
+```
+Response:
+```json
+{"status":"success","redirect_url":"/vault/doc/1E42cdW7E3BKHAW33F0Law.md"}
+```
+
+**B. Ingest via Direct File Upload (Multipart Form)**:
+```bash
+curl -s -X POST "http://localhost:7013/api/generic/upload" \
+  -F "file=@/path/to/document.pdf" \
+  -F "host=ai.mediaquantum.eu" \
+  -F "vision=true"
+```
+
+**C. Direct CLI Execution**:
+```bash
+python3 convertors/url_to_croissant.py \
+  "test/Conversa do WhatsApp com Red Pluviómetros Honduras/IMG-20230820-WA0000.jpg" \
+  --elastic \
+  --host "ai.mediaquantum.eu"
+```
+
+#### 4. Accessing Generated Vault Assets
+Vault assets are accessed at:
+- Markdown Viewer: `https://{host}/vault/doc/{doc_id}` (or raw: `/vault/doc/raw/{doc_id}.md`)
+- Croissant JSON-LD: `https://{host}/vault/{doc_id}.jsonld`
+- Excel Spreadsheet: `https://{host}/vault/{doc_id}.xlsx`
+- CSV Dataset: `https://{host}/vault/{doc_id}.csv`
+- Original Source: `https://{host}/vault/{doc_id}.jpg` (or `.pdf`)
 
 ---
 
