@@ -874,7 +874,7 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                                 try:
                                     dm_img_resp = _requests.post(
                                         "http://palefire-api:8000/datamaps/image",
-                                        json={"url": img_url},
+                                        json={"url": img_url, "page_url": url},
                                         timeout=600,
                                     )
                                     if dm_img_resp.status_code == 200 and dm_img_resp.json().get("status") == "success":
