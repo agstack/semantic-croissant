@@ -270,24 +270,23 @@ services:
       start_period: 15s
 
 
-  # One-shot job image: built with the stack, run per CV job by the converter
-  # via `docker run --rm -v <DATAMAPS_VOLUME>:/work datamaps-<profile> <url> /work/<job>`
-  datamaps:
-    profiles:
-      - ${PROFILE_NAME:-default}
-      - croissant-live
-    image: datamaps-${PROFILE_NAME:-default}
-    pull_policy: never
-    build:
-      context: ./palefire/datamaps
-      dockerfile: ../../docker/datamaps/Dockerfile
-      additional_contexts:
-        jobctx: ./docker/datamaps
-    entrypoint: ["true"]
-    restart: "no"
-    volumes:
-      - datamaps-work:/work
+  # One-shot job image: built in palefire
+  # datamaps:
+  #   profiles:
+  #     - ${PROFILE_NAME:-default}
+  #     - croissant-live
+  #   image: datamaps-${PROFILE_NAME:-default}
+  #   pull_policy: never
+  #   build:
+  #     context: ./palefire/datamaps
+  #     dockerfile: ../../docker/datamaps/Dockerfile
+  #     additional_contexts:
+  #       jobctx: ./docker/datamaps
+  #   entrypoint: ["true"]
+  #   restart: "no"
+  #   volumes:
+  #     - datamaps-work:/work
 
-volumes:
-  datamaps-work:
-    name: ${PROFILE_NAME:-default}-datamaps-work
+# volumes:
+#   datamaps-work:
+#     name: ${PROFILE_NAME:-default}-datamaps-work
