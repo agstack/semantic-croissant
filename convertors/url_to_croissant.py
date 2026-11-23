@@ -842,6 +842,26 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                         ocr_blocks = []
                         for img_url in img_urls[:5]:
                             try:
+                                # Try PaleFire datamaps polygon-matching pipeline first for map images
+                                try:
+                                    dm_img_resp = _requests.post(
+                                        "http://palefire-api:8000/datamaps/image",
+                                        json={"url": img_url},
+                                        timeout=180,
+                                    )
+                                    if dm_img_resp.status_code == 200 and dm_img_resp.json().get("status") == "success":
+                                        csv_txt = dm_img_resp.json().get("csv_text", "")
+                                        if csv_txt.strip():
+                                            import io as _io, pandas as _pd
+                                            df_dm = _pd.read_csv(_io.StringIO(csv_txt))
+                                            _g = globals()
+                                            if 'GLOBAL_PARSED_TABLES' not in _g or _g['GLOBAL_PARSED_TABLES'] is None:
+                                                _g['GLOBAL_PARSED_TABLES'] = []
+                                            _g['GLOBAL_PARSED_TABLES'].append({'df': df_dm, 'month_name': f"Datamap_{len(_g['GLOBAL_PARSED_TABLES'])+1}"})
+                                            print(f"PaleFire datamaps extracted {len(df_dm)} polygon rows from {img_url}")
+                                except Exception as e_dm_img:
+                                    print(f"  -> Datamaps image call skipped/failed for {img_url}: {e_dm_img}")
+
                                 img_resp = _requests.get(img_url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
                                 if img_resp.status_code != 200 or len(img_resp.content) < 5000:
                                     continue
