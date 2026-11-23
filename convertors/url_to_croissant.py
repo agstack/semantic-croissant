@@ -869,9 +869,9 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                             markdown_content += "\n\n## Computer Vision Extracted Image Data\n\n" + "\n\n".join(ocr_blocks)
                             try:
                                 import pandas as _pd
-                                global GLOBAL_PARSED_TABLES
-                                if 'GLOBAL_PARSED_TABLES' not in globals() or GLOBAL_PARSED_TABLES is None:
-                                    GLOBAL_PARSED_TABLES = []
+                                _g = globals()
+                                if 'GLOBAL_PARSED_TABLES' not in _g or _g['GLOBAL_PARSED_TABLES'] is None:
+                                    _g['GLOBAL_PARSED_TABLES'] = []
                                 for block in ocr_blocks:
                                     lines = [ln.strip() for ln in block.splitlines() if ln.strip().startswith('|') and ln.strip().endswith('|')]
                                     if len(lines) >= 3:
@@ -886,7 +886,7 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                                             hdr = cur_rows[0]
                                             body = [r[:len(hdr)] + [''] * max(0, len(hdr) - len(r)) for r in cur_rows[1:]]
                                             df_ocr = _pd.DataFrame(body, columns=hdr)
-                                            GLOBAL_PARSED_TABLES.append({'df': df_ocr, 'month_name': f'Vision_Table_{len(GLOBAL_PARSED_TABLES)+1}'})
+                                            _g['GLOBAL_PARSED_TABLES'].append({'df': df_ocr, 'month_name': f"Vision_Table_{len(_g['GLOBAL_PARSED_TABLES'])+1}"})
                             except Exception as e_tbl:
                                 print(f"Warning: Failed to convert Vision OCR Markdown tables to DataFrame: {e_tbl}")
                 except Exception as e_cv:
