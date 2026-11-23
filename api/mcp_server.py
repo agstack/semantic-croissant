@@ -14594,11 +14594,11 @@ Output a JSON object with:
 
         async def view_add(request):
             import os
-            from starlette.responses import FileResponse
+            from starlette.responses import HTMLResponse
             file_path = os.path.join(os.path.dirname(__file__), "static/generic_loading.html")
             if not os.path.exists(file_path):
                 file_path = "api/static/generic_loading.html"
-            return FileResponse(file_path)
+            return HTMLResponse(content=render_html_template(file_path, request=request))
 
         async def process_generic(request):
             import asyncio
