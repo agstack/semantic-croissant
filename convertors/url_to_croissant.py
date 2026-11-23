@@ -822,6 +822,7 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
             if use_computer_vision and content:
                 try:
                     import base64 as _b64
+                    import requests as _requests
                     img_urls = []
                     seen_imgs = set()
                     for img in content.find_all('img'):
@@ -841,12 +842,12 @@ def fetch_url_markdown(url, traverse=False, use_computer_vision=False):
                         ocr_blocks = []
                         for img_url in img_urls[:5]:
                             try:
-                                img_resp = requests.get(img_url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+                                img_resp = _requests.get(img_url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
                                 if img_resp.status_code != 200 or len(img_resp.content) < 5000:
                                     continue
                                 img_b64 = _b64.b64encode(img_resp.content).decode("utf-8")
                                 print(f"Running Ollama Vision OCR ({vision_model}) on image: {img_url}")
-                                ov_resp = requests.post(
+                                ov_resp = _requests.post(
                                     f"{ollama_host}/api/generate",
                                     json={
                                         "model": vision_model,
