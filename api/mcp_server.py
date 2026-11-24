@@ -6286,6 +6286,10 @@ def main(port: int, transport: str) -> int:
                                 except Exception:
                                     pass
                             if _atxt:
+                                import re as _re_ann
+                                _atxt = _re_ann.sub(r'<button[^>]*>.*?</button>', '', _atxt, flags=_re_ann.DOTALL)
+                                _atxt = _re_ann.sub(r'\[View Croissant JSON-LD Data\]\([^)]+\)', '', _atxt)
+                                _atxt = _re_ann.sub(r'\*\*Digital Signature:\*\*.*', '', _atxt, flags=_re_ann.DOTALL).strip()
                                 _al.append(f"- [{x.get('reviewStatus', 'note')}] ({x.get('name', '')}): {_atxt}")
                         if _al and "USER ANNOTATIONS & NOTES" not in context_text:
                             context_text = "=== USER ANNOTATIONS & NOTES (isBasedOn — treat these as authoritative corrections to the text) ===\n" + "\n".join(_al) + "\n\n" + context_text
