@@ -6273,8 +6273,20 @@ def main(port: int, transport: str) -> int:
                                 _ibo_top.extend(_ib if isinstance(_ib, list) else ([_ib] if _ib else []))
                             except Exception:
                                 pass
-                        _al = [f"- [{x.get('reviewStatus', 'note')}] ({x.get('name', '')}): {x.get('annotationText', '')}"
-                               for x in _ibo_top if isinstance(x, dict) and (x.get("annotationText") or x.get("reviewStatus"))]
+                        _al = []
+                        for x in _ibo_top:
+                            if not isinstance(x, dict) or not (x.get("annotationText") or x.get("reviewStatus")):
+                                continue
+                            _atxt = (x.get("annotationText") or "").strip()
+                            if not _atxt and x.get("name") and str(x.get("name")).endswith(".md"):
+                                try:
+                                    _ao = _mct.get_object("vault", str(x.get("name")))
+                                    _atxt = _ao.read().decode("utf-8", errors="ignore").strip()
+                                    _ao.close(); _ao.release_conn()
+                                except Exception:
+                                    pass
+                            if _atxt:
+                                _al.append(f"- [{x.get('reviewStatus', 'note')}] ({x.get('name', '')}): {_atxt}")
                         if _al and "USER ANNOTATIONS & NOTES" not in context_text:
                             context_text = "=== USER ANNOTATIONS & NOTES (isBasedOn — treat these as authoritative corrections to the text) ===\n" + "\n".join(_al) + "\n\n" + context_text
                     except Exception as _ea:
