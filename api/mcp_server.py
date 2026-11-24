@@ -6550,12 +6550,6 @@ Question: {question}
 
 {qa_instruction}"""
 
-                if '_al' in locals() and _al and "USER ANNOTATIONS & NOTES" not in prompt:
-                    prompt = "=== USER ANNOTATIONS & NOTES (isBasedOn — treat these as authoritative corrections to the text) ===\n" + "\n".join(_al) + "\n\n" + prompt
-
-                # Clean any null characters or control characters that could break C/POSIX subprocess or shells
-                prompt = prompt.replace("\x00", "").replace("\r", "")
-
                 # Safety guard: Ensure overall prompt never exceeds Ollama context limits (~32k characters max)
                 MAX_PROMPT_CHARS = 32000
                 if len(prompt) > MAX_PROMPT_CHARS:
@@ -6563,6 +6557,9 @@ Question: {question}
                     suffix = f"\n\nQuestion: {question}\n\n{qa_instruction}"
                     allowed_ctx_len = MAX_PROMPT_CHARS - len(suffix) - 50
                     prompt = f"Context:\n{context_text[:allowed_ctx_len]}\n... [Context truncated to fit model context limit]\n{suffix}"
+
+                if '_al' in locals() and _al and "USER ANNOTATIONS & NOTES" not in prompt:
+                    prompt = "=== USER ANNOTATIONS & NOTES (isBasedOn — treat these as authoritative corrections to the text) ===\n" + "\n".join(_al) + "\n\n" + prompt
 
                 import asyncio
                 import subprocess
