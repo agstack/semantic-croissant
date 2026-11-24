@@ -6079,6 +6079,40 @@ def main(port: int, transport: str) -> int:
                                 except Exception:
                                     pass
 
+                                # Download all text-based distribution files from Vault to provide as source context
+                                try:
+                                    _dist_list = croissant_doc_dict.get("distribution", [])
+                                    if isinstance(_dist_list, dict):
+                                        _dist_list = [_dist_list]
+                                    _seen_keys = set()
+                                    for _ditem in _dist_list:
+                                        if not isinstance(_ditem, dict):
+                                            continue
+                                        _fmt = str(_ditem.get("encodingFormat", "")).lower()
+                                        _curl = str(_ditem.get("contentUrl", ""))
+                                        _dname = str(_ditem.get("name") or _ditem.get("@id") or "")
+                                        if any(x in _fmt for x in ("image/", "spreadsheet", "excel", "zip", "pdf")) or _dname.lower().endswith((".xlsx", ".xls", ".jpg", ".jpeg", ".png", ".pdf", ".zip")):
+                                            continue
+                                        _vkey = None
+                                        if "/vault/" in _curl:
+                                            _vkey = _curl.split("/vault/", 1)[1].split("?")[0]
+                                        elif _ditem.get("@id") and "." in str(_ditem.get("@id")):
+                                            _vkey = str(_ditem.get("@id"))
+                                        if not _vkey or _vkey in _seen_keys or _vkey.endswith(f"{clean_id}.jsonld"):
+                                            continue
+                                        _seen_keys.add(_vkey)
+                                        try:
+                                            _obj = minio_client.get_object("vault", _vkey)
+                                            _raw_txt = _obj.read().decode("utf-8", errors="ignore")
+                                            _obj.close()
+                                            _obj.release_conn()
+                                            if _raw_txt.strip():
+                                                cdif_file_summary += f"=== DISTRIBUTION FILE ({_dname or _vkey}) ===\n" + _raw_txt[:12000] + "\n\n"
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+
                                 context_text = f"IMPORTANT DATASET OVERVIEW:\n- Title: {ds_name}\n- Authors / Creators: {', '.join(ds_creators) if ds_creators else 'Unknown'}\n- Total files: {total_files}\n\n" + croissant_summary_snippet + datamaps_page_summary + cdif_file_summary + "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + jsonld_to_inject + "\n\n" + context_text
                     except Exception as doc_err:
                         print(f"Warning: doc_id handling error in vault_ask: {doc_err}")
