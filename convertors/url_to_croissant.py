@@ -250,12 +250,27 @@ def fetch_github_repo(url, traverse=False):
         
         try:
             repo_info = scraper.get(api_url, timeout=30).json()
-            readme_res = scraper.get(readme_url, timeout=30)
-            if readme_res.status_code == 200:
-                readme_content = readme_res.text
-                globals()['GLOBAL_GITHUB_RAW_README'] = readme_res.content
-            else:
-                readme_content = "No README found."
+            readme_content = None
+            for _rm_cand in ("README.md", "README.rst", "README.txt", "README", "readme.md"):
+                _cand_res = scraper.get(f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{_rm_cand}", timeout=30)
+                if _cand_res.status_code == 200 and _cand_res.text.strip():
+                    readme_content = _cand_res.text
+                    globals()['GLOBAL_GITHUB_RAW_README'] = _cand_res.content
+                    break
+            if not readme_content:
+                try:
+                    _oh = os.environ.get("OLLAMA_HOST", "http://host.docker.internal:11434").rstrip("/")
+                    _om = os.environ.get("OLLAMA_MODEL", "gemma4:e4b")
+                    _gp = f"Write a concise, accurate README.md for the GitHub repository {owner}/{repo}.\nDescription: {repo_info.get('description', '')}\nLanguage: {repo_info.get('language', 'Unknown')}\nTopics: {repo_info.get('topics', [])}\nURL: {url}"
+                    _gr = scraper.post(f"{_oh}/api/generate", json={"model": _om, "prompt": _gp, "stream": False}, timeout=60)
+                    if _gr.status_code == 200 and _gr.json().get("response", "").strip():
+                        readme_content = _gr.json()["response"].strip()
+                        globals()['GLOBAL_GITHUB_RAW_README'] = readme_content.encode("utf-8")
+                except Exception:
+                    pass
+            if not readme_content:
+                readme_content = f"# {repo_info.get('name', repo)}\n\n{repo_info.get('description', 'No README found.')}"
+                globals()['GLOBAL_GITHUB_RAW_README'] = readme_content.encode("utf-8")
             
             markdown_content = f"# {repo_info.get('name', repo)}\n\n"
             markdown_content += f"**Description:** {repo_info.get('description', '')}\n"
