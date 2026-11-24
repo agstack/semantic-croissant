@@ -6219,9 +6219,17 @@ def main(port: int, transport: str) -> int:
                                     _ibo_all = []
                                     _ibo = croissant_doc_dict.get("isBasedOn", [])
                                     _ibo_all.extend(_ibo if isinstance(_ibo, list) else ([_ibo] if _ibo else []))
+                                    from minio import Minio as _MinioAnn
+                                    _murl_ann = os.environ.get("MINIO_URL", "http://minio:9000")
+                                    if (bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")) and any(h in _murl_ann for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+                                        _murl_ann = "http://minio:9000"
+                                    _mc_ann = _MinioAnn(_murl_ann.replace("http://", "").replace("https://", "").rstrip("/"),
+                                                        access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                                                        secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                                                        secure=_murl_ann.startswith("https"))
                                     for _sub_sfx in ("_README", "_Agents"):
                                         try:
-                                            _sobj = minio_client.get_object("vault", f"{clean_id}{_sub_sfx}.jsonld")
+                                            _sobj = _mc_ann.get_object("vault", f"{clean_id}{_sub_sfx}.jsonld")
                                             _sdata = json.loads(_sobj.read().decode("utf-8", errors="ignore"))
                                             _sobj.close(); _sobj.release_conn()
                                             _sibo = _sdata.get("isBasedOn", [])
