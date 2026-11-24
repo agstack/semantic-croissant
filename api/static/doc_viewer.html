@@ -1489,7 +1489,7 @@
                     html += `<table style="width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 0.95rem;">`;
                     html += `<tbody>`;
                     
-                    const skipKeys = ['@context', '@type', 'name', 'url', 'description', 'distribution', 'recordSet', 'fileObject', 'fileSet', '_source_url', '_markdown_text', '_full_text'];
+                    const skipKeys = ['@context', '@type', 'name', 'url', 'description', 'distribution', 'recordSet', 'fileObject', 'fileSet', 'isBasedOn', '_source_url', '_markdown_text', '_full_text'];
                     for (const [key, value] of Object.entries(data)) {
                         if (skipKeys.includes(key)) continue;
                         
