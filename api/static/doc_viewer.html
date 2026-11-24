@@ -1404,6 +1404,12 @@
                 }
                 
                 markdown = await response.text();
+                if (docId.includes('_')) {
+                    const rootId = docId.split('_')[0];
+                    if (rootId && rootId !== docId) {
+                        markdown = `> [← Back to Root Document (${rootId})](/vault/doc/${rootId})\n\n` + markdown;
+                    }
+                }
                 
                 // Strip existing [View Croissant JSON-LD Data] text from markdown
                 markdown = markdown.replace(/\[View Croissant JSON-LD Data\]\([^)]+\)/gi, '');
