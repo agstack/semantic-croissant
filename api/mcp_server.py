@@ -6553,10 +6553,30 @@ Question: {question}
                 # Safety guard: Ensure overall prompt never exceeds Ollama context limits (~32k characters max)
                 MAX_PROMPT_CHARS = 32000
                 if len(prompt) > MAX_PROMPT_CHARS:
-                    # Keep question and prompt instructions intact at the end
+                    # Chunk context_text into <=32k pieces and run prompts in parallel
                     suffix = f"\n\nQuestion: {question}\n\n{qa_instruction}"
                     allowed_ctx_len = MAX_PROMPT_CHARS - len(suffix) - 50
-                    prompt = f"Context:\n{context_text[:allowed_ctx_len]}\n... [Context truncated to fit model context limit]\n{suffix}"
+                    _chunks = [context_text[i:i + allowed_ctx_len] for i in range(0, len(context_text), allowed_ctx_len)][:5]
+                    if len(_chunks) > 1:
+                        try:
+                            import concurrent.futures as _cf, requests as _req_ch
+                            _oh_ch = os.environ.get("OLLAMA_HOST", "http://host.docker.internal:11434").rstrip("/")
+                            _om_ch = model_name if model_name and model_name not in ["default", "llama3.1"] else (os.environ.get("OLLAMA_DEFAULT_MODEL") or "gemma4:e2b")
+                            _ann_hdr = ("=== USER ANNOTATIONS & NOTES (isBasedOn — treat these as authoritative corrections to the text) ===\n" + "\n".join(_al) + "\n\n") if ('_al' in locals() and _al) else ""
+                            def _ask_chunk(ch):
+                                _p = f"{_ann_hdr}Context:\n{ch}{suffix}"
+                                _r = _req_ch.post(f"{_oh_ch}/api/generate", json={"model": _om_ch, "prompt": _p, "stream": False}, timeout=120)
+                                return _r.json().get("response", "").strip() if _r.status_code == 200 else ""
+                            with _cf.ThreadPoolExecutor(max_workers=len(_chunks)) as _ex:
+                                _ch_ans = [a for a in _ex.map(_ask_chunk, _chunks) if a]
+                            if _ch_ans:
+                                prompt = f"{_ann_hdr}Context (answers from {len(_ch_ans)} document chunks):\n" + "\n\n---\n\n".join(_ch_ans) + f"\n\nQuestion: {question}\n\nSynthesize a single clear answer from the chunk answers above."
+                            else:
+                                prompt = f"Context:\n{_chunks[0]}\n... [Context truncated to fit model context limit]\n{suffix}"
+                        except Exception:
+                            prompt = f"Context:\n{_chunks[0]}\n... [Context truncated to fit model context limit]\n{suffix}"
+                    else:
+                        prompt = f"Context:\n{_chunks[0]}{suffix}"
 
                 if '_al' in locals() and _al and "USER ANNOTATIONS & NOTES" not in prompt:
                     prompt = "=== USER ANNOTATIONS & NOTES (isBasedOn — treat these as authoritative corrections to the text) ===\n" + "\n".join(_al) + "\n\n" + prompt
