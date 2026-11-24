@@ -5788,6 +5788,10 @@ def main(port: int, transport: str) -> int:
                 if doc_id:
                     try:
                         clean_id = doc_id.replace(".jsonld", "").replace(".md", "")
+                        for _sfx in ("_Agents", "_README", "_datacard"):
+                            if clean_id.endswith(_sfx):
+                                clean_id = clean_id[:-len(_sfx)]
+                                break
                         # Fetch the full Croissant record from the Vault (try MinIO first, then local endpoints, then ES)
                         croissant_json = ""
                         try:
