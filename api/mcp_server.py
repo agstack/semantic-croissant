@@ -5697,14 +5697,14 @@ def main(port: int, transport: str) -> int:
                     b = text.encode("utf-8")
                     minio_client.put_object("vault", f"{doc_id}.md", io.BytesIO(b), len(b), content_type="text/markdown")
                     if action == "create":
-                        minio_client.put_object("vault", f"{doc_id}_README.md", io.BytesIO(b), len(b), content_type="text/markdown")
+                        minio_client.put_object("vault", f"{doc_id}_Agents.md", io.BytesIO(b), len(b), content_type="text/markdown")
                         jdata = {
                             "@context": {"@vocab": "https://schema.org/", "cr": "http://mlcommons.org/croissant/"},
                             "@type": "Dataset",
                             "name": (body.get("prompt") or f"Chat Document {doc_id}")[:120],
                             "distribution": [
                                 {"@type": "cr:FileObject", "@id": f"{doc_id}.md", "name": f"{doc_id}.md", "contentUrl": f"/vault/{doc_id}.md", "encodingFormat": "text/markdown"},
-                                {"@type": "cr:FileObject", "@id": f"{doc_id}_README.md", "name": "README.md", "contentUrl": f"/vault/{doc_id}_README.md", "encodingFormat": "text/markdown"},
+                                {"@type": "cr:FileObject", "@id": f"{doc_id}_Agents.md", "name": "Agents.md", "contentUrl": f"/vault/{doc_id}_Agents.md", "encodingFormat": "text/markdown"},
                             ],
                         }
                         jb = json.dumps(jdata, indent=2).encode("utf-8")
