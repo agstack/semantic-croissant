@@ -128,6 +128,17 @@ def fetch_youtube_transcript(url):
                     date = date_tag.get("content", "")
         except Exception as e:
             print(f"Could not fetch YouTube metadata: {e}")
+        if title == f"YouTube Video {video_id}" or not channel:
+            try:
+                _oe = scraper.get(f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json", timeout=10)
+                if _oe.status_code == 200:
+                    _oj = _oe.json()
+                    if _oj.get("title"):
+                        title = _oj["title"]
+                    if not channel and _oj.get("author_name"):
+                        channel = _oj["author_name"]
+            except Exception:
+                pass
             
         transcript_list = YouTubeTranscriptApi().list(video_id)
         transcript = None
