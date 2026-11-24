@@ -5632,6 +5632,40 @@ def main(port: int, transport: str) -> int:
             endpoint = minio_base.replace("http://", "").replace("https://", "")
             return Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
 
+        async def chat_document(request):
+            import base64, hashlib, io
+            from starlette.responses import JSONResponse
+            try:
+                body = await request.json()
+                action = (body.get("action") or "create").strip().lower()
+                text = body.get("text") or ""
+                doc_id = (body.get("doc_id") or "").strip()
+                if not doc_id or action == "create":
+                    raw_h = hashlib.sha256((text or str(time.time())).encode("utf-8")).digest()[:16]
+                    doc_id = base64.urlsafe_b64encode(raw_h).decode("ascii").rstrip("=")
+                if action == "add":
+                    existing = ""
+                    try:
+                        obj = minio_client.get_object("vault", f"{doc_id}.md")
+                        existing = obj.read().decode("utf-8", errors="ignore")
+                        obj.close()
+                        obj.release_conn()
+                    except Exception:
+                        pass
+                    new_md = (existing.rstrip() + "\n\n---\n\n" + text).strip() if existing else text
+                    b = new_md.encode("utf-8")
+                    minio_client.put_object("vault", f"{doc_id}.md", io.BytesIO(b), len(b), content_type="text/markdown")
+                elif action == "save":
+                    b = text.encode("utf-8")
+                    minio_client.put_object("vault", f"{doc_id}_annotations.md", io.BytesIO(b), len(b), content_type="text/markdown")
+                    return JSONResponse({"status": "success", "action": "save", "doc_id": doc_id, "doc_url": f"/vault/doc/{doc_id}", "annotations_url": f"/vault/{doc_id}_annotations.md"})
+                else:
+                    b = text.encode("utf-8")
+                    minio_client.put_object("vault", f"{doc_id}.md", io.BytesIO(b), len(b), content_type="text/markdown")
+                return JSONResponse({"status": "success", "action": action, "doc_id": doc_id, "doc_url": f"/vault/doc/{doc_id}"})
+            except Exception as e:
+                return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+
         async def vault_ask(request):
             import asyncio, sys, os
             try:
@@ -14980,6 +15014,7 @@ Output a JSON object with:
                 Route("/vault/history", endpoint=vault_get_history, methods=["GET"]),
                 Route("/vault/doc/update/{es_id}", endpoint=vault_es_doc_update, methods=["POST"]),
                 Route("/vault/public/{es_id}", endpoint=vault_make_public, methods=["POST"]),
+                Route("/api/chat/document", endpoint=chat_document, methods=["POST"]),
                 Route("/vault/ask", endpoint=vault_ask, methods=["POST"]),
                 Route("/vault/models", endpoint=vault_models, methods=["GET"]),
                 Route("/vault/approve/{es_id}", endpoint=vault_approve_highlight, methods=["POST"]),
