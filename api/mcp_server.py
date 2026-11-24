@@ -6197,7 +6197,7 @@ def main(port: int, transport: str) -> int:
                                             _obj.close()
                                             _obj.release_conn()
                                             if _raw_txt.strip():
-                                                cdif_file_summary += f"=== DISTRIBUTION FILE ({_dname or _vkey}) ===\n" + _raw_txt[:12000] + "\n\n"
+                                                cdif_file_summary += f"=== DISTRIBUTION FILE ({_dname or _vkey}) ===\n" + _raw_txt[:50000] + "\n\n"
                                         except Exception:
                                             pass
                                 except Exception:
