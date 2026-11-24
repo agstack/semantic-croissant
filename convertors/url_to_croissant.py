@@ -102,6 +102,10 @@ def fetch_youtube_transcript(url):
             
         channel = ""
         date = ""
+        title = f"YouTube Video {video_id}"
+        description = ""
+        channel = ""
+        date = ""
         try:
             res = scraper.get(url, timeout=10)
             if res.status_code == 200:
@@ -110,8 +114,8 @@ def fetch_youtube_transcript(url):
                 if title_tag:
                     title = title_tag.get("content", "")
                 else:
-                    title = soup.title.text if soup.title else ""
-                desc_tag = soup.find("meta", property="og:description") or soup.find("meta", name="description")
+                    title = soup.title.text if soup.title else title
+                desc_tag = soup.find("meta", property="og:description") or soup.find("meta", attrs={"name": "description"})
                 if desc_tag:
                     description = desc_tag.get("content", "")
                     
