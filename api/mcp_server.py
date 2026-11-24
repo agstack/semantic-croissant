@@ -5633,9 +5633,17 @@ def main(port: int, transport: str) -> int:
             return Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
 
         async def chat_document(request):
-            import base64, hashlib, io
+            import base64, hashlib, io, os, time
+            from minio import Minio
             from starlette.responses import JSONResponse
             try:
+                _murl = os.environ.get("MINIO_URL", "http://minio:9000")
+                if (bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")) and any(h in _murl for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+                    _murl = "http://minio:9000"
+                minio_client = Minio(_murl.replace("http://", "").replace("https://", "").rstrip("/"),
+                                     access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                                     secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                                     secure=_murl.startswith("https"))
                 body = await request.json()
                 action = (body.get("action") or "create").strip().lower()
                 text = body.get("text") or ""
