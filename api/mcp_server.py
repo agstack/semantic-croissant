@@ -6223,7 +6223,7 @@ def main(port: int, transport: str) -> int:
                                         if isinstance(_it, dict) and (_it.get("annotationText") or _it.get("reviewStatus")):
                                             _ann_lines.append(f"- [{_it.get('reviewStatus', 'note')}] ({_it.get('name', '')}): {_it.get('annotationText', '')}")
                                     if _ann_lines:
-                                        cdif_file_summary += "=== USER ANNOTATIONS & NOTES (isBasedOn) ===\n" + "\n".join(_ann_lines) + "\n\n"
+                                        cdif_file_summary += "=== USER ANNOTATIONS & NOTES (isBasedOn — treat these as authoritative corrections to the text) ===\n" + "\n".join(_ann_lines) + "\n\n"
                                 except Exception:
                                     pass
 
