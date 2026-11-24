@@ -949,6 +949,14 @@
             // Remove any existing QA modal before creating a new one
             document.querySelectorAll('.qa-response-modal').forEach(m => m.remove());
 
+            if (answer && !errorMsg && typeof getDocId === 'function' && getDocId()) {
+                fetch('/api/chat/document', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'add', doc_id: getDocId(), prompt: question, text: answer })
+                }).catch(() => {});
+            }
+
             const modal = document.createElement('div');
             modal.className = 'qa-response-modal';
             modal.style.cssText = "position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 9999;";
