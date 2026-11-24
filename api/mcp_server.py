@@ -1081,7 +1081,6 @@ async def build_collection_from_expert(collection_name: str, expert_index: str, 
                         m_client.make_bucket("collections")
                     except Exception:
                         pass
-                    return JSONResponse({"status": "success", "action": action, "doc_id": doc_id, "doc_url": f"/vault/doc/{agents_key}"})
                 m_client.put_object("collections", f"{cid}.json", io.BytesIO(content_bytes), len(content_bytes), content_type="application/json")
                 minio_saved = True
             except Exception:
@@ -2060,7 +2059,6 @@ async def store_in_vault(content: str, prefix: str = "custom", jsonld_payload: s
                             client.put_object("vault", f"{pid}.md", io.BytesIO(updated_md_bytes), len(updated_md_bytes), content_type="text/markdown")
                     except Exception:
                         pass
-                    return JSONResponse({"status": "success", "action": action, "doc_id": doc_id, "doc_url": f"/vault/doc/{agents_key}"})
                         
                     es_doc_rev = {"_source_url": f"{HOST}/vault/doc/{pid}"}
                     es_doc_rev.update(p_jsonld)
@@ -2567,7 +2565,6 @@ async def read_direct_file(url: str, plan: str = None) -> list[types.TextContent
                         cdif_doc = json.loads(cached_bytes.decode("utf-8"))
                     except Exception:
                         pass
-                    return JSONResponse({"status": "success", "action": action, "doc_id": doc_id, "doc_url": f"/vault/doc/{agents_key}"})
             except Exception:
                 pass
 
@@ -2824,7 +2821,6 @@ async def get_cdif_summary(url_or_id: str) -> list[types.TextContent]:
                             matched_doc_id = h1
                     except Exception:
                         pass
-                    return JSONResponse({"status": "success", "action": action, "doc_id": doc_id, "doc_url": f"/vault/doc/{agents_key}"})
 
                 # C: Search by distribution file if not found
                 if not croissant_doc and target_file:
@@ -2846,7 +2842,6 @@ async def get_cdif_summary(url_or_id: str) -> list[types.TextContent]:
                                 croissant_doc = hits[0].get("_source", {})
                     except Exception:
                         pass
-                    return JSONResponse({"status": "success", "action": action, "doc_id": doc_id, "doc_url": f"/vault/doc/{agents_key}"})
 
             # Extract target_doi and distribution target_file from resolved croissant_doc
             if croissant_doc:
@@ -3163,7 +3158,6 @@ async def get_croissant_dataset(id: str) -> list[types.TextContent]:
                                 matched_doc = hits[0].get("_source")
                     except Exception:
                         pass
-                    return JSONResponse({"status": "success", "action": action, "doc_id": doc_id, "doc_url": f"/vault/doc/{agents_key}"})
 
             # Step C: If target_file is known, search by distribution.contentUrl
             if not matched_doc and target_file:
@@ -5667,7 +5661,6 @@ def main(port: int, transport: str) -> int:
                         obj.release_conn()
                     except Exception:
                         pass
-                    return JSONResponse({"status": "success", "action": action, "doc_id": doc_id, "doc_url": f"/vault/doc/{agents_key}"})
                     prompt_txt = (body.get("prompt") or "").strip()
                     entry = f"## Question\n{prompt_txt}\n\n## Answer\n{text}" if prompt_txt else text
                     new_md = (existing.rstrip() + "\n\n---\n\n" + entry).strip() if existing else f"# Agents Q&A\n\n{entry}"
@@ -9724,7 +9717,6 @@ Question: {question}
                                         cols.append(col)
                     except Exception:
                         pass
-                    return JSONResponse({"status": "success", "action": action, "doc_id": doc_id, "doc_url": f"/vault/doc/{agents_key}"})
 
                 return JSONResponse({"collections": cols})
             except Exception as e:
@@ -10740,7 +10732,6 @@ Question: {question}
                             }
                     except Exception:
                         pass
-                    return JSONResponse({"status": "success", "action": action, "doc_id": doc_id, "doc_url": f"/vault/doc/{agents_key}"})
 
                     # 2. Invoke CDIF export endpoint
                     try:
@@ -12718,7 +12709,6 @@ Instructions:
                         )
                     except Exception:
                         pass
-                    return JSONResponse({"status": "success", "action": action, "doc_id": doc_id, "doc_url": f"/vault/doc/{agents_key}"})
 
                     cnt_resp = await client.post(f"{es_url}/cdif/_count")
                     total_docs = cnt_resp.json().get("count", 0) if cnt_resp.status_code == 200 else 0
@@ -14656,7 +14646,6 @@ Output a JSON object with:
                         await client.post(f"{geoid_server}/signup", json=signup_data)
                     except Exception:
                         pass
-                    return JSONResponse({"status": "success", "action": action, "doc_id": doc_id, "doc_url": f"/vault/doc/{agents_key}"}) # Ignore signup errors, might already exist
                         
                     # 3. Login
                     login_data = {
