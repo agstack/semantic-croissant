@@ -2461,8 +2461,10 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
         try:
             _md_fn = f"{os.path.basename(safe_name)}.md"
             _bhost = get_base_host().rstrip("/")
-            if isinstance(output, dict):
-                _cur_d = output.get("distribution", [])
+            _was_str = isinstance(output, str)
+            _out_obj = json.loads(output) if _was_str else output
+            if isinstance(_out_obj, dict):
+                _cur_d = _out_obj.get("distribution", [])
                 if not isinstance(_cur_d, list):
                     _cur_d = [_cur_d] if _cur_d else []
                 if not any(isinstance(d, dict) and (d.get("@id") == _md_fn or d.get("name") == _md_fn) for d in _cur_d):
@@ -2474,7 +2476,9 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                         "contentUrl": f"{_bhost}/vault/{_md_fn}",
                         "encodingFormat": "text/markdown",
                     })
-                    output["distribution"] = _cur_d
+                    _out_obj["distribution"] = _cur_d
+                    if _was_str:
+                        output = json.dumps(_out_obj, indent=2)
         except Exception as e_md_d:
             print(f"Warning: Failed to attach Markdown distribution: {e_md_d}")
 
