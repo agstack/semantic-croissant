@@ -6216,11 +6216,20 @@ def main(port: int, transport: str) -> int:
                                 # Extract isBasedOn annotations prominently at the top of context_text
                                 _ann_block = ""
                                 try:
+                                    _ibo_all = []
                                     _ibo = croissant_doc_dict.get("isBasedOn", [])
-                                    if isinstance(_ibo, dict):
-                                        _ibo = [_ibo]
+                                    _ibo_all.extend(_ibo if isinstance(_ibo, list) else ([_ibo] if _ibo else []))
+                                    for _sub_sfx in ("_README", "_Agents"):
+                                        try:
+                                            _sobj = minio_client.get_object("vault", f"{clean_id}{_sub_sfx}.jsonld")
+                                            _sdata = json.loads(_sobj.read().decode("utf-8", errors="ignore"))
+                                            _sobj.close(); _sobj.release_conn()
+                                            _sibo = _sdata.get("isBasedOn", [])
+                                            _ibo_all.extend(_sibo if isinstance(_sibo, list) else ([_sibo] if _sibo else []))
+                                        except Exception:
+                                            pass
                                     _ann_lines = []
-                                    for _it in _ibo:
+                                    for _it in _ibo_all:
                                         if isinstance(_it, dict) and (_it.get("annotationText") or _it.get("reviewStatus")):
                                             _ann_lines.append(f"- [{_it.get('reviewStatus', 'note')}] ({_it.get('name', '')}): {_it.get('annotationText', '')}")
                                     if _ann_lines:
