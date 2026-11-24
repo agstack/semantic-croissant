@@ -5651,7 +5651,7 @@ def main(port: int, transport: str) -> int:
                 if not doc_id or action == "create":
                     raw_h = hashlib.sha256((text or str(time.time())).encode("utf-8")).digest()[:16]
                     doc_id = base64.urlsafe_b64encode(raw_h).decode("ascii").rstrip("=")
-                if action == "add":
+                if action in ("add", "save"):
                     agents_key = f"{doc_id}_Agents.md"
                     existing = ""
                     try:
