@@ -2151,7 +2151,7 @@
                 moveToChatBtn.title = 'Open this document in Chat mode to ask questions, save, edit, and update';
                 moveToChatBtn.style.cssText = "display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 0.82rem; font-weight: 600; border-radius: 5px; border: 1px solid #006bb3; background: #006bb3; color: #ffffff; cursor: pointer; transition: all 0.15s ease;";
                 const chatIconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`;
-                moveToChatBtn.innerHTML = `${chatIconSvg} <span>Ask</span>`;
+                moveToChatBtn.innerHTML = `${chatIconSvg} <span>Collaborate</span>`;
                 moveToChatBtn.onclick = () => {
                     const qVal = (askDocInput && askDocInput.value.trim()) ? askDocInput.value.trim() : '';
                     let targetUrl = `/?doc=${encodeURIComponent(docId)}`;
@@ -2541,7 +2541,7 @@
                 btnAskMenu.type = 'button';
                 btnAskMenu.title = 'Open document in Chat mode to ask questions, save, edit, and update';
                 btnAskMenu.style.cssText = btnStyle;
-                btnAskMenu.innerHTML = `${chatIconSvg} <span>Ask</span>`;
+                btnAskMenu.innerHTML = `${chatIconSvg} <span>Collaborate</span>`;
                 btnAskMenu.onclick = () => moveToChatBtn.click();
                 toolbarLeft.appendChild(btnAskMenu);
                 
