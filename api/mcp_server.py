@@ -5652,17 +5652,42 @@ def main(port: int, transport: str) -> int:
                     raw_h = hashlib.sha256((text or str(time.time())).encode("utf-8")).digest()[:16]
                     doc_id = base64.urlsafe_b64encode(raw_h).decode("ascii").rstrip("=")
                 if action == "add":
+                    agents_key = f"{doc_id}_Agents.md"
                     existing = ""
                     try:
-                        obj = minio_client.get_object("vault", f"{doc_id}.md")
+                        obj = minio_client.get_object("vault", agents_key)
                         existing = obj.read().decode("utf-8", errors="ignore")
                         obj.close()
                         obj.release_conn()
                     except Exception:
                         pass
-                    new_md = (existing.rstrip() + "\n\n---\n\n" + text).strip() if existing else text
+                    prompt_txt = (body.get("prompt") or "").strip()
+                    entry = f"## Question\n{prompt_txt}\n\n## Answer\n{text}" if prompt_txt else text
+                    new_md = (existing.rstrip() + "\n\n---\n\n" + entry).strip() if existing else f"# Agents Q&A\n\n{entry}"
                     b = new_md.encode("utf-8")
-                    minio_client.put_object("vault", f"{doc_id}.md", io.BytesIO(b), len(b), content_type="text/markdown")
+                    minio_client.put_object("vault", agents_key, io.BytesIO(b), len(b), content_type="text/markdown")
+                    try:
+                        jobj = minio_client.get_object("vault", f"{doc_id}.jsonld")
+                        jdata = json.loads(jobj.read().decode("utf-8", errors="ignore"))
+                        jobj.close()
+                        jobj.release_conn()
+                        dist = jdata.get("distribution", [])
+                        if not isinstance(dist, list):
+                            dist = [dist] if dist else []
+                        if not any(isinstance(d, dict) and (d.get("@id") == agents_key or d.get("name") == "Agents.md") for d in dist):
+                            dist.append({
+                                "@type": "cr:FileObject",
+                                "@id": agents_key,
+                                "name": "Agents.md",
+                                "description": "Chat Q&A log (Agents.md)",
+                                "contentUrl": f"/vault/{agents_key}",
+                                "encodingFormat": "text/markdown",
+                            })
+                            jdata["distribution"] = dist
+                            jb = json.dumps(jdata, indent=2).encode("utf-8")
+                            minio_client.put_object("vault", f"{doc_id}.jsonld", io.BytesIO(jb), len(jb), content_type="application/ld+json")
+                    except Exception:
+                        pass
                 elif action == "save":
                     b = text.encode("utf-8")
                     minio_client.put_object("vault", f"{doc_id}_annotations.md", io.BytesIO(b), len(b), content_type="text/markdown")
