@@ -1397,7 +1397,7 @@
             
             try {
                 // Fetch the raw markdown from the vault API
-                const response = await fetch(`/vault/doc/raw/${docId}`);
+                const response = await fetch(`/vault/doc/raw/${docId}`, { cache: 'no-store' });
                 
                 if (!response.ok) {
                     throw new Error(`Document not found (${response.status})`);
