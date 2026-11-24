@@ -251,7 +251,11 @@ def fetch_github_repo(url, traverse=False):
         try:
             repo_info = scraper.get(api_url, timeout=30).json()
             readme_res = scraper.get(readme_url, timeout=30)
-            readme_content = readme_res.text if readme_res.status_code == 200 else "No README found."
+            if readme_res.status_code == 200:
+                readme_content = readme_res.text
+                globals()['GLOBAL_GITHUB_RAW_README'] = readme_res.content
+            else:
+                readme_content = "No README found."
             
             markdown_content = f"# {repo_info.get('name', repo)}\n\n"
             markdown_content += f"**Description:** {repo_info.get('description', '')}\n"
@@ -1814,6 +1818,16 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                     globals()['GLOBAL_HTML_CV_UPLOADED_IMAGES'] = uploaded_cv_imgs
                 except Exception as e_cv_up:
                     print(f"Warning: Failed to upload HTML CV images: {e_cv_up}")
+
+            if 'GLOBAL_GITHUB_RAW_README' in globals() and globals()['GLOBAL_GITHUB_RAW_README']:
+                try:
+                    _rm_bytes = globals()['GLOBAL_GITHUB_RAW_README']
+                    _rm_fn = f"{os.path.basename(safe_name)}_README.md"
+                    client.put_object("vault", _rm_fn, io.BytesIO(_rm_bytes), len(_rm_bytes), content_type="text/markdown")
+                    globals()['GLOBAL_GITHUB_README_FILE'] = _rm_fn
+                    print(f"Uploaded raw GitHub README.md as {_rm_fn} to vault.")
+                except Exception as e_rm_up:
+                    print(f"Warning: Failed to upload raw GitHub README.md: {e_rm_up}")
                     print(f"Warning: Failed to upload parsed tables to vault: {e_up_tbl}")
 
             # If PDF assets (page renders and embedded images) were generated, upload them to MinIO vault
@@ -2477,6 +2491,18 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                         "encodingFormat": "text/markdown",
                     })
                     _out_obj["distribution"] = _cur_d
+                    if 'GLOBAL_GITHUB_README_FILE' in globals() and globals()['GLOBAL_GITHUB_README_FILE']:
+                        _rm_fn = globals()['GLOBAL_GITHUB_README_FILE']
+                        if not any(isinstance(d, dict) and d.get("@id") == _rm_fn for d in _cur_d):
+                            _cur_d.append({
+                                "@type": "cr:FileObject",
+                                "@id": _rm_fn,
+                                "name": "README.md",
+                                "description": "Original GitHub README.md",
+                                "contentUrl": f"{_bhost}/vault/{_rm_fn}",
+                                "encodingFormat": "text/markdown",
+                            })
+                            _out_obj["distribution"] = _cur_d
                     if _was_str:
                         output = json.dumps(_out_obj, indent=2)
         except Exception as e_md_d:
