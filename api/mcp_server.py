@@ -5702,14 +5702,24 @@ def main(port: int, transport: str) -> int:
                         agents_init = f"# Agents Q&A\n\n## Question\n{prompt_txt}\n\n## Answer\n{text}" if prompt_txt else "# Agents Q&A\n"
                         ab = agents_init.encode("utf-8")
                         minio_client.put_object("vault", f"{doc_id}_Agents.md", io.BytesIO(ab), len(ab), content_type="text/markdown")
+                        ds_title = (prompt_txt or f"Chat Document {doc_id}")[:120]
+                        try:
+                            import requests as _req_t
+                            _oh = os.environ.get("OLLAMA_HOST", "http://host.docker.internal:11434").rstrip("/")
+                            _om = body.get("model") or OLLAMA_DEFAULT_MODEL
+                            _tr = _req_t.post(f"{_oh}/api/generate", json={"model": _om, "prompt": f"Generate a short 4-8 word title for this document. Return ONLY the title.\n\n{text[:1500]}", "stream": False}, timeout=15)
+                            if _tr.status_code == 200 and _tr.json().get("response", "").strip():
+                                ds_title = _tr.json()["response"].strip().strip('"\'')[:120]
+                        except Exception:
+                            pass
                         jdata = {
                             "@context": {"@vocab": "https://schema.org/", "cr": "http://mlcommons.org/croissant/"},
                             "@type": "Dataset",
-                            "name": (prompt_txt or f"Chat Document {doc_id}")[:120],
+                            "name": ds_title,
                             "distribution": [
-                                {"@type": "cr:FileObject", "@id": f"{doc_id}.md", "name": f"{doc_id}.md", "contentUrl": f"/vault/{doc_id}.md", "encodingFormat": "text/markdown"},
-                                {"@type": "cr:FileObject", "@id": f"{doc_id}_README.md", "name": "README.md", "contentUrl": f"/vault/{doc_id}_README.md", "encodingFormat": "text/markdown"},
-                                {"@type": "cr:FileObject", "@id": f"{doc_id}_Agents.md", "name": "Agents.md", "contentUrl": f"/vault/{doc_id}_Agents.md", "encodingFormat": "text/markdown"},
+                                {"@type": "cr:FileObject", "@id": f"{doc_id}.md", "name": f"{doc_id}.md", "description": f"{ds_title} — Summary", "contentUrl": f"/vault/{doc_id}.md", "encodingFormat": "text/markdown"},
+                                {"@type": "cr:FileObject", "@id": f"{doc_id}_README.md", "name": "README.md", "description": f"{ds_title} — README", "contentUrl": f"/vault/{doc_id}_README.md", "encodingFormat": "text/markdown"},
+                                {"@type": "cr:FileObject", "@id": f"{doc_id}_Agents.md", "name": "Agents.md", "description": f"{ds_title} — Agents Q&A Transcript", "contentUrl": f"/vault/{doc_id}_Agents.md", "encodingFormat": "text/markdown"},
                             ],
                         }
                         jb = json.dumps(jdata, indent=2).encode("utf-8")
