@@ -6248,6 +6248,37 @@ def main(port: int, transport: str) -> int:
                                 context_text = f"IMPORTANT DATASET OVERVIEW:\n- Title: {ds_name}\n- Authors / Creators: {', '.join(ds_creators) if ds_creators else 'Unknown'}\n- Total files: {total_files}\n\n" + _ann_block + croissant_summary_snippet + datamaps_page_summary + cdif_file_summary + "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + jsonld_to_inject + "\n\n" + context_text
                     except Exception as doc_err:
                         print(f"Warning: doc_id handling error in vault_ask: {doc_err}")
+                if doc_id:
+                    try:
+                        from minio import Minio as _MinioTop
+                        _cid = doc_id.replace(".jsonld", "").replace(".md", "")
+                        for _sfx in ("_Agents", "_README", "_datacard"):
+                            if _cid.endswith(_sfx):
+                                _cid = _cid[:-len(_sfx)]
+                                break
+                        _mu = os.environ.get("MINIO_URL", "http://minio:9000")
+                        if (bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")) and any(h in _mu for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+                            _mu = "http://minio:9000"
+                        _mct = _MinioTop(_mu.replace("http://", "").replace("https://", "").rstrip("/"),
+                                         access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                                         secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                                         secure=_mu.startswith("https"))
+                        _ibo_top = []
+                        for _sfx in ("", "_README", "_Agents"):
+                            try:
+                                _o = _mct.get_object("vault", f"{_cid}{_sfx}.jsonld")
+                                _jd = json.loads(_o.read().decode("utf-8", errors="ignore"))
+                                _o.close(); _o.release_conn()
+                                _ib = _jd.get("isBasedOn", [])
+                                _ibo_top.extend(_ib if isinstance(_ib, list) else ([_ib] if _ib else []))
+                            except Exception:
+                                pass
+                        _al = [f"- [{x.get('reviewStatus', 'note')}] ({x.get('name', '')}): {x.get('annotationText', '')}"
+                               for x in _ibo_top if isinstance(x, dict) and (x.get("annotationText") or x.get("reviewStatus"))]
+                        if _al and "USER ANNOTATIONS & NOTES" not in context_text:
+                            context_text = "=== USER ANNOTATIONS & NOTES (isBasedOn — treat these as authoritative corrections to the text) ===\n" + "\n".join(_al) + "\n\n" + context_text
+                    except Exception as _ea:
+                        print(f"Warning: top-level annotation load failed: {_ea}")
                 model_name = data.get("model", OLLAMA_DEFAULT_MODEL).strip()
                 if not model_name:
                     model_name = OLLAMA_DEFAULT_MODEL
