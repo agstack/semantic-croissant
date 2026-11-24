@@ -6213,7 +6213,8 @@ def main(port: int, transport: str) -> int:
                                 except Exception:
                                     pass
 
-                                # Extract isBasedOn annotations prominently for vault_ask
+                                # Extract isBasedOn annotations prominently at the top of context_text
+                                _ann_block = ""
                                 try:
                                     _ibo = croissant_doc_dict.get("isBasedOn", [])
                                     if isinstance(_ibo, dict):
@@ -6223,11 +6224,11 @@ def main(port: int, transport: str) -> int:
                                         if isinstance(_it, dict) and (_it.get("annotationText") or _it.get("reviewStatus")):
                                             _ann_lines.append(f"- [{_it.get('reviewStatus', 'note')}] ({_it.get('name', '')}): {_it.get('annotationText', '')}")
                                     if _ann_lines:
-                                        cdif_file_summary += "=== USER ANNOTATIONS & NOTES (isBasedOn — treat these as authoritative corrections to the text) ===\n" + "\n".join(_ann_lines) + "\n\n"
+                                        _ann_block = "=== USER ANNOTATIONS & NOTES (isBasedOn — treat these as authoritative corrections to the text) ===\n" + "\n".join(_ann_lines) + "\n\n"
                                 except Exception:
                                     pass
 
-                                context_text = f"IMPORTANT DATASET OVERVIEW:\n- Title: {ds_name}\n- Authors / Creators: {', '.join(ds_creators) if ds_creators else 'Unknown'}\n- Total files: {total_files}\n\n" + croissant_summary_snippet + datamaps_page_summary + cdif_file_summary + "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + jsonld_to_inject + "\n\n" + context_text
+                                context_text = f"IMPORTANT DATASET OVERVIEW:\n- Title: {ds_name}\n- Authors / Creators: {', '.join(ds_creators) if ds_creators else 'Unknown'}\n- Total files: {total_files}\n\n" + _ann_block + croissant_summary_snippet + datamaps_page_summary + cdif_file_summary + "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + jsonld_to_inject + "\n\n" + context_text
                     except Exception as doc_err:
                         print(f"Warning: doc_id handling error in vault_ask: {doc_err}")
                 model_name = data.get("model", OLLAMA_DEFAULT_MODEL).strip()
