@@ -8788,7 +8788,7 @@ Question: {question}
             index_path = "/app/static/doc_viewer.html"
             if not os.path.exists(index_path): index_path = "api/static/doc_viewer.html"
             html_content = render_html_template(index_path, request)
-            return HTMLResponse(content=html_content)
+            return HTMLResponse(content=html_content, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
             
         async def vault_es_doc_raw(request):
             def _generate_md(data):
@@ -11971,7 +11971,7 @@ Instructions:
             index_path = "/app/static/group_viewer.html"
             if not os.path.exists(index_path): index_path = "api/static/group_viewer.html"
             html_content = render_html_template(index_path, request)
-            return HTMLResponse(content=html_content)
+            return HTMLResponse(content=html_content, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
         async def view_dataverse(request):
             import os
@@ -14464,7 +14464,7 @@ Output a JSON object with:
             if not os.path.exists(file_path):
                 file_path = "api/static/groups_index.html"
             html_content = render_html_template(file_path, request)
-            return HTMLResponse(content=html_content)
+            return HTMLResponse(content=html_content, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
         async def view_profile(request):
             from starlette.responses import HTMLResponse, RedirectResponse
@@ -14498,7 +14498,7 @@ Output a JSON object with:
             
             html_content = html_content.replace('{{GEOID_SECTION}}', geoid_html)
             
-            return HTMLResponse(content=html_content)
+            return HTMLResponse(content=html_content, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
         async def view_login(request):
             import os
             from starlette.responses import HTMLResponse
@@ -14506,7 +14506,7 @@ Output a JSON object with:
             if not os.path.exists(file_path):
                 file_path = "api/static/login.html"
             html_content = render_html_template(file_path, request)
-            return HTMLResponse(content=html_content)
+            return HTMLResponse(content=html_content, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
         async def api_auth_status(request):
             from starlette.responses import JSONResponse
