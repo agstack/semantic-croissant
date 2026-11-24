@@ -1404,11 +1404,10 @@
                 }
                 
                 markdown = await response.text();
-                if (docId.includes('_')) {
-                    const rootId = docId.split('_')[0];
-                    if (rootId && rootId !== docId) {
-                        markdown = `> [← Back to Root Document (${rootId})](/vault/doc/${rootId})\n\n` + markdown;
-                    }
+                const baseDocId = docId.replace(/\.(md|jsonld|csv|xlsx)$/i, '');
+                const rootId = baseDocId.replace(/(_Agents|_README|_datacard|_datamap_\d+|_vision_table_\d+|_image_\d+)$/i, '');
+                if (rootId && rootId !== baseDocId) {
+                    markdown = `> [← Back to Root Document (${rootId})](/vault/doc/${rootId})\n\n` + markdown;
                 }
                 
                 // Strip existing [View Croissant JSON-LD Data] text from markdown
