@@ -6550,6 +6550,9 @@ Question: {question}
 
 {qa_instruction}"""
 
+                if '_al' in locals() and _al and "USER ANNOTATIONS & NOTES" not in prompt:
+                    prompt = "=== USER ANNOTATIONS & NOTES (isBasedOn — treat these as authoritative corrections to the text) ===\n" + "\n".join(_al) + "\n\n" + prompt
+
                 # Clean any null characters or control characters that could break C/POSIX subprocess or shells
                 prompt = prompt.replace("\x00", "").replace("\r", "")
 
