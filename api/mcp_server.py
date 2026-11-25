@@ -222,6 +222,36 @@ def get_variable_elasticsearch_url() -> str:
 _GLOBAL_COLLECTION_CACHE_UPDATING = set()
 _GLOBAL_VARIABLES_CACHE_UPDATING = False
 
+async def pick_cdif_elasticsearch_url() -> str | None:
+    """
+    Returns the Elasticsearch base URL holding the largest 'cdif' index (or None if none reachable).
+    Prioritizes get_variable_elasticsearch_url() (ES_GLOBAL_HOST) first and probes candidates
+    concurrently so a near-empty local Elasticsearch 'cdif' index never shadows ES_GLOBAL_HOST.
+    """
+    import asyncio, httpx
+    var_es = get_variable_elasticsearch_url()
+    candidates = []
+    for u in [var_es] + get_elasticsearch_lookup_urls():
+        if u and u not in candidates:
+            candidates.append(u)
+
+    async def _probe(cand: str):
+        try:
+            async with httpx.AsyncClient(timeout=2.5) as chk:
+                r = await chk.get(f"{cand}/cdif/_count")
+                if r.status_code == 200:
+                    return cand, int(r.json().get("count", 0))
+        except Exception:
+            pass
+        return cand, -1
+
+    results = await asyncio.gather(*(_probe(c) for c in candidates))
+    best_url, best_cnt = None, -1
+    for cand, cnt in results:
+        if cnt > best_cnt:
+            best_url, best_cnt = cand, cnt
+    return best_url
+
 def get_minio_lookup_urls() -> list[str]:
     """
     Returns an ordered list of MinIO base endpoints to query across all known nodes.
@@ -11151,23 +11181,26 @@ Question: {question}
                         ]
                     }
 
-                    # Query cdif index across candidates
-                    for cand_url in ([target_es] if target_es else []) + [u for u in es_candidates if u != target_es]:
-                        if not cand_url:
-                            continue
+                    # Query cdif index across candidates (prioritize global CDIF ES and don't stop on empty hits)
+                    var_es = get_variable_elasticsearch_url()
+                    cdif_cands = []
+                    for u in [var_es, target_es] + es_candidates:
+                        if u and u not in cdif_cands:
+                            cdif_cands.append(u)
+                    raw_hits = []
+                    for cand_url in cdif_cands:
                         try:
                             resp = await client.post(f"{cand_url}/cdif/_search", json=payload, timeout=20.0)
                             if resp.status_code == 200:
-                                raw_hits = resp.json().get("hits", {}).get("hits", [])
-                                target_es = cand_url
-                                break
+                                cand_hits = resp.json().get("hits", {}).get("hits", [])
+                                if cand_hits:
+                                    raw_hits = cand_hits
+                                    break
                         except Exception:
                             continue
 
                     if not target_es:
                         return
-
-                    raw_hits = resp.json().get("hits", {}).get("hits", [])
                     # Deduplicate hits by (file_url or file_name or doc_id), preferring entries with populated file_name
                     deduped_hits = {}
                     for h in raw_hits:
@@ -11476,22 +11509,25 @@ Question: {question}
                         ]
                     }
 
-                    for cand_url in ([target_es] if target_es else []) + [u for u in es_candidates if u != target_es]:
-                        if not cand_url:
-                            continue
+                    var_es = get_variable_elasticsearch_url()
+                    cdif_cands = []
+                    for u in [var_es, target_es] + es_candidates:
+                        if u and u not in cdif_cands:
+                            cdif_cands.append(u)
+                    raw_hits = []
+                    for cand_url in cdif_cands:
                         try:
                             resp = await client.post(f"{cand_url}/cdif/_search", json=payload, timeout=20.0)
                             if resp.status_code == 200:
-                                raw_hits = resp.json().get("hits", {}).get("hits", [])
-                                target_es = cand_url
-                                break
+                                cand_hits = resp.json().get("hits", {}).get("hits", [])
+                                if cand_hits:
+                                    raw_hits = cand_hits
+                                    break
                         except Exception:
                             continue
 
-                    if not target_es:
+                    if not target_es and not raw_hits:
                         return JSONResponse({"collection_id": cid, "total_files": 0, "total_variables": 0, "variables": [], "files": []})
-
-                    raw_hits = resp.json().get("hits", {}).get("hits", [])
                     # Deduplicate hits by (file_url or file_name or doc_id), preferring entries with populated file_name
                     deduped_hits = {}
                     for h in raw_hits:
@@ -11823,15 +11859,20 @@ Question: {question}
                         ]
                     }
 
+                    var_es = get_variable_elasticsearch_url()
+                    cdif_cands = []
+                    for u in [var_es, target_es] + es_candidates:
+                        if u and u not in cdif_cands:
+                            cdif_cands.append(u)
                     hits = []
-                    for cand_url in ([target_es] if target_es else []) + [u for u in es_candidates if u != target_es]:
-                        if not cand_url:
-                            continue
+                    for cand_url in cdif_cands:
                         try:
                             resp = await client.post(f"{cand_url}/cdif/_search", json=payload, timeout=20.0)
                             if resp.status_code == 200:
-                                hits = resp.json().get("hits", {}).get("hits", [])
-                                break
+                                cand_hits = resp.json().get("hits", {}).get("hits", [])
+                                if cand_hits:
+                                    hits = cand_hits
+                                    break
                         except Exception:
                             continue
 
@@ -12819,17 +12860,9 @@ Instructions:
             import httpx, json, sys, time
             try:
                 if not es_url:
-                    for cand in get_elasticsearch_lookup_urls():
-                        try:
-                            async with httpx.AsyncClient(timeout=3.0) as chk:
-                                r = await chk.get(f"{cand}/cdif/_count")
-                                if r.status_code == 200:
-                                    es_url = cand
-                                    break
-                        except Exception:
-                            continue
+                    es_url = await pick_cdif_elasticsearch_url()
                 if not es_url:
-                    es_url = get_elasticsearch_lookup_urls()[0]
+                    es_url = get_variable_elasticsearch_url() or get_elasticsearch_lookup_urls()[0]
                 print(f"[VariablesCache] Background cache refresh started with {es_url}...", file=sys.stderr)
                 async with httpx.AsyncClient(timeout=180.0) as client:
                     try:
@@ -13090,7 +13123,7 @@ Instructions:
             and supplements with Croissant/Dataverse recordSet.field variable definitions when querying.
             """
             from starlette.responses import JSONResponse
-            import json, httpx, os, sys, re, time
+            import asyncio, json, httpx, os, sys, re, time
 
             limit_param = request.query_params.get("limit")
             limit = int(limit_param) if limit_param and limit_param.isdigit() else None
@@ -13099,17 +13132,8 @@ Instructions:
             q_param = (request.query_params.get("q") or request.query_params.get("query") or "").strip()
 
             es_candidates = get_elasticsearch_lookup_urls()
-            active_es = None
-            for cand in es_candidates:
-                try:
-                    async with httpx.AsyncClient(timeout=3.0) as chk:
-                        r = await chk.get(f"{cand}/cdif/_count")
-                        if r.status_code == 200:
-                            active_es = cand
-                            break
-                except Exception:
-                    continue
-            es_url = active_es or (es_candidates[0] if es_candidates else os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/"))
+            active_es = await pick_cdif_elasticsearch_url()
+            es_url = active_es or get_variable_elasticsearch_url() or (es_candidates[0] if es_candidates else os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/"))
 
             # Check if cache hit is available for instant response (fast statistical values + first 100 records)
             if not q_param and offset == 0 and active_es:
@@ -13119,27 +13143,28 @@ Instructions:
                         if cache_res.status_code == 200:
                             c_data = cache_res.json().get("_source", {})
                             cached_vars = c_data.get("first_100_variables", [])
-                            if limit is not None:
-                                cached_vars = cached_vars[:limit]
-                            num_val = c_data.get("numeric_variables", c_data.get("total_numeric", 0))
-                            other_val = c_data.get("text_other_variables", c_data.get("total_other", 0))
-                            
-                            # Trigger background refresh if stale (> 10 minutes)
-                            if time.time() - c_data.get("updated_at", 0) > 600:
-                                asyncio.create_task(update_variables_index_cache(es_url))
+                            if c_data.get("total_variables", 0) > 0 and cached_vars:
+                                if limit is not None:
+                                    cached_vars = cached_vars[:limit]
+                                num_val = c_data.get("numeric_variables", c_data.get("total_numeric", 0))
+                                other_val = c_data.get("text_other_variables", c_data.get("total_other", 0))
+                                
+                                # Trigger background refresh if stale (> 10 minutes)
+                                if time.time() - c_data.get("updated_at", 0) > 600:
+                                    asyncio.create_task(update_variables_index_cache(es_url))
 
-                            return JSONResponse({
-                                "total_files": c_data.get("total_files", 0),
-                                "total_variables": c_data.get("total_variables", len(cached_vars)),
-                                "total_numeric": num_val,
-                                "total_other": other_val,
-                                "numeric_variables": num_val,
-                                "text_other_variables": other_val,
-                                "variables": cached_vars,
-                                "has_more": c_data.get("total_variables", 0) > len(cached_vars),
-                                "cached": True,
-                                "is_updating": c_data.get("is_updating", False)
-                            })
+                                return JSONResponse({
+                                    "total_files": c_data.get("total_files", 0),
+                                    "total_variables": c_data.get("total_variables", len(cached_vars)),
+                                    "total_numeric": num_val,
+                                    "total_other": other_val,
+                                    "numeric_variables": num_val,
+                                    "text_other_variables": other_val,
+                                    "variables": cached_vars,
+                                    "has_more": c_data.get("total_variables", 0) > len(cached_vars),
+                                    "cached": True,
+                                    "is_updating": c_data.get("is_updating", False)
+                                })
                 except Exception as cache_err:
                     print(f"[VariablesCache] Note: could not load from cache index: {cache_err}", file=sys.stderr)
 
@@ -13676,17 +13701,8 @@ Instructions:
                 return JSONResponse({"answer": "Please provide a question about the variables."})
 
             es_candidates = get_elasticsearch_lookup_urls()
-            active_es = None
-            for cand in es_candidates:
-                try:
-                    async with httpx.AsyncClient(timeout=3.0) as chk:
-                        r = await chk.get(f"{cand}/cdif/_count")
-                        if r.status_code == 200:
-                            active_es = cand
-                            break
-                except Exception:
-                    continue
-            es_url = active_es or (es_candidates[0] if es_candidates else os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/"))
+            active_es = await pick_cdif_elasticsearch_url()
+            es_url = active_es or get_variable_elasticsearch_url() or (es_candidates[0] if es_candidates else os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/"))
             payload = {
                 "query": {"match_all": {}},
                 "size": 10000,
