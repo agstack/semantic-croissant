@@ -1680,8 +1680,19 @@
                 }
 
                 let exportButtons = '<span style="color: var(--text-muted);">—</span>';
-                if (v.cdif_export_url) {
-                    const cdifUrl = v.cdif_export_url;
+                let resolvedCdifUrl = (v.cdif_export_url || '').trim();
+                if (resolvedCdifUrl && !resolvedCdifUrl.includes('/export?')) {
+                    if (v.file_url && v.dataset_url) {
+                        resolvedCdifUrl = `/export?ds=${encodeURIComponent(v.dataset_url)}&file=${encodeURIComponent(v.file_url)}`;
+                    } else if (v.file_url) {
+                        resolvedCdifUrl = `/export?file=${encodeURIComponent(v.file_url)}`;
+                    } else {
+                        const dsTarget = v.dataset_url || resolvedCdifUrl;
+                        resolvedCdifUrl = `/export?ds=${encodeURIComponent(dsTarget)}&format=cdif`;
+                    }
+                }
+                if (resolvedCdifUrl) {
+                    const cdifUrl = resolvedCdifUrl;
                     const ddiCdiUrl = cdifUrl.includes('?') 
                         ? (cdifUrl.includes('format=') ? cdifUrl.replace(/format=[^&]+/, 'format=ddi-cdi') : `${cdifUrl}&format=ddi-cdi`)
                         : `${cdifUrl}?format=ddi-cdi`;

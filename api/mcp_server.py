@@ -252,6 +252,32 @@ async def pick_cdif_elasticsearch_url() -> str | None:
             best_url, best_cnt = cand, cnt
     return best_url
 
+
+def normalize_cdif_export_url(raw_cdif_url: str, base_host: str = "", file_url: str = "", dataset_url: str = "", doc_id: str = "") -> str:
+    """
+    Ensures cdif_export_url always points to the active /export endpoint rather than
+    a raw external dataset/DOI website (e.g. https://doi.org/...).
+    """
+    import urllib.parse
+    b_host = (base_host or f"https://{MCP_DOMAIN}").rstrip("/")
+    raw = (raw_cdif_url or "").strip()
+    if raw and "/export?" in raw:
+        qs_part = raw.split("/export?", 1)[-1]
+        return f"{b_host}/export?{qs_part}"
+    furl = (file_url or "").strip()
+    durl = (dataset_url or "").strip()
+    if not durl and raw.startswith(("http://", "https://")):
+        durl = raw
+    if furl and durl:
+        return f"{b_host}/export?ds={urllib.parse.quote(durl, safe='')}&file={urllib.parse.quote(furl, safe='')}"
+    if furl:
+        return f"{b_host}/export?file={urllib.parse.quote(furl, safe='')}"
+    if durl:
+        return f"{b_host}/export?ds={urllib.parse.quote(durl, safe='')}&format=cdif"
+    if doc_id:
+        return f"{b_host}/export?id={urllib.parse.quote(str(doc_id), safe='')}&format=cdif"
+    return raw
+
 def get_minio_lookup_urls() -> list[str]:
     """
     Returns an ordered list of MinIO base endpoints to query across all known nodes.
@@ -7681,10 +7707,34 @@ Question: {question}
 
             target_url = raw_file_param or raw_url_param
 
-            # If ?ds= is provided without a ?file= parameter, export the dataset in Croissant (default) or convert to CDIF
+            id_param = (request.query_params.get("id") or "").strip()
+            if not target_url and id_param:
+                es_cands_id = []
+                for _u in [await pick_cdif_elasticsearch_url(), get_variable_elasticsearch_url()] + get_elasticsearch_lookup_urls():
+                    if _u and _u not in es_cands_id:
+                        es_cands_id.append(_u)
+                base_host = f"https://{MCP_DOMAIN}"
+                async with httpx.AsyncClient(timeout=10.0) as es_id_client:
+                    for cand_es in es_cands_id:
+                        try:
+                            r_id = await es_id_client.get(f"{cand_es}/cdif/_doc/{urllib.parse.quote(id_param, safe='')}", timeout=4.0)
+                            if r_id.status_code == 200:
+                                hit_src = r_id.json().get("_source", {})
+                                cached_cdif = hit_src.get("cdif_jsonld")
+                                if cached_cdif:
+                                    if isinstance(cached_cdif, str):
+                                        cached_cdif = json.loads(cached_cdif)
+                                    if isinstance(cached_cdif, dict):
+                                        cached_cdif["@id"] = f"{base_host}/export?id={urllib.parse.quote(id_param, safe='')}"
+                                    resp_bytes = prepare_cdif_response(cached_cdif)
+                                    return build_export_response(resp_bytes, f"export_{id_param}.jsonld", cache_header="HIT-ELASTICSEARCH")
+                        except Exception:
+                            continue
+
+            # If ?ds= is provided without a ?file= parameter, export the dataset in Croissant (default) or CDIF
             if not target_url and ds_url:
                 es_cands_ds = []
-                for _u in [get_variable_elasticsearch_url()] + get_elasticsearch_lookup_urls():
+                for _u in [await pick_cdif_elasticsearch_url(), get_variable_elasticsearch_url()] + get_elasticsearch_lookup_urls():
                     if _u and _u not in es_cands_ds:
                         es_cands_ds.append(_u)
                 base_host = f"https://{MCP_DOMAIN}"
@@ -7694,6 +7744,59 @@ Question: {question}
                 if "doi.org/" in norm_doi:
                     norm_doi = "https://doi.org/" + norm_doi.split("doi.org/")[-1]
                 h1 = hashlib.sha256(norm_doi.encode("utf-8")).hexdigest()[:16]
+                cdif_ds_ids = list(dict.fromkeys([
+                    f"cdif_ds_{hashlib.sha256(norm_doi.encode('utf-8')).hexdigest()[:24]}",
+                    f"cdif_ds_{hashlib.sha256(ds_url.encode('utf-8')).hexdigest()[:24]}",
+                    f"cdif_v2_{hashlib.sha256(norm_doi.encode('utf-8')).hexdigest()[:24]}",
+                    f"cdif_v2_{hashlib.sha256(ds_url.encode('utf-8')).hexdigest()[:24]}",
+                ]))
+
+                async def _lookup_cdif_dataset_doc():
+                    async with httpx.AsyncClient(timeout=15.0) as es_cdif_ds_client:
+                        for cand_es in es_cands_ds:
+                            for cand_doc_id in cdif_ds_ids:
+                                try:
+                                    r_cd = await es_cdif_ds_client.get(f"{cand_es}/cdif/_doc/{cand_doc_id}", timeout=4.0)
+                                    if r_cd.status_code == 200:
+                                        c_obj = r_cd.json().get("_source", {}).get("cdif_jsonld")
+                                        if c_obj:
+                                            return json.loads(c_obj) if isinstance(c_obj, str) else c_obj
+                                except Exception:
+                                    pass
+                            try:
+                                q_cdif_ds = {
+                                    "query": {
+                                        "bool": {
+                                            "should": [
+                                                {"term": {"dataset_url.keyword": ds_url}},
+                                                {"term": {"dataset_url.keyword": norm_doi}},
+                                                {"match_phrase": {"dataset_url": norm_doi}}
+                                            ],
+                                            "minimum_should_match": 1
+                                        }
+                                    },
+                                    "size": 1
+                                }
+                                r_cs = await es_cdif_ds_client.post(f"{cand_es}/cdif/_search", json=q_cdif_ds, timeout=5.0)
+                                if r_cs.status_code == 200:
+                                    c_hits = r_cs.json().get("hits", {}).get("hits", [])
+                                    if c_hits:
+                                        c_obj = c_hits[0].get("_source", {}).get("cdif_jsonld")
+                                        if c_obj:
+                                            return json.loads(c_obj) if isinstance(c_obj, str) else c_obj
+                            except Exception:
+                                continue
+                    return None
+
+                # If CDIF / DDI-CDI format is explicitly requested (or format=html/raw for CDIF preview), check 'cdif' index first
+                if req_format in ["cdif", "ddi-cdi", "html", "raw"]:
+                    cached_ds_cdif = await _lookup_cdif_dataset_doc()
+                    if cached_ds_cdif:
+                        if isinstance(cached_ds_cdif, dict):
+                            cached_ds_cdif["@id"] = f"{base_host}/export?ds={urllib.parse.quote(ds_url, safe='')}&format={'ddi-cdi' if is_ddi_cdi else 'cdif'}"
+                        resp_bytes = prepare_cdif_response(cached_ds_cdif)
+                        out_fn = "export_dataset_ddi_cdi.jsonld" if is_ddi_cdi else "export_dataset_cdif.jsonld"
+                        return build_export_response(resp_bytes, out_fn, cache_header="HIT-ELASTICSEARCH")
 
                 croissant_doc = None
                 matched_id = None
@@ -7785,7 +7888,14 @@ Question: {question}
                     resp_bytes = json.dumps(clean_doc, indent=2).encode("utf-8")
                     return build_export_response(resp_bytes, "export_dataset_croissant.jsonld", cache_header="HIT")
                 else:
-                    return JSONResponse({"error": f"Dataset with identifier/URL '{ds_url}' not found in indexed croissant records."}, status_code=404)
+                    # Fallback: dataset may exist only in the 'cdif' index (e.g. cdif_ds_* records)
+                    cached_ds_cdif = await _lookup_cdif_dataset_doc()
+                    if cached_ds_cdif:
+                        if isinstance(cached_ds_cdif, dict):
+                            cached_ds_cdif["@id"] = f"{base_host}/export?ds={urllib.parse.quote(ds_url, safe='')}&format=cdif"
+                        resp_bytes = prepare_cdif_response(cached_ds_cdif)
+                        return build_export_response(resp_bytes, "export_dataset_cdif.jsonld", cache_header="HIT-ELASTICSEARCH")
+                    return JSONResponse({"error": f"Dataset with identifier/URL '{ds_url}' not found in indexed croissant or cdif records."}, status_code=404)
 
             if not target_url:
                 return JSONResponse({"error": "Missing 'file', 'url', 'ds', or 'q' query parameter, e.g. /export?ds=<dataset_doi> or /export?file=<file_url>"}, status_code=400)
@@ -11329,11 +11439,7 @@ Question: {question}
                         durl = src.get("dataset_url", "")
                         did = src.get("dataset_id", "")
                         dtitle = src.get("title", "") or fname
-                        cdif_url = src.get("cdif_export_url", "")
-                        if cdif_url and "/export?" in cdif_url:
-                            qs_part = cdif_url.split("/export?", 1)[-1]
-                            base_host = f"https://{MCP_DOMAIN}"
-                            cdif_url = f"{base_host}/export?{qs_part}"
+                        cdif_url = normalize_cdif_export_url(src.get("cdif_export_url", ""), f"https://{MCP_DOMAIN}", furl, durl, h.get("_id", ""))
 
                         cdif_json = src.get("cdif_jsonld", {})
                         dists = cdif_json.get("schema:distribution") or cdif_json.get("distribution") or []
@@ -11742,11 +11848,7 @@ Question: {question}
                         dtitle = ds_obj.get("name") or ds_obj.get("title") or src.get("title", "") or ""
                         location = detect_location(fname, ds_obj)
 
-                        cdif_url = src.get("cdif_export_url", "")
-                        if cdif_url and "/export?" in cdif_url:
-                            qs_part = cdif_url.split("/export?", 1)[-1]
-                            base_host = f"https://{MCP_DOMAIN}"
-                            cdif_url = f"{base_host}/export?{qs_part}"
+                        cdif_url = normalize_cdif_export_url(src.get("cdif_export_url", ""), f"https://{MCP_DOMAIN}", furl, durl, h.get("_id", ""))
                         cdif_json = src.get("cdif_jsonld", {})
                         dists = cdif_json.get("schema:distribution") or cdif_json.get("distribution") or []
                         matched_var_ids = None
@@ -13042,11 +13144,7 @@ Instructions:
                         did = src.get("dataset_id", "")
                         cid = src.get("collection_id", "")
                         dtitle = src.get("title", "") or fname
-                        cdif_url = src.get("cdif_export_url", "")
-                        if cdif_url and "/export?" in cdif_url:
-                            qs_part = cdif_url.split("/export?", 1)[-1]
-                            base_host = f"https://{MCP_DOMAIN}"
-                            cdif_url = f"{base_host}/export?{qs_part}"
+                        cdif_url = normalize_cdif_export_url(src.get("cdif_export_url", ""), f"https://{MCP_DOMAIN}", furl, durl, h.get("_id", ""))
 
                         cdif_json = src.get("cdif_jsonld", {})
                         dists = cdif_json.get("schema:distribution") or cdif_json.get("distribution") or []
@@ -13247,6 +13345,15 @@ Instructions:
                             if c_data.get("total_variables", 0) > 0 and cached_vars:
                                 if limit is not None:
                                     cached_vars = cached_vars[:limit]
+                                b_host = f"https://{MCP_DOMAIN}"
+                                for _cv in cached_vars:
+                                    if isinstance(_cv, dict):
+                                        _cv["cdif_export_url"] = normalize_cdif_export_url(
+                                            _cv.get("cdif_export_url", ""),
+                                            b_host,
+                                            _cv.get("file_url", ""),
+                                            _cv.get("dataset_url", "")
+                                        )
                                 num_val = c_data.get("numeric_variables", c_data.get("total_numeric", 0))
                                 other_val = c_data.get("text_other_variables", c_data.get("total_other", 0))
                                 
@@ -13402,11 +13509,7 @@ Instructions:
                         did = src.get("dataset_id", "")
                         cid = src.get("collection_id", "")
                         dtitle = dataset_titles.get(did, "") or src.get("title", "") or ""
-                        cdif_url = src.get("cdif_export_url", "")
-                        if cdif_url and "/export?" in cdif_url:
-                            qs_part = cdif_url.split("/export?", 1)[-1]
-                            base_host = f"https://{MCP_DOMAIN}"
-                            cdif_url = f"{base_host}/export?{qs_part}"
+                        cdif_url = normalize_cdif_export_url(src.get("cdif_export_url", ""), f"https://{MCP_DOMAIN}", furl, durl, h.get("_id", ""))
                         cdif_json = src.get("cdif_jsonld", {})
                         dists = cdif_json.get("schema:distribution") or cdif_json.get("distribution") or []
                         matched_var_ids = None
