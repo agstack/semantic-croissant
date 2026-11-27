@@ -102,6 +102,10 @@ def fetch_youtube_transcript(url):
             
         channel = ""
         date = ""
+        title = f"YouTube Video {video_id}"
+        description = ""
+        channel = ""
+        date = ""
         try:
             res = scraper.get(url, timeout=10)
             if res.status_code == 200:
@@ -110,8 +114,8 @@ def fetch_youtube_transcript(url):
                 if title_tag:
                     title = title_tag.get("content", "")
                 else:
-                    title = soup.title.text if soup.title else ""
-                desc_tag = soup.find("meta", property="og:description") or soup.find("meta", name="description")
+                    title = soup.title.text if soup.title else title
+                desc_tag = soup.find("meta", property="og:description") or soup.find("meta", attrs={"name": "description"})
                 if desc_tag:
                     description = desc_tag.get("content", "")
                     
@@ -124,6 +128,17 @@ def fetch_youtube_transcript(url):
                     date = date_tag.get("content", "")
         except Exception as e:
             print(f"Could not fetch YouTube metadata: {e}")
+        if title == f"YouTube Video {video_id}" or not channel:
+            try:
+                _oe = scraper.get(f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json", timeout=10)
+                if _oe.status_code == 200:
+                    _oj = _oe.json()
+                    if _oj.get("title"):
+                        title = _oj["title"]
+                    if not channel and _oj.get("author_name"):
+                        channel = _oj["author_name"]
+            except Exception:
+                pass
             
         transcript_list = YouTubeTranscriptApi().list(video_id)
         transcript = None
@@ -147,6 +162,13 @@ def fetch_youtube_transcript(url):
         if description:
             full_text += f"{description}\n\n"
         full_text += f"## Transcript\n\n{text}"
+        
+        _yt_readme = f"# {title}\n\n**URL:** {url}\n"
+        if channel: _yt_readme += f"**Channel:** {channel}\n"
+        if date: _yt_readme += f"**Published:** {date}\n"
+        _yt_readme += f"\n## Description\n\n{description or 'No description available.'}\n"
+        globals()['GLOBAL_YOUTUBE_README'] = _yt_readme.encode("utf-8")
+        globals()['GLOBAL_YOUTUBE_AGENTS'] = f"# YouTube Transcript: {title}\n\n{text}\n".encode("utf-8")
         
         extracted_meta = {"contentUrl": url}
         if title: extracted_meta["name"] = title
@@ -250,8 +272,27 @@ def fetch_github_repo(url, traverse=False):
         
         try:
             repo_info = scraper.get(api_url, timeout=30).json()
-            readme_res = scraper.get(readme_url, timeout=30)
-            readme_content = readme_res.text if readme_res.status_code == 200 else "No README found."
+            readme_content = None
+            for _rm_cand in ("README.md", "README.rst", "README.txt", "README", "readme.md"):
+                _cand_res = scraper.get(f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{_rm_cand}", timeout=30)
+                if _cand_res.status_code == 200 and _cand_res.text.strip():
+                    readme_content = _cand_res.text
+                    globals()['GLOBAL_GITHUB_RAW_README'] = _cand_res.content
+                    break
+            if not readme_content:
+                try:
+                    _oh = os.environ.get("OLLAMA_HOST", "http://host.docker.internal:11434").rstrip("/")
+                    _om = os.environ.get("OLLAMA_MODEL", "gemma4:e4b")
+                    _gp = f"Write a concise, accurate README.md for the GitHub repository {owner}/{repo}.\nDescription: {repo_info.get('description', '')}\nLanguage: {repo_info.get('language', 'Unknown')}\nTopics: {repo_info.get('topics', [])}\nURL: {url}"
+                    _gr = scraper.post(f"{_oh}/api/generate", json={"model": _om, "prompt": _gp, "stream": False}, timeout=60)
+                    if _gr.status_code == 200 and _gr.json().get("response", "").strip():
+                        readme_content = _gr.json()["response"].strip()
+                        globals()['GLOBAL_GITHUB_RAW_README'] = readme_content.encode("utf-8")
+                except Exception:
+                    pass
+            if not readme_content:
+                readme_content = f"# {repo_info.get('name', repo)}\n\n{repo_info.get('description', 'No README found.')}"
+                globals()['GLOBAL_GITHUB_RAW_README'] = readme_content.encode("utf-8")
             
             markdown_content = f"# {repo_info.get('name', repo)}\n\n"
             markdown_content += f"**Description:** {repo_info.get('description', '')}\n"
@@ -1814,6 +1855,33 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                     globals()['GLOBAL_HTML_CV_UPLOADED_IMAGES'] = uploaded_cv_imgs
                 except Exception as e_cv_up:
                     print(f"Warning: Failed to upload HTML CV images: {e_cv_up}")
+
+            if 'GLOBAL_GITHUB_RAW_README' in globals() and globals()['GLOBAL_GITHUB_RAW_README']:
+                try:
+                    _rm_bytes = globals()['GLOBAL_GITHUB_RAW_README']
+                    _rm_fn = f"{os.path.basename(safe_name)}_README.md"
+                    client.put_object("vault", _rm_fn, io.BytesIO(_rm_bytes), len(_rm_bytes), content_type="text/markdown")
+                    globals()['GLOBAL_GITHUB_README_FILE'] = _rm_fn
+                    print(f"Uploaded raw GitHub README.md as {_rm_fn} to vault.")
+                except Exception as e_rm_up:
+                    print(f"Warning: Failed to upload raw GitHub README.md: {e_rm_up}")
+
+            if 'GLOBAL_YOUTUBE_README' in globals() and globals()['GLOBAL_YOUTUBE_README']:
+                try:
+                    _ytr_b = globals()['GLOBAL_YOUTUBE_README']
+                    _ytr_fn = f"{os.path.basename(safe_name)}_README.md"
+                    client.put_object("vault", _ytr_fn, io.BytesIO(_ytr_b), len(_ytr_b), content_type="text/markdown")
+                    globals()['GLOBAL_YOUTUBE_README_FILE'] = _ytr_fn
+                except Exception as e_ytr:
+                    print(f"Warning: Failed to upload YouTube README.md: {e_ytr}")
+            if 'GLOBAL_YOUTUBE_AGENTS' in globals() and globals()['GLOBAL_YOUTUBE_AGENTS']:
+                try:
+                    _yta_b = globals()['GLOBAL_YOUTUBE_AGENTS']
+                    _yta_fn = f"{os.path.basename(safe_name)}_Agents.md"
+                    client.put_object("vault", _yta_fn, io.BytesIO(_yta_b), len(_yta_b), content_type="text/markdown")
+                    globals()['GLOBAL_YOUTUBE_AGENTS_FILE'] = _yta_fn
+                except Exception as e_yta:
+                    print(f"Warning: Failed to upload YouTube Agents.md: {e_yta}")
                     print(f"Warning: Failed to upload parsed tables to vault: {e_up_tbl}")
 
             # If PDF assets (page renders and embedded images) were generated, upload them to MinIO vault
@@ -2456,6 +2524,59 @@ def convert_to_croissant(url, is_slice=False, traverse=False, reingest=False, us
                     print("Aborting conversion due to invalid JSON after max retries.")
                     return
 
+
+        # Attach extracted Markdown (.md) as a cr:FileObject in distribution
+        try:
+            _md_fn = f"{os.path.basename(safe_name)}.md"
+            _bhost = get_base_host().rstrip("/")
+            _was_str = isinstance(output, str)
+            _out_obj = json.loads(output) if _was_str else output
+            if isinstance(_out_obj, dict):
+                _cur_d = _out_obj.get("distribution", [])
+                if not isinstance(_cur_d, list):
+                    _cur_d = [_cur_d] if _cur_d else []
+                if not any(isinstance(d, dict) and (d.get("@id") == _md_fn or d.get("name") == _md_fn) for d in _cur_d):
+                    _cur_d.append({
+                        "@type": "cr:FileObject",
+                        "@id": _md_fn,
+                        "name": _md_fn,
+                        "description": "Extracted Markdown content",
+                        "contentUrl": f"{_bhost}/vault/{_md_fn}",
+                        "encodingFormat": "text/markdown",
+                    })
+                    _out_obj["distribution"] = _cur_d
+                    if 'GLOBAL_GITHUB_README_FILE' in globals() and globals()['GLOBAL_GITHUB_README_FILE']:
+                        _rm_fn = globals()['GLOBAL_GITHUB_README_FILE']
+                        if not any(isinstance(d, dict) and d.get("@id") == _rm_fn for d in _cur_d):
+                            _cur_d.append({
+                                "@type": "cr:FileObject",
+                                "@id": _rm_fn,
+                                "name": "README.md",
+                                "description": "Original GitHub README.md",
+                                "contentUrl": f"{_bhost}/vault/{_rm_fn}",
+                                "encodingFormat": "text/markdown",
+                            })
+                            _out_obj["distribution"] = _cur_d
+                    for _gkey, _dname, _ddesc in (
+                        ("GLOBAL_YOUTUBE_README_FILE", "README.md", "YouTube video metadata and description"),
+                        ("GLOBAL_YOUTUBE_AGENTS_FILE", "Agents.md", "YouTube video transcript"),
+                    ):
+                        if _gkey in globals() and globals()[_gkey]:
+                            _yfn = globals()[_gkey]
+                            if not any(isinstance(d, dict) and d.get("@id") == _yfn for d in _cur_d):
+                                _cur_d.append({
+                                    "@type": "cr:FileObject",
+                                    "@id": _yfn,
+                                    "name": _dname,
+                                    "description": _ddesc,
+                                    "contentUrl": f"{_bhost}/vault/{_yfn}",
+                                    "encodingFormat": "text/markdown",
+                                })
+                                _out_obj["distribution"] = _cur_d
+                    if _was_str:
+                        output = json.dumps(_out_obj, indent=2)
+        except Exception as e_md_d:
+            print(f"Warning: Failed to attach Markdown distribution: {e_md_d}")
 
         # Attach HTML CV images as distributions if uploaded
         if 'GLOBAL_HTML_CV_UPLOADED_IMAGES' in globals() and globals()['GLOBAL_HTML_CV_UPLOADED_IMAGES']:

@@ -222,6 +222,62 @@ def get_variable_elasticsearch_url() -> str:
 _GLOBAL_COLLECTION_CACHE_UPDATING = set()
 _GLOBAL_VARIABLES_CACHE_UPDATING = False
 
+async def pick_cdif_elasticsearch_url() -> str | None:
+    """
+    Returns the Elasticsearch base URL holding the largest 'cdif' index (or None if none reachable).
+    Prioritizes get_variable_elasticsearch_url() (ES_GLOBAL_HOST) first and probes candidates
+    concurrently so a near-empty local Elasticsearch 'cdif' index never shadows ES_GLOBAL_HOST.
+    """
+    import asyncio, httpx
+    var_es = get_variable_elasticsearch_url()
+    candidates = []
+    for u in [var_es] + get_elasticsearch_lookup_urls():
+        if u and u not in candidates:
+            candidates.append(u)
+
+    async def _probe(cand: str):
+        try:
+            async with httpx.AsyncClient(timeout=2.5) as chk:
+                r = await chk.get(f"{cand}/cdif/_count")
+                if r.status_code == 200:
+                    return cand, int(r.json().get("count", 0))
+        except Exception:
+            pass
+        return cand, -1
+
+    results = await asyncio.gather(*(_probe(c) for c in candidates))
+    best_url, best_cnt = None, -1
+    for cand, cnt in results:
+        if cnt > best_cnt:
+            best_url, best_cnt = cand, cnt
+    return best_url
+
+
+def normalize_cdif_export_url(raw_cdif_url: str, base_host: str = "", file_url: str = "", dataset_url: str = "", doc_id: str = "") -> str:
+    """
+    Ensures cdif_export_url always points to the active /export endpoint rather than
+    a raw external dataset/DOI website (e.g. https://doi.org/...).
+    """
+    import urllib.parse
+    b_host = (base_host or f"https://{MCP_DOMAIN}").rstrip("/")
+    raw = (raw_cdif_url or "").strip()
+    if raw and "/export?" in raw:
+        qs_part = raw.split("/export?", 1)[-1]
+        return f"{b_host}/export?{qs_part}"
+    furl = (file_url or "").strip()
+    durl = (dataset_url or "").strip()
+    if not durl and raw.startswith(("http://", "https://")):
+        durl = raw
+    if furl and durl:
+        return f"{b_host}/export?ds={urllib.parse.quote(durl, safe='')}&file={urllib.parse.quote(furl, safe='')}"
+    if furl:
+        return f"{b_host}/export?file={urllib.parse.quote(furl, safe='')}"
+    if durl:
+        return f"{b_host}/export?ds={urllib.parse.quote(durl, safe='')}&format=cdif"
+    if doc_id:
+        return f"{b_host}/export?id={urllib.parse.quote(str(doc_id), safe='')}&format=cdif"
+    return raw
+
 def get_minio_lookup_urls() -> list[str]:
     """
     Returns an ordered list of MinIO base endpoints to query across all known nodes.
@@ -5632,6 +5688,102 @@ def main(port: int, transport: str) -> int:
             endpoint = minio_base.replace("http://", "").replace("https://", "")
             return Minio(endpoint, access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"), secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"), secure=False)
 
+        async def chat_document(request):
+            import base64, hashlib, io, os, time
+            from minio import Minio
+            from starlette.responses import JSONResponse
+            try:
+                _murl = os.environ.get("MINIO_URL", "http://minio:9000")
+                if (bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")) and any(h in _murl for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+                    _murl = "http://minio:9000"
+                minio_client = Minio(_murl.replace("http://", "").replace("https://", "").rstrip("/"),
+                                     access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                                     secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                                     secure=_murl.startswith("https"))
+                body = await request.json()
+                action = (body.get("action") or "create").strip().lower()
+                text = body.get("text") or ""
+                doc_id = (body.get("doc_id") or "").strip()
+                if not doc_id or action == "create":
+                    raw_h = hashlib.sha256((text or str(time.time())).encode("utf-8")).digest()[:16]
+                    doc_id = base64.urlsafe_b64encode(raw_h).decode("ascii").rstrip("=")
+                if action in ("add", "save"):
+                    agents_key = f"{doc_id}_Agents.md"
+                    existing = ""
+                    try:
+                        obj = minio_client.get_object("vault", agents_key)
+                        existing = obj.read().decode("utf-8", errors="ignore")
+                        obj.close()
+                        obj.release_conn()
+                    except Exception:
+                        pass
+                    prompt_txt = (body.get("prompt") or "").strip()
+                    entry = f"## Question\n{prompt_txt}\n\n## Answer\n{text}" if prompt_txt else text
+                    new_md = (existing.rstrip() + "\n\n---\n\n" + entry).strip() if existing else f"# Agents Q&A\n\n{entry}"
+                    b = new_md.encode("utf-8")
+                    minio_client.put_object("vault", agents_key, io.BytesIO(b), len(b), content_type="text/markdown")
+                    try:
+                        jobj = minio_client.get_object("vault", f"{doc_id}.jsonld")
+                        jdata = json.loads(jobj.read().decode("utf-8", errors="ignore"))
+                        jobj.close()
+                        jobj.release_conn()
+                        dist = jdata.get("distribution", [])
+                        if not isinstance(dist, list):
+                            dist = [dist] if dist else []
+                        if not any(isinstance(d, dict) and (d.get("@id") == agents_key or d.get("name") == "Agents.md") for d in dist):
+                            dist.append({
+                                "@type": "cr:FileObject",
+                                "@id": agents_key,
+                                "name": "Agents.md",
+                                "description": "Chat Q&A log (Agents.md)",
+                                "contentUrl": f"/vault/{agents_key}",
+                                "encodingFormat": "text/markdown",
+                            })
+                            jdata["distribution"] = dist
+                            jb = json.dumps(jdata, indent=2).encode("utf-8")
+                            minio_client.put_object("vault", f"{doc_id}.jsonld", io.BytesIO(jb), len(jb), content_type="application/ld+json")
+                    except Exception:
+                        pass
+                    return JSONResponse({"status": "success", "action": action, "doc_id": doc_id, "doc_url": f"/vault/doc/{agents_key}"})
+                elif action == "save":
+                    b = text.encode("utf-8")
+                    minio_client.put_object("vault", f"{doc_id}_annotations.md", io.BytesIO(b), len(b), content_type="text/markdown")
+                    return JSONResponse({"status": "success", "action": "save", "doc_id": doc_id, "doc_url": f"/vault/doc/{doc_id}", "annotations_url": f"/vault/{doc_id}_annotations.md"})
+                else:
+                    b = text.encode("utf-8")
+                    minio_client.put_object("vault", f"{doc_id}.md", io.BytesIO(b), len(b), content_type="text/markdown")
+                    if action == "create":
+                        minio_client.put_object("vault", f"{doc_id}_README.md", io.BytesIO(b), len(b), content_type="text/markdown")
+                        prompt_txt = (body.get("prompt") or "").strip()
+                        agents_init = f"# Agents Q&A\n\n## Question\n{prompt_txt}\n\n## Answer\n{text}" if prompt_txt else "# Agents Q&A\n"
+                        ab = agents_init.encode("utf-8")
+                        minio_client.put_object("vault", f"{doc_id}_Agents.md", io.BytesIO(ab), len(ab), content_type="text/markdown")
+                        ds_title = (prompt_txt or f"Chat Document {doc_id}")[:120]
+                        try:
+                            import requests as _req_t
+                            _oh = os.environ.get("OLLAMA_HOST", "http://host.docker.internal:11434").rstrip("/")
+                            _om = body.get("model") or OLLAMA_DEFAULT_MODEL
+                            _tr = _req_t.post(f"{_oh}/api/generate", json={"model": _om, "prompt": f"Generate a short 4-8 word title for this document. Return ONLY the title.\n\n{text[:1500]}", "stream": False}, timeout=15)
+                            if _tr.status_code == 200 and _tr.json().get("response", "").strip():
+                                ds_title = _tr.json()["response"].strip().strip('"\'')[:120]
+                        except Exception:
+                            pass
+                        jdata = {
+                            "@context": {"@vocab": "https://schema.org/", "cr": "http://mlcommons.org/croissant/"},
+                            "@type": "Dataset",
+                            "name": ds_title,
+                            "distribution": [
+                                {"@type": "cr:FileObject", "@id": f"{doc_id}.md", "name": f"{doc_id}.md", "description": f"{ds_title} — Summary", "contentUrl": f"/vault/{doc_id}.md", "encodingFormat": "text/markdown"},
+                                {"@type": "cr:FileObject", "@id": f"{doc_id}_README.md", "name": "README.md", "description": f"{ds_title} — README", "contentUrl": f"/vault/{doc_id}_README.md", "encodingFormat": "text/markdown"},
+                                {"@type": "cr:FileObject", "@id": f"{doc_id}_Agents.md", "name": "Agents.md", "description": f"{ds_title} — Agents Q&A Transcript", "contentUrl": f"/vault/{doc_id}_Agents.md", "encodingFormat": "text/markdown"},
+                            ],
+                        }
+                        jb = json.dumps(jdata, indent=2).encode("utf-8")
+                        minio_client.put_object("vault", f"{doc_id}.jsonld", io.BytesIO(jb), len(jb), content_type="application/ld+json")
+                return JSONResponse({"status": "success", "action": action, "doc_id": doc_id, "doc_url": f"/vault/doc/{doc_id}"})
+            except Exception as e:
+                return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+
         async def vault_ask(request):
             import asyncio, sys, os
             try:
@@ -5702,6 +5854,10 @@ def main(port: int, transport: str) -> int:
                 if doc_id:
                     try:
                         clean_id = doc_id.replace(".jsonld", "").replace(".md", "")
+                        for _sfx in ("_Agents", "_README", "_datacard"):
+                            if clean_id.endswith(_sfx):
+                                clean_id = clean_id[:-len(_sfx)]
+                                break
                         # Fetch the full Croissant record from the Vault (try MinIO first, then local endpoints, then ES)
                         croissant_json = ""
                         try:
@@ -6079,9 +6235,122 @@ def main(port: int, transport: str) -> int:
                                 except Exception:
                                     pass
 
-                                context_text = f"IMPORTANT DATASET OVERVIEW:\n- Title: {ds_name}\n- Authors / Creators: {', '.join(ds_creators) if ds_creators else 'Unknown'}\n- Total files: {total_files}\n\n" + croissant_summary_snippet + datamaps_page_summary + cdif_file_summary + "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + jsonld_to_inject + "\n\n" + context_text
+                                # Download all text-based distribution files from Vault to provide as source context
+                                try:
+                                    _dist_list = croissant_doc_dict.get("distribution", [])
+                                    if isinstance(_dist_list, dict):
+                                        _dist_list = [_dist_list]
+                                    _seen_keys = set()
+                                    for _ditem in _dist_list:
+                                        if not isinstance(_ditem, dict):
+                                            continue
+                                        _fmt = str(_ditem.get("encodingFormat", "")).lower()
+                                        _curl = str(_ditem.get("contentUrl", ""))
+                                        _dname = str(_ditem.get("name") or _ditem.get("@id") or "")
+                                        if any(x in _fmt for x in ("image/", "spreadsheet", "excel", "zip", "pdf")) or _dname.lower().endswith((".xlsx", ".xls", ".jpg", ".jpeg", ".png", ".pdf", ".zip")):
+                                            continue
+                                        _vkey = None
+                                        if "/vault/" in _curl:
+                                            _vkey = _curl.split("/vault/", 1)[1].split("?")[0]
+                                        elif _ditem.get("@id") and "." in str(_ditem.get("@id")):
+                                            _vkey = str(_ditem.get("@id"))
+                                        if not _vkey or _vkey in _seen_keys or _vkey.endswith(f"{clean_id}.jsonld"):
+                                            continue
+                                        _seen_keys.add(_vkey)
+                                        try:
+                                            _obj = minio_client.get_object("vault", _vkey)
+                                            _raw_txt = _obj.read().decode("utf-8", errors="ignore")
+                                            _obj.close()
+                                            _obj.release_conn()
+                                            if _raw_txt.strip():
+                                                cdif_file_summary += f"=== DISTRIBUTION FILE ({_dname or _vkey}) ===\n" + _raw_txt[:50000] + "\n\n"
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+
+                                # Extract isBasedOn annotations prominently at the top of context_text
+                                _ann_block = ""
+                                try:
+                                    _ibo_all = []
+                                    _ibo = croissant_doc_dict.get("isBasedOn", [])
+                                    _ibo_all.extend(_ibo if isinstance(_ibo, list) else ([_ibo] if _ibo else []))
+                                    from minio import Minio as _MinioAnn
+                                    _murl_ann = os.environ.get("MINIO_URL", "http://minio:9000")
+                                    if (bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")) and any(h in _murl_ann for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+                                        _murl_ann = "http://minio:9000"
+                                    _mc_ann = _MinioAnn(_murl_ann.replace("http://", "").replace("https://", "").rstrip("/"),
+                                                        access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                                                        secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                                                        secure=_murl_ann.startswith("https"))
+                                    for _sub_sfx in ("_README", "_Agents"):
+                                        try:
+                                            _sobj = _mc_ann.get_object("vault", f"{clean_id}{_sub_sfx}.jsonld")
+                                            _sdata = json.loads(_sobj.read().decode("utf-8", errors="ignore"))
+                                            _sobj.close(); _sobj.release_conn()
+                                            _sibo = _sdata.get("isBasedOn", [])
+                                            _ibo_all.extend(_sibo if isinstance(_sibo, list) else ([_sibo] if _sibo else []))
+                                        except Exception:
+                                            pass
+                                    _ann_lines = []
+                                    for _it in _ibo_all:
+                                        if isinstance(_it, dict) and (_it.get("annotationText") or _it.get("reviewStatus")):
+                                            _ann_lines.append(f"- [{_it.get('reviewStatus', 'note')}] ({_it.get('name', '')}): {_it.get('annotationText', '')}")
+                                    if _ann_lines:
+                                        _ann_block = "=== USER ANNOTATIONS & NOTES (isBasedOn — treat these as authoritative corrections to the text) ===\n" + "\n".join(_ann_lines) + "\n\n"
+                                except Exception:
+                                    pass
+
+                                context_text = f"IMPORTANT DATASET OVERVIEW:\n- Title: {ds_name}\n- Authors / Creators: {', '.join(ds_creators) if ds_creators else 'Unknown'}\n- Total files: {total_files}\n\n" + _ann_block + croissant_summary_snippet + datamaps_page_summary + cdif_file_summary + "=== CROISSANT JSON-LD METADATA (Record: " + clean_id + ") ===\n" + jsonld_to_inject + "\n\n" + context_text
                     except Exception as doc_err:
                         print(f"Warning: doc_id handling error in vault_ask: {doc_err}")
+                if doc_id:
+                    try:
+                        from minio import Minio as _MinioTop
+                        _cid = doc_id.replace(".jsonld", "").replace(".md", "")
+                        for _sfx in ("_Agents", "_README", "_datacard"):
+                            if _cid.endswith(_sfx):
+                                _cid = _cid[:-len(_sfx)]
+                                break
+                        _mu = os.environ.get("MINIO_URL", "http://minio:9000")
+                        if (bool(os.environ.get("IN_DOCKER")) or os.path.exists("/.dockerenv")) and any(h in _mu for h in ["localhost", "127.0.0.1", "0.0.0.0"]):
+                            _mu = "http://minio:9000"
+                        _mct = _MinioTop(_mu.replace("http://", "").replace("https://", "").rstrip("/"),
+                                         access_key=os.environ.get("MINIO_ROOT_USER", "minioadmin"),
+                                         secret_key=os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin"),
+                                         secure=_mu.startswith("https"))
+                        _ibo_top = []
+                        for _sfx in ("", "_README", "_Agents"):
+                            try:
+                                _o = _mct.get_object("vault", f"{_cid}{_sfx}.jsonld")
+                                _jd = json.loads(_o.read().decode("utf-8", errors="ignore"))
+                                _o.close(); _o.release_conn()
+                                _ib = _jd.get("isBasedOn", [])
+                                _ibo_top.extend(_ib if isinstance(_ib, list) else ([_ib] if _ib else []))
+                            except Exception:
+                                pass
+                        _al = []
+                        for x in _ibo_top:
+                            if not isinstance(x, dict) or not (x.get("annotationText") or x.get("reviewStatus")):
+                                continue
+                            _atxt = (x.get("annotationText") or "").strip()
+                            if not _atxt and x.get("name") and str(x.get("name")).endswith(".md"):
+                                try:
+                                    _ao = _mct.get_object("vault", str(x.get("name")))
+                                    _atxt = _ao.read().decode("utf-8", errors="ignore").strip()
+                                    _ao.close(); _ao.release_conn()
+                                except Exception:
+                                    pass
+                            if _atxt:
+                                import re as _re_ann
+                                _atxt = _re_ann.sub(r'<button[^>]*>.*?</button>', '', _atxt, flags=_re_ann.DOTALL)
+                                _atxt = _re_ann.sub(r'\[View Croissant JSON-LD Data\]\([^)]+\)', '', _atxt)
+                                _atxt = _re_ann.sub(r'\*\*Digital Signature:\*\*.*', '', _atxt, flags=_re_ann.DOTALL).strip()
+                                _al.append(f"- [{x.get('reviewStatus', 'note')}] ({x.get('name', '')}): {_atxt}")
+                        if _al and "USER ANNOTATIONS & NOTES" not in context_text:
+                            context_text = "=== USER ANNOTATIONS & NOTES (isBasedOn — treat these as authoritative corrections to the text) ===\n" + "\n".join(_al) + "\n\n" + context_text
+                    except Exception as _ea:
+                        print(f"Warning: top-level annotation load failed: {_ea}")
                 model_name = data.get("model", OLLAMA_DEFAULT_MODEL).strip()
                 if not model_name:
                     model_name = OLLAMA_DEFAULT_MODEL
@@ -6337,16 +6606,36 @@ Question: {question}
 
 {qa_instruction}"""
 
-                # Clean any null characters or control characters that could break C/POSIX subprocess or shells
-                prompt = prompt.replace("\x00", "").replace("\r", "")
-
                 # Safety guard: Ensure overall prompt never exceeds Ollama context limits (~32k characters max)
                 MAX_PROMPT_CHARS = 32000
                 if len(prompt) > MAX_PROMPT_CHARS:
-                    # Keep question and prompt instructions intact at the end
+                    # Chunk context_text into <=32k pieces and run prompts in parallel
                     suffix = f"\n\nQuestion: {question}\n\n{qa_instruction}"
                     allowed_ctx_len = MAX_PROMPT_CHARS - len(suffix) - 50
-                    prompt = f"Context:\n{context_text[:allowed_ctx_len]}\n... [Context truncated to fit model context limit]\n{suffix}"
+                    _chunks = [context_text[i:i + allowed_ctx_len] for i in range(0, len(context_text), allowed_ctx_len)][:5]
+                    if len(_chunks) > 1:
+                        try:
+                            import concurrent.futures as _cf, requests as _req_ch
+                            _oh_ch = os.environ.get("OLLAMA_HOST", "http://host.docker.internal:11434").rstrip("/")
+                            _om_ch = model_name if model_name and model_name not in ["default", "llama3.1"] else (os.environ.get("OLLAMA_DEFAULT_MODEL") or "gemma4:e2b")
+                            _ann_hdr = ("=== USER ANNOTATIONS & NOTES (isBasedOn — treat these as authoritative corrections to the text) ===\n" + "\n".join(_al) + "\n\n") if ('_al' in locals() and _al) else ""
+                            def _ask_chunk(ch):
+                                _p = f"{_ann_hdr}Context:\n{ch}{suffix}"
+                                _r = _req_ch.post(f"{_oh_ch}/api/generate", json={"model": _om_ch, "prompt": _p, "stream": False}, timeout=120)
+                                return _r.json().get("response", "").strip() if _r.status_code == 200 else ""
+                            with _cf.ThreadPoolExecutor(max_workers=len(_chunks)) as _ex:
+                                _ch_ans = [a for a in _ex.map(_ask_chunk, _chunks) if a]
+                            if _ch_ans:
+                                prompt = f"{_ann_hdr}Context (answers from {len(_ch_ans)} document chunks):\n" + "\n\n---\n\n".join(_ch_ans) + f"\n\nQuestion: {question}\n\nSynthesize a single clear answer from the chunk answers above."
+                            else:
+                                prompt = f"Context:\n{_chunks[0]}\n... [Context truncated to fit model context limit]\n{suffix}"
+                        except Exception:
+                            prompt = f"Context:\n{_chunks[0]}\n... [Context truncated to fit model context limit]\n{suffix}"
+                    else:
+                        prompt = f"Context:\n{_chunks[0]}{suffix}"
+
+                if '_al' in locals() and _al and "USER ANNOTATIONS & NOTES" not in prompt:
+                    prompt = "=== USER ANNOTATIONS & NOTES (isBasedOn — treat these as authoritative corrections to the text) ===\n" + "\n".join(_al) + "\n\n" + prompt
 
                 import asyncio
                 import subprocess
@@ -7418,9 +7707,36 @@ Question: {question}
 
             target_url = raw_file_param or raw_url_param
 
-            # If ?ds= is provided without a ?file= parameter, export the dataset in Croissant (default) or convert to CDIF
+            id_param = (request.query_params.get("id") or "").strip()
+            if not target_url and id_param:
+                es_cands_id = []
+                for _u in [await pick_cdif_elasticsearch_url(), get_variable_elasticsearch_url()] + get_elasticsearch_lookup_urls():
+                    if _u and _u not in es_cands_id:
+                        es_cands_id.append(_u)
+                base_host = f"https://{MCP_DOMAIN}"
+                async with httpx.AsyncClient(timeout=10.0) as es_id_client:
+                    for cand_es in es_cands_id:
+                        try:
+                            r_id = await es_id_client.get(f"{cand_es}/cdif/_doc/{urllib.parse.quote(id_param, safe='')}", timeout=4.0)
+                            if r_id.status_code == 200:
+                                hit_src = r_id.json().get("_source", {})
+                                cached_cdif = hit_src.get("cdif_jsonld")
+                                if cached_cdif:
+                                    if isinstance(cached_cdif, str):
+                                        cached_cdif = json.loads(cached_cdif)
+                                    if isinstance(cached_cdif, dict):
+                                        cached_cdif["@id"] = f"{base_host}/export?id={urllib.parse.quote(id_param, safe='')}"
+                                    resp_bytes = prepare_cdif_response(cached_cdif)
+                                    return build_export_response(resp_bytes, f"export_{id_param}.jsonld", cache_header="HIT-ELASTICSEARCH")
+                        except Exception:
+                            continue
+
+            # If ?ds= is provided without a ?file= parameter, export the dataset in Croissant (default) or CDIF
             if not target_url and ds_url:
-                es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+                es_cands_ds = []
+                for _u in [await pick_cdif_elasticsearch_url(), get_variable_elasticsearch_url()] + get_elasticsearch_lookup_urls():
+                    if _u and _u not in es_cands_ds:
+                        es_cands_ds.append(_u)
                 base_host = f"https://{MCP_DOMAIN}"
                 req_format = request.query_params.get("format", "").lower().strip()
 
@@ -7428,38 +7744,96 @@ Question: {question}
                 if "doi.org/" in norm_doi:
                     norm_doi = "https://doi.org/" + norm_doi.split("doi.org/")[-1]
                 h1 = hashlib.sha256(norm_doi.encode("utf-8")).hexdigest()[:16]
+                cdif_ds_ids = list(dict.fromkeys([
+                    f"cdif_ds_{hashlib.sha256(norm_doi.encode('utf-8')).hexdigest()[:24]}",
+                    f"cdif_ds_{hashlib.sha256(ds_url.encode('utf-8')).hexdigest()[:24]}",
+                    f"cdif_v2_{hashlib.sha256(norm_doi.encode('utf-8')).hexdigest()[:24]}",
+                    f"cdif_v2_{hashlib.sha256(ds_url.encode('utf-8')).hexdigest()[:24]}",
+                ]))
+
+                async def _lookup_cdif_dataset_doc():
+                    async with httpx.AsyncClient(timeout=15.0) as es_cdif_ds_client:
+                        for cand_es in es_cands_ds:
+                            for cand_doc_id in cdif_ds_ids:
+                                try:
+                                    r_cd = await es_cdif_ds_client.get(f"{cand_es}/cdif/_doc/{cand_doc_id}", timeout=4.0)
+                                    if r_cd.status_code == 200:
+                                        c_obj = r_cd.json().get("_source", {}).get("cdif_jsonld")
+                                        if c_obj:
+                                            return json.loads(c_obj) if isinstance(c_obj, str) else c_obj
+                                except Exception:
+                                    pass
+                            try:
+                                q_cdif_ds = {
+                                    "query": {
+                                        "bool": {
+                                            "should": [
+                                                {"term": {"dataset_url.keyword": ds_url}},
+                                                {"term": {"dataset_url.keyword": norm_doi}},
+                                                {"match_phrase": {"dataset_url": norm_doi}}
+                                            ],
+                                            "minimum_should_match": 1
+                                        }
+                                    },
+                                    "size": 1
+                                }
+                                r_cs = await es_cdif_ds_client.post(f"{cand_es}/cdif/_search", json=q_cdif_ds, timeout=5.0)
+                                if r_cs.status_code == 200:
+                                    c_hits = r_cs.json().get("hits", {}).get("hits", [])
+                                    if c_hits:
+                                        c_obj = c_hits[0].get("_source", {}).get("cdif_jsonld")
+                                        if c_obj:
+                                            return json.loads(c_obj) if isinstance(c_obj, str) else c_obj
+                            except Exception:
+                                continue
+                    return None
+
+                # If CDIF / DDI-CDI format is explicitly requested (or format=html/raw for CDIF preview), check 'cdif' index first
+                if req_format in ["cdif", "ddi-cdi", "html", "raw"]:
+                    cached_ds_cdif = await _lookup_cdif_dataset_doc()
+                    if cached_ds_cdif:
+                        if isinstance(cached_ds_cdif, dict):
+                            cached_ds_cdif["@id"] = f"{base_host}/export?ds={urllib.parse.quote(ds_url, safe='')}&format={'ddi-cdi' if is_ddi_cdi else 'cdif'}"
+                        resp_bytes = prepare_cdif_response(cached_ds_cdif)
+                        out_fn = "export_dataset_ddi_cdi.jsonld" if is_ddi_cdi else "export_dataset_cdif.jsonld"
+                        return build_export_response(resp_bytes, out_fn, cache_header="HIT-ELASTICSEARCH")
 
                 croissant_doc = None
                 matched_id = None
                 try:
                     async with httpx.AsyncClient(timeout=20.0) as es_ds_client:
-                        # Try direct hash lookup in croissant index
-                        r_c = await es_ds_client.get(f"{es_url}/croissant/_doc/{h1}")
-                        if r_c.status_code == 200:
-                            croissant_doc = r_c.json().get("_source", {})
-                            matched_id = h1
-                        else:
-                            # Try querying by url or identifier across croissant and dataverse indices
-                            es_q = {
-                                "query": {
-                                    "bool": {
-                                        "should": [
-                                            {"term": {"url.keyword": ds_url}},
-                                            {"term": {"url.keyword": norm_doi}},
-                                            {"term": {"identifier.keyword": ds_url}},
-                                            {"term": {"identifier.keyword": norm_doi}},
-                                            {"match_phrase": {"url": norm_doi}}
-                                        ]
-                                    }
-                                },
-                                "size": 1
-                            }
-                            r_search = await es_ds_client.post(f"{es_url}/croissant,dataverse/_search", json=es_q)
-                            if r_search.status_code == 200:
-                                hits = r_search.json().get("hits", {}).get("hits", [])
-                                if hits:
-                                    croissant_doc = hits[0].get("_source", {})
-                                    matched_id = hits[0].get("_id")
+                        for cand_es in es_cands_ds:
+                            try:
+                                # Try direct hash lookup in croissant index
+                                r_c = await es_ds_client.get(f"{cand_es}/croissant/_doc/{h1}", timeout=4.0)
+                                if r_c.status_code == 200:
+                                    croissant_doc = r_c.json().get("_source", {})
+                                    matched_id = h1
+                                    break
+                                # Try querying by url or identifier across croissant and dataverse indices
+                                es_q = {
+                                    "query": {
+                                        "bool": {
+                                            "should": [
+                                                {"term": {"url.keyword": ds_url}},
+                                                {"term": {"url.keyword": norm_doi}},
+                                                {"term": {"identifier.keyword": ds_url}},
+                                                {"term": {"identifier.keyword": norm_doi}},
+                                                {"match_phrase": {"url": norm_doi}}
+                                            ]
+                                        }
+                                    },
+                                    "size": 1
+                                }
+                                r_search = await es_ds_client.post(f"{cand_es}/croissant,dataverse/_search", json=es_q, timeout=6.0)
+                                if r_search.status_code == 200:
+                                    hits = r_search.json().get("hits", {}).get("hits", [])
+                                    if hits:
+                                        croissant_doc = hits[0].get("_source", {})
+                                        matched_id = hits[0].get("_id")
+                                        break
+                            except Exception:
+                                continue
                 except Exception as e_ds:
                     print(f"Error fetching dataset document: {e_ds}", file=sys.stderr)
 
@@ -7514,7 +7888,14 @@ Question: {question}
                     resp_bytes = json.dumps(clean_doc, indent=2).encode("utf-8")
                     return build_export_response(resp_bytes, "export_dataset_croissant.jsonld", cache_header="HIT")
                 else:
-                    return JSONResponse({"error": f"Dataset with identifier/URL '{ds_url}' not found in indexed croissant records."}, status_code=404)
+                    # Fallback: dataset may exist only in the 'cdif' index (e.g. cdif_ds_* records)
+                    cached_ds_cdif = await _lookup_cdif_dataset_doc()
+                    if cached_ds_cdif:
+                        if isinstance(cached_ds_cdif, dict):
+                            cached_ds_cdif["@id"] = f"{base_host}/export?ds={urllib.parse.quote(ds_url, safe='')}&format=cdif"
+                        resp_bytes = prepare_cdif_response(cached_ds_cdif)
+                        return build_export_response(resp_bytes, "export_dataset_cdif.jsonld", cache_header="HIT-ELASTICSEARCH")
+                    return JSONResponse({"error": f"Dataset with identifier/URL '{ds_url}' not found in indexed croissant or cdif records."}, status_code=404)
 
             if not target_url:
                 return JSONResponse({"error": "Missing 'file', 'url', 'ds', or 'q' query parameter, e.g. /export?ds=<dataset_doi> or /export?file=<file_url>"}, status_code=400)
@@ -7582,11 +7963,14 @@ Question: {question}
             # For backward compatibility: if ddi-cdi is requested, also check legacy key cdif_cache_
             legacy_vault_cache_key = f"cdif_cache_{hashlib.sha256((target_url + (ds_url or '')).encode('utf-8')).hexdigest()[:20]}.jsonld" if is_ddi_cdi else None
             legacy_doc_cache_id = hashlib.sha256((target_url + (ds_url or "")).encode("utf-8")).hexdigest()[:24] if is_ddi_cdi else None
-            es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_url = await pick_cdif_elasticsearch_url() or get_variable_elasticsearch_url() or os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
+            es_lookup_list = []
+            for _u in [es_url, get_variable_elasticsearch_url()] + get_elasticsearch_lookup_urls():
+                if _u and _u not in es_lookup_list:
+                    es_lookup_list.append(_u)
 
-
-            
             # Check 1: MinIO vault cache first for instant response
+            m_cache_client = None
             try:
                 from minio import Minio
                 m_cache_client = Minio(
@@ -7608,6 +7992,8 @@ Question: {question}
                                 cached_json = json.loads(cached_bytes.decode("utf-8"))
                             except Exception:
                                 cached_json = None
+                            if isinstance(cached_json, dict) and isinstance(cached_json.get("@id"), str) and "/export?" in cached_json["@id"]:
+                                cached_json["@id"] = f"{base_host}/export?{cached_json['@id'].split('/export?', 1)[-1]}"
                             
                             resp_bytes = prepare_cdif_response(cached_json if cached_json is not None else cached_bytes)
                             out_filename = "export_ddi_cdi.jsonld" if is_ddi_cdi else "export_cdif.jsonld"
@@ -7615,45 +8001,48 @@ Question: {question}
                         except Exception:
                             pass
             except Exception as minio_init_err:
-                pass
+                m_cache_client = None
 
-            # Check 2: Elasticsearch 'cdif' index BEFORE downloading the file
+            # Check 2: Elasticsearch 'cdif' index across ES nodes BEFORE downloading the file
             try:
                 async with httpx.AsyncClient(timeout=10.0) as es_check_client:
-                    for candidate_id in [doc_cache_id, legacy_doc_cache_id]:
-                        if not candidate_id:
-                            continue
-                        try:
-                            r_es_cache = await es_check_client.get(f"{es_url}/cdif/_doc/{candidate_id}")
-                            if r_es_cache.status_code == 200:
-                                hit_src = r_es_cache.json().get("_source", {})
-                                cached_cdif = hit_src.get("cdif_jsonld")
-                                if cached_cdif:
-                                    if isinstance(cached_cdif, str):
+                    for cand_es in es_lookup_list:
+                        for candidate_id in [doc_cache_id, legacy_doc_cache_id]:
+                            if not candidate_id:
+                                continue
+                            try:
+                                r_es_cache = await es_check_client.get(f"{cand_es}/cdif/_doc/{candidate_id}", timeout=4.0)
+                                if r_es_cache.status_code == 200:
+                                    hit_src = r_es_cache.json().get("_source", {})
+                                    cached_cdif = hit_src.get("cdif_jsonld")
+                                    if cached_cdif:
+                                        if isinstance(cached_cdif, str):
+                                            try:
+                                                cached_cdif = json.loads(cached_cdif)
+                                            except Exception:
+                                                pass
+                                        if isinstance(cached_cdif, dict) and isinstance(cached_cdif.get("@id"), str) and "/export?" in cached_cdif["@id"]:
+                                            cached_cdif["@id"] = f"{base_host}/export?{cached_cdif['@id'].split('/export?', 1)[-1]}"
+                                        cached_bytes = json.dumps(cached_cdif, indent=2).encode("utf-8")
+                                        
+                                        # Also backfill to MinIO vault cache for even faster subsequent reads
                                         try:
-                                            cached_cdif = json.loads(cached_cdif)
+                                            if m_cache_client and m_cache_client.bucket_exists("vault"):
+                                                m_cache_client.put_object(
+                                                    "vault",
+                                                    vault_cache_key,
+                                                    io.BytesIO(cached_bytes),
+                                                    length=len(cached_bytes),
+                                                    content_type="application/ld+json; charset=utf-8"
+                                                )
                                         except Exception:
                                             pass
-                                    cached_bytes = json.dumps(cached_cdif, indent=2).encode("utf-8")
-                                    
-                                    # Also backfill to MinIO vault cache for even faster subsequent reads
-                                    try:
-                                        if m_cache_client and m_cache_client.bucket_exists("vault"):
-                                            m_cache_client.put_object(
-                                                "vault",
-                                                vault_cache_key,
-                                                io.BytesIO(cached_bytes),
-                                                length=len(cached_bytes),
-                                                content_type="application/ld+json; charset=utf-8"
-                                            )
-                                    except Exception:
-                                        pass
 
-                                    resp_bytes = prepare_cdif_response(cached_cdif if cached_cdif is not None else cached_bytes)
-                                    out_filename = "export_ddi_cdi.jsonld" if is_ddi_cdi else "export_cdif.jsonld"
-                                    return build_export_response(resp_bytes, out_filename, cache_header="HIT-ELASTICSEARCH")
-                        except Exception:
-                            pass
+                                        resp_bytes = prepare_cdif_response(cached_cdif if cached_cdif is not None else cached_bytes)
+                                        out_filename = "export_ddi_cdi.jsonld" if is_ddi_cdi else "export_cdif.jsonld"
+                                        return build_export_response(resp_bytes, out_filename, cache_header="HIT-ELASTICSEARCH")
+                            except Exception:
+                                pass
             except Exception as es_cache_err:
                 pass
 
@@ -7666,46 +8055,50 @@ Question: {question}
                         matched_doc_id = None
                         matched_ds_url = ds_url
 
-                        # 1. If ds_url provided, search ES croissant index
+                        # 1. If ds_url provided, search ES croissant index across candidate nodes
                         if matched_ds_url:
                             norm_doi = matched_ds_url
                             if "doi.org/" in norm_doi:
                                 norm_doi = "https://doi.org/" + norm_doi.split("doi.org/")[-1]
                             h1 = hashlib.sha256(norm_doi.encode("utf-8")).hexdigest()[:16]
-                            try:
-                                r_c = await cdif_fetch_client.get(f"{es_url}/croissant/_doc/{h1}")
-                                if r_c.status_code == 200:
-                                    matched_doc_id = h1
-                                    matched_ds_url = norm_doi
-                                    croissant_doc = r_c.json().get("_source", {})
-                            except Exception:
-                                pass
+                            for cand_es in es_lookup_list:
+                                try:
+                                    r_c = await cdif_fetch_client.get(f"{cand_es}/croissant/_doc/{h1}", timeout=4.0)
+                                    if r_c.status_code == 200:
+                                        matched_doc_id = h1
+                                        matched_ds_url = norm_doi
+                                        croissant_doc = r_c.json().get("_source", {})
+                                        break
+                                except Exception:
+                                    pass
 
-                        # 2. If not found by direct hash, query distribution contentUrl
+                        # 2. If not found by direct hash, query distribution contentUrl across candidate nodes
                         if not croissant_doc:
-                            try:
-                                q_nested = {
-                                    "query": {
-                                        "nested": {
-                                            "path": "distribution",
-                                            "query": {
-                                                "term": {"distribution.contentUrl": target_url}
-                                            }
+                            q_nested = {
+                                "query": {
+                                    "nested": {
+                                        "path": "distribution",
+                                        "query": {
+                                            "term": {"distribution.contentUrl": target_url}
                                         }
-                                    },
-                                    "_source": True,
-                                    "size": 1
-                                }
-                                r_nested = await cdif_fetch_client.post(f"{es_url}/_all/_search", json=q_nested)
-                                if r_nested.status_code == 200:
-                                    hits = r_nested.json().get("hits", {}).get("hits", [])
-                                    if hits:
-                                        matched_doc_id = hits[0].get("_id")
-                                        croissant_doc = hits[0].get("_source", {})
-                                        if not matched_ds_url:
-                                            matched_ds_url = croissant_doc.get("url") or croissant_doc.get("identifier")
-                            except Exception:
-                                pass
+                                    }
+                                },
+                                "_source": True,
+                                "size": 1
+                            }
+                            for cand_es in es_lookup_list:
+                                try:
+                                    r_nested = await cdif_fetch_client.post(f"{cand_es}/_all/_search", json=q_nested, timeout=5.0)
+                                    if r_nested.status_code == 200:
+                                        hits = r_nested.json().get("hits", {}).get("hits", [])
+                                        if hits:
+                                            matched_doc_id = hits[0].get("_id")
+                                            croissant_doc = hits[0].get("_source", {})
+                                            if not matched_ds_url:
+                                                matched_ds_url = croissant_doc.get("url") or croissant_doc.get("identifier")
+                                            break
+                                except Exception:
+                                    pass
 
                         # If croissant_doc found in ES, send it directly to CDIF converter
                         if croissant_doc:
@@ -8339,9 +8732,86 @@ Question: {question}
                             print(f"Failed to extract tabular data from RAR: {rar_err}")
 
                     # If no valid tabular extension, fallback to .csv
-                    known_exts = [".csv", ".tsv", ".txt", ".sav", ".dta", ".parquet", ".por", ".zsav", ".xpt"]
+                    known_exts = [".csv", ".tsv", ".tab", ".txt", ".sav", ".dta", ".parquet", ".por", ".zsav", ".xpt"]
                     if not any(filename.lower().endswith(ext) for ext in known_exts):
                         filename += ".csv"
+
+                    # Normalize delimited text headers (deduplicate repeated names, fill empty headers, or synthesize headers if numeric)
+                    # so DDI-CDI Studio's header validator never rejects files with duplicate/blank/missing column names
+                    if any(filename.lower().endswith(ext) for ext in [".csv", ".tsv", ".tab", ".txt"]):
+                        try:
+                            raw_text = file_content.decode("utf-8-sig", errors="replace")
+                            first_chunk = raw_text[:65536]
+                            cand_delims = ["\t", ",", ";", "|"] if filename.lower().endswith((".tsv", ".tab")) else [",", ";", "\t", "|"]
+                            chosen_delim = cand_delims[0]
+                            sample_rows = []
+                            for d_cand in cand_delims:
+                                try:
+                                    r_list = []
+                                    for r_item in csv.reader(io.StringIO(first_chunk), delimiter=d_cand):
+                                        if r_item:
+                                            r_list.append(r_item)
+                                        if len(r_list) >= 25:
+                                            break
+                                    if r_list and len(r_list[0]) > 1 and len({len(x) for x in r_list}) == 1:
+                                        chosen_delim = d_cand
+                                        sample_rows = r_list
+                                        break
+                                except Exception:
+                                    continue
+                            if not sample_rows:
+                                for r_item in csv.reader(io.StringIO(first_chunk), delimiter=chosen_delim):
+                                    if r_item:
+                                        sample_rows.append(r_item)
+                                    if len(sample_rows) >= 5:
+                                        break
+                            if sample_rows and len(sample_rows[0]) >= 1:
+                                hdr = [c.strip() for c in sample_rows[0]]
+                                def _is_num(val: str) -> bool:
+                                    if not val:
+                                        return False
+                                    try:
+                                        float(val.replace(",", ".", 1))
+                                        return True
+                                    except ValueError:
+                                        return False
+                                has_numeric_hdr = any(_is_num(c) for c in hdr if c != "")
+                                has_empty_or_dup = any(c == "" for c in hdr) or len(set(hdr)) != len(hdr)
+                                if has_numeric_hdr and all(_is_num(c) or c == "" for c in hdr):
+                                    # Purely headerless file -> prepend synthetic Column_1..Column_N header row
+                                    syn_hdr = [f"Column_{i+1}" for i in range(len(hdr))]
+                                    hdr_buf = io.StringIO()
+                                    csv.writer(hdr_buf, delimiter=chosen_delim, lineterminator="\n").writerow(syn_hdr)
+                                    file_content = (hdr_buf.getvalue() + raw_text).encode("utf-8")
+                                elif has_empty_or_dup or has_numeric_hdr:
+                                    # Repair empty, numeric, or duplicate column names in row 0
+                                    all_rows = list(csv.reader(io.StringIO(raw_text), delimiter=chosen_delim))
+                                    if all_rows:
+                                        seen_cols = {}
+                                        fixed_hdr = []
+                                        for idx_c, raw_col in enumerate(all_rows[0]):
+                                            base_col = raw_col.strip()
+                                            if not base_col or _is_num(base_col):
+                                                base_col = f"Column_{idx_c+1}" if not base_col else f"Col_{base_col}"
+                                            if base_col in seen_cols:
+                                                seen_cols[base_col] += 1
+                                                col_final = f"{base_col}_{seen_cols[base_col]}"
+                                                while col_final in seen_cols:
+                                                    seen_cols[base_col] += 1
+                                                    col_final = f"{base_col}_{seen_cols[base_col]}"
+                                                seen_cols[col_final] = 1
+                                                fixed_hdr.append(col_final)
+                                            else:
+                                                seen_cols[base_col] = 1
+                                                fixed_hdr.append(base_col)
+                                        all_rows[0] = fixed_hdr
+                                        out_buf = io.StringIO()
+                                        csv.writer(out_buf, delimiter=",", lineterminator="\n").writerows(all_rows)
+                                        file_content = out_buf.getvalue().encode("utf-8")
+                                        if not filename.lower().endswith(".csv"):
+                                            filename = filename.rsplit(".", 1)[0] + ".csv"
+                        except Exception as csv_norm_err:
+                            print(f"CSV header normalization note: {csv_norm_err}", file=sys.stderr)
 
                     # 2. Forward file to DDI-CDI Studio /api/convert
                     files = {
@@ -8371,65 +8841,69 @@ Question: {question}
                             cdif_json = json.loads(resp_content.decode("utf-8"))
                             if isinstance(cdif_json, dict):
                                 # Determine dataset identifier and vault document ID
-                                es_url = os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
                                 matched_doc_id = None
                                 matched_ds_url = ds_url
 
                                 es_doc_src = {}
-                                # 1. If ds_url provided, try direct hash or query
+                                # 1. If ds_url provided, try direct hash or query across ES nodes
                                 if matched_ds_url:
-                                    # Normalize doi
                                     norm_doi = matched_ds_url
                                     if "doi.org/" in norm_doi:
                                         norm_doi = "https://doi.org/" + norm_doi.split("doi.org/")[-1]
                                     h1 = hashlib.sha256(norm_doi.encode("utf-8")).hexdigest()[:16]
-                                    try:
-                                        r_check = await client.get(f"{es_url}/croissant/_doc/{h1}")
-                                        if r_check.status_code == 200:
-                                            matched_doc_id = h1
-                                            matched_ds_url = norm_doi
-                                            es_doc_src = r_check.json().get("_source", {})
-                                    except Exception:
-                                        pass
+                                    for cand_es in es_lookup_list:
+                                        try:
+                                            r_check = await client.get(f"{cand_es}/croissant/_doc/{h1}", timeout=4.0)
+                                            if r_check.status_code == 200:
+                                                matched_doc_id = h1
+                                                matched_ds_url = norm_doi
+                                                es_doc_src = r_check.json().get("_source", {})
+                                                break
+                                        except Exception:
+                                            pass
 
                                 # 2. If still not matched, search ES for dataset containing target_url in distribution
                                 if not matched_doc_id:
-                                    try:
-                                        q_nested = {
-                                            "query": {
-                                                "nested": {
-                                                    "path": "distribution",
-                                                    "query": {
-                                                        "term": {"distribution.contentUrl": target_url}
-                                                    }
+                                    q_nested = {
+                                        "query": {
+                                            "nested": {
+                                                "path": "distribution",
+                                                "query": {
+                                                    "term": {"distribution.contentUrl": target_url}
                                                 }
-                                            },
-                                            "_source": True,
-                                            "size": 1
-                                        }
-                                        r_nested = await client.post(f"{es_url}/_all/_search", json=q_nested)
-                                        if r_nested.status_code == 200:
-                                            hits = r_nested.json().get("hits", {}).get("hits", [])
-                                            if hits:
-                                                matched_doc_id = hits[0].get("_id")
-                                                es_doc_src = hits[0].get("_source", {})
-                                                if not matched_ds_url:
-                                                    matched_ds_url = es_doc_src.get("url") or es_doc_src.get("identifier")
-                                    except Exception:
-                                        pass
+                                            }
+                                        },
+                                        "_source": True,
+                                        "size": 1
+                                    }
+                                    for cand_es in es_lookup_list:
+                                        try:
+                                            r_nested = await client.post(f"{cand_es}/_all/_search", json=q_nested, timeout=5.0)
+                                            if r_nested.status_code == 200:
+                                                hits = r_nested.json().get("hits", {}).get("hits", [])
+                                                if hits:
+                                                    matched_doc_id = hits[0].get("_id")
+                                                    es_doc_src = hits[0].get("_source", {})
+                                                    if not matched_ds_url:
+                                                        matched_ds_url = es_doc_src.get("url") or es_doc_src.get("identifier")
+                                                    break
+                                        except Exception:
+                                            pass
 
                                 # 3. Fallback: hash matched_ds_url if present
                                 if not matched_doc_id and matched_ds_url:
                                     matched_doc_id = hashlib.sha256(matched_ds_url.encode("utf-8")).hexdigest()[:16]
 
-                                # If we didn't fetch es_doc_src yet, try by matched_doc_id
+                                # If we didn't fetch es_doc_src yet, try by matched_doc_id across ES nodes
                                 if matched_doc_id and not es_doc_src:
-                                    try:
-                                        r_doc = await client.get(f"{es_url}/croissant/_doc/{matched_doc_id}")
-                                        if r_doc.status_code == 200:
-                                            es_doc_src = r_doc.json().get("_source", {})
-                                    except Exception:
-                                        pass
+                                    for cand_es in es_lookup_list:
+                                        try:
+                                            r_doc = await client.get(f"{cand_es}/croissant/_doc/{matched_doc_id}", timeout=4.0)
+                                            if r_doc.status_code == 200:
+                                                es_doc_src = r_doc.json().get("_source", {})
+                                                break
+                                        except Exception:
+                                            pass
 
                                 # Extract distribution details from Croissant if available
                                 matched_dist = {}
@@ -8687,7 +9161,7 @@ Question: {question}
             index_path = "/app/static/doc_viewer.html"
             if not os.path.exists(index_path): index_path = "api/static/doc_viewer.html"
             html_content = render_html_template(index_path, request)
-            return HTMLResponse(content=html_content)
+            return HTMLResponse(content=html_content, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
             
         async def vault_es_doc_raw(request):
             def _generate_md(data):
@@ -10918,23 +11392,26 @@ Question: {question}
                         ]
                     }
 
-                    # Query cdif index across candidates
-                    for cand_url in ([target_es] if target_es else []) + [u for u in es_candidates if u != target_es]:
-                        if not cand_url:
-                            continue
+                    # Query cdif index across candidates (prioritize global CDIF ES and don't stop on empty hits)
+                    var_es = get_variable_elasticsearch_url()
+                    cdif_cands = []
+                    for u in [var_es, target_es] + es_candidates:
+                        if u and u not in cdif_cands:
+                            cdif_cands.append(u)
+                    raw_hits = []
+                    for cand_url in cdif_cands:
                         try:
                             resp = await client.post(f"{cand_url}/cdif/_search", json=payload, timeout=20.0)
                             if resp.status_code == 200:
-                                raw_hits = resp.json().get("hits", {}).get("hits", [])
-                                target_es = cand_url
-                                break
+                                cand_hits = resp.json().get("hits", {}).get("hits", [])
+                                if cand_hits:
+                                    raw_hits = cand_hits
+                                    break
                         except Exception:
                             continue
 
                     if not target_es:
                         return
-
-                    raw_hits = resp.json().get("hits", {}).get("hits", [])
                     # Deduplicate hits by (file_url or file_name or doc_id), preferring entries with populated file_name
                     deduped_hits = {}
                     for h in raw_hits:
@@ -10962,11 +11439,7 @@ Question: {question}
                         durl = src.get("dataset_url", "")
                         did = src.get("dataset_id", "")
                         dtitle = src.get("title", "") or fname
-                        cdif_url = src.get("cdif_export_url", "")
-                        if cdif_url and "/export?" in cdif_url:
-                            qs_part = cdif_url.split("/export?", 1)[-1]
-                            base_host = f"https://{MCP_DOMAIN}"
-                            cdif_url = f"{base_host}/export?{qs_part}"
+                        cdif_url = normalize_cdif_export_url(src.get("cdif_export_url", ""), f"https://{MCP_DOMAIN}", furl, durl, h.get("_id", ""))
 
                         cdif_json = src.get("cdif_jsonld", {})
                         dists = cdif_json.get("schema:distribution") or cdif_json.get("distribution") or []
@@ -11243,22 +11716,25 @@ Question: {question}
                         ]
                     }
 
-                    for cand_url in ([target_es] if target_es else []) + [u for u in es_candidates if u != target_es]:
-                        if not cand_url:
-                            continue
+                    var_es = get_variable_elasticsearch_url()
+                    cdif_cands = []
+                    for u in [var_es, target_es] + es_candidates:
+                        if u and u not in cdif_cands:
+                            cdif_cands.append(u)
+                    raw_hits = []
+                    for cand_url in cdif_cands:
                         try:
                             resp = await client.post(f"{cand_url}/cdif/_search", json=payload, timeout=20.0)
                             if resp.status_code == 200:
-                                raw_hits = resp.json().get("hits", {}).get("hits", [])
-                                target_es = cand_url
-                                break
+                                cand_hits = resp.json().get("hits", {}).get("hits", [])
+                                if cand_hits:
+                                    raw_hits = cand_hits
+                                    break
                         except Exception:
                             continue
 
-                    if not target_es:
+                    if not target_es and not raw_hits:
                         return JSONResponse({"collection_id": cid, "total_files": 0, "total_variables": 0, "variables": [], "files": []})
-
-                    raw_hits = resp.json().get("hits", {}).get("hits", [])
                     # Deduplicate hits by (file_url or file_name or doc_id), preferring entries with populated file_name
                     deduped_hits = {}
                     for h in raw_hits:
@@ -11372,11 +11848,7 @@ Question: {question}
                         dtitle = ds_obj.get("name") or ds_obj.get("title") or src.get("title", "") or ""
                         location = detect_location(fname, ds_obj)
 
-                        cdif_url = src.get("cdif_export_url", "")
-                        if cdif_url and "/export?" in cdif_url:
-                            qs_part = cdif_url.split("/export?", 1)[-1]
-                            base_host = f"https://{MCP_DOMAIN}"
-                            cdif_url = f"{base_host}/export?{qs_part}"
+                        cdif_url = normalize_cdif_export_url(src.get("cdif_export_url", ""), f"https://{MCP_DOMAIN}", furl, durl, h.get("_id", ""))
                         cdif_json = src.get("cdif_jsonld", {})
                         dists = cdif_json.get("schema:distribution") or cdif_json.get("distribution") or []
                         matched_var_ids = None
@@ -11590,15 +12062,20 @@ Question: {question}
                         ]
                     }
 
+                    var_es = get_variable_elasticsearch_url()
+                    cdif_cands = []
+                    for u in [var_es, target_es] + es_candidates:
+                        if u and u not in cdif_cands:
+                            cdif_cands.append(u)
                     hits = []
-                    for cand_url in ([target_es] if target_es else []) + [u for u in es_candidates if u != target_es]:
-                        if not cand_url:
-                            continue
+                    for cand_url in cdif_cands:
                         try:
                             resp = await client.post(f"{cand_url}/cdif/_search", json=payload, timeout=20.0)
                             if resp.status_code == 200:
-                                hits = resp.json().get("hits", {}).get("hits", [])
-                                break
+                                cand_hits = resp.json().get("hits", {}).get("hits", [])
+                                if cand_hits:
+                                    hits = cand_hits
+                                    break
                         except Exception:
                             continue
 
@@ -11870,7 +12347,7 @@ Instructions:
             index_path = "/app/static/group_viewer.html"
             if not os.path.exists(index_path): index_path = "api/static/group_viewer.html"
             html_content = render_html_template(index_path, request)
-            return HTMLResponse(content=html_content)
+            return HTMLResponse(content=html_content, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
         async def view_dataverse(request):
             import os
@@ -12586,17 +13063,9 @@ Instructions:
             import httpx, json, sys, time
             try:
                 if not es_url:
-                    for cand in get_elasticsearch_lookup_urls():
-                        try:
-                            async with httpx.AsyncClient(timeout=3.0) as chk:
-                                r = await chk.get(f"{cand}/cdif/_count")
-                                if r.status_code == 200:
-                                    es_url = cand
-                                    break
-                        except Exception:
-                            continue
+                    es_url = await pick_cdif_elasticsearch_url()
                 if not es_url:
-                    es_url = get_elasticsearch_lookup_urls()[0]
+                    es_url = get_variable_elasticsearch_url() or get_elasticsearch_lookup_urls()[0]
                 print(f"[VariablesCache] Background cache refresh started with {es_url}...", file=sys.stderr)
                 async with httpx.AsyncClient(timeout=180.0) as client:
                     try:
@@ -12675,11 +13144,7 @@ Instructions:
                         did = src.get("dataset_id", "")
                         cid = src.get("collection_id", "")
                         dtitle = src.get("title", "") or fname
-                        cdif_url = src.get("cdif_export_url", "")
-                        if cdif_url and "/export?" in cdif_url:
-                            qs_part = cdif_url.split("/export?", 1)[-1]
-                            base_host = f"https://{MCP_DOMAIN}"
-                            cdif_url = f"{base_host}/export?{qs_part}"
+                        cdif_url = normalize_cdif_export_url(src.get("cdif_export_url", ""), f"https://{MCP_DOMAIN}", furl, durl, h.get("_id", ""))
 
                         cdif_json = src.get("cdif_jsonld", {})
                         dists = cdif_json.get("schema:distribution") or cdif_json.get("distribution") or []
@@ -12857,7 +13322,7 @@ Instructions:
             and supplements with Croissant/Dataverse recordSet.field variable definitions when querying.
             """
             from starlette.responses import JSONResponse
-            import json, httpx, os, sys, re, time
+            import asyncio, json, httpx, os, sys, re, time
 
             limit_param = request.query_params.get("limit")
             limit = int(limit_param) if limit_param and limit_param.isdigit() else None
@@ -12866,17 +13331,8 @@ Instructions:
             q_param = (request.query_params.get("q") or request.query_params.get("query") or "").strip()
 
             es_candidates = get_elasticsearch_lookup_urls()
-            active_es = None
-            for cand in es_candidates:
-                try:
-                    async with httpx.AsyncClient(timeout=3.0) as chk:
-                        r = await chk.get(f"{cand}/cdif/_count")
-                        if r.status_code == 200:
-                            active_es = cand
-                            break
-                except Exception:
-                    continue
-            es_url = active_es or (es_candidates[0] if es_candidates else os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/"))
+            active_es = await pick_cdif_elasticsearch_url()
+            es_url = active_es or get_variable_elasticsearch_url() or (es_candidates[0] if es_candidates else os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/"))
 
             # Check if cache hit is available for instant response (fast statistical values + first 100 records)
             if not q_param and offset == 0 and active_es:
@@ -12886,27 +13342,37 @@ Instructions:
                         if cache_res.status_code == 200:
                             c_data = cache_res.json().get("_source", {})
                             cached_vars = c_data.get("first_100_variables", [])
-                            if limit is not None:
-                                cached_vars = cached_vars[:limit]
-                            num_val = c_data.get("numeric_variables", c_data.get("total_numeric", 0))
-                            other_val = c_data.get("text_other_variables", c_data.get("total_other", 0))
-                            
-                            # Trigger background refresh if stale (> 10 minutes)
-                            if time.time() - c_data.get("updated_at", 0) > 600:
-                                asyncio.create_task(update_variables_index_cache(es_url))
+                            if c_data.get("total_variables", 0) > 0 and cached_vars:
+                                if limit is not None:
+                                    cached_vars = cached_vars[:limit]
+                                b_host = f"https://{MCP_DOMAIN}"
+                                for _cv in cached_vars:
+                                    if isinstance(_cv, dict):
+                                        _cv["cdif_export_url"] = normalize_cdif_export_url(
+                                            _cv.get("cdif_export_url", ""),
+                                            b_host,
+                                            _cv.get("file_url", ""),
+                                            _cv.get("dataset_url", "")
+                                        )
+                                num_val = c_data.get("numeric_variables", c_data.get("total_numeric", 0))
+                                other_val = c_data.get("text_other_variables", c_data.get("total_other", 0))
+                                
+                                # Trigger background refresh if stale (> 10 minutes)
+                                if time.time() - c_data.get("updated_at", 0) > 600:
+                                    asyncio.create_task(update_variables_index_cache(es_url))
 
-                            return JSONResponse({
-                                "total_files": c_data.get("total_files", 0),
-                                "total_variables": c_data.get("total_variables", len(cached_vars)),
-                                "total_numeric": num_val,
-                                "total_other": other_val,
-                                "numeric_variables": num_val,
-                                "text_other_variables": other_val,
-                                "variables": cached_vars,
-                                "has_more": c_data.get("total_variables", 0) > len(cached_vars),
-                                "cached": True,
-                                "is_updating": c_data.get("is_updating", False)
-                            })
+                                return JSONResponse({
+                                    "total_files": c_data.get("total_files", 0),
+                                    "total_variables": c_data.get("total_variables", len(cached_vars)),
+                                    "total_numeric": num_val,
+                                    "total_other": other_val,
+                                    "numeric_variables": num_val,
+                                    "text_other_variables": other_val,
+                                    "variables": cached_vars,
+                                    "has_more": c_data.get("total_variables", 0) > len(cached_vars),
+                                    "cached": True,
+                                    "is_updating": c_data.get("is_updating", False)
+                                })
                 except Exception as cache_err:
                     print(f"[VariablesCache] Note: could not load from cache index: {cache_err}", file=sys.stderr)
 
@@ -13043,11 +13509,7 @@ Instructions:
                         did = src.get("dataset_id", "")
                         cid = src.get("collection_id", "")
                         dtitle = dataset_titles.get(did, "") or src.get("title", "") or ""
-                        cdif_url = src.get("cdif_export_url", "")
-                        if cdif_url and "/export?" in cdif_url:
-                            qs_part = cdif_url.split("/export?", 1)[-1]
-                            base_host = f"https://{MCP_DOMAIN}"
-                            cdif_url = f"{base_host}/export?{qs_part}"
+                        cdif_url = normalize_cdif_export_url(src.get("cdif_export_url", ""), f"https://{MCP_DOMAIN}", furl, durl, h.get("_id", ""))
                         cdif_json = src.get("cdif_jsonld", {})
                         dists = cdif_json.get("schema:distribution") or cdif_json.get("distribution") or []
                         matched_var_ids = None
@@ -13443,17 +13905,8 @@ Instructions:
                 return JSONResponse({"answer": "Please provide a question about the variables."})
 
             es_candidates = get_elasticsearch_lookup_urls()
-            active_es = None
-            for cand in es_candidates:
-                try:
-                    async with httpx.AsyncClient(timeout=3.0) as chk:
-                        r = await chk.get(f"{cand}/cdif/_count")
-                        if r.status_code == 200:
-                            active_es = cand
-                            break
-                except Exception:
-                    continue
-            es_url = active_es or (es_candidates[0] if es_candidates else os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/"))
+            active_es = await pick_cdif_elasticsearch_url()
+            es_url = active_es or get_variable_elasticsearch_url() or (es_candidates[0] if es_candidates else os.environ.get("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/"))
             payload = {
                 "query": {"match_all": {}},
                 "size": 10000,
@@ -14363,7 +14816,7 @@ Output a JSON object with:
             if not os.path.exists(file_path):
                 file_path = "api/static/groups_index.html"
             html_content = render_html_template(file_path, request)
-            return HTMLResponse(content=html_content)
+            return HTMLResponse(content=html_content, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
         async def view_profile(request):
             from starlette.responses import HTMLResponse, RedirectResponse
@@ -14397,7 +14850,7 @@ Output a JSON object with:
             
             html_content = html_content.replace('{{GEOID_SECTION}}', geoid_html)
             
-            return HTMLResponse(content=html_content)
+            return HTMLResponse(content=html_content, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
         async def view_login(request):
             import os
             from starlette.responses import HTMLResponse
@@ -14405,7 +14858,7 @@ Output a JSON object with:
             if not os.path.exists(file_path):
                 file_path = "api/static/login.html"
             html_content = render_html_template(file_path, request)
-            return HTMLResponse(content=html_content)
+            return HTMLResponse(content=html_content, headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
         async def api_auth_status(request):
             from starlette.responses import JSONResponse
@@ -14543,7 +14996,7 @@ Output a JSON object with:
                     try:
                         await client.post(f"{geoid_server}/signup", json=signup_data)
                     except Exception:
-                        pass # Ignore signup errors, might already exist
+                        pass
                         
                     # 3. Login
                     login_data = {
@@ -14946,6 +15399,7 @@ Output a JSON object with:
                 Route("/vault/history", endpoint=vault_get_history, methods=["GET"]),
                 Route("/vault/doc/update/{es_id}", endpoint=vault_es_doc_update, methods=["POST"]),
                 Route("/vault/public/{es_id}", endpoint=vault_make_public, methods=["POST"]),
+                Route("/api/chat/document", endpoint=chat_document, methods=["POST"]),
                 Route("/vault/ask", endpoint=vault_ask, methods=["POST"]),
                 Route("/vault/models", endpoint=vault_models, methods=["GET"]),
                 Route("/vault/approve/{es_id}", endpoint=vault_approve_highlight, methods=["POST"]),

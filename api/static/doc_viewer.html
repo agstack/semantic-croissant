@@ -949,6 +949,14 @@
             // Remove any existing QA modal before creating a new one
             document.querySelectorAll('.qa-response-modal').forEach(m => m.remove());
 
+            if (answer && !errorMsg && typeof getDocId === 'function' && getDocId()) {
+                fetch('/api/chat/document', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'add', doc_id: getDocId(), prompt: question, text: answer })
+                }).catch(() => {});
+            }
+
             const modal = document.createElement('div');
             modal.className = 'qa-response-modal';
             modal.style.cssText = "position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 9999;";
@@ -1397,13 +1405,18 @@
             
             try {
                 // Fetch the raw markdown from the vault API
-                const response = await fetch(`/vault/doc/raw/${docId}`);
+                const response = await fetch(`/vault/doc/raw/${docId}`, { cache: 'no-store' });
                 
                 if (!response.ok) {
                     throw new Error(`Document not found (${response.status})`);
                 }
                 
                 markdown = await response.text();
+                const baseDocId = docId.replace(/\.(md|jsonld|csv|xlsx)$/i, '');
+                const rootId = baseDocId.replace(/(_Agents|_README|_datacard|_datamap_\d+|_vision_table_\d+|_image_\d+)$/i, '');
+                if (rootId && rootId !== baseDocId) {
+                    markdown = `> [← Back to Root Document (${rootId})](/vault/doc/${rootId})\n\n` + markdown;
+                }
                 
                 // Strip existing [View Croissant JSON-LD Data] text from markdown
                 markdown = markdown.replace(/\[View Croissant JSON-LD Data\]\([^)]+\)/gi, '');
@@ -1484,7 +1497,7 @@
                     html += `<table style="width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 0.95rem;">`;
                     html += `<tbody>`;
                     
-                    const skipKeys = ['@context', '@type', 'name', 'url', 'description', 'distribution', 'recordSet', 'fileObject', 'fileSet', '_source_url', '_markdown_text', '_full_text'];
+                    const skipKeys = ['@context', '@type', 'name', 'url', 'description', 'distribution', 'recordSet', 'fileObject', 'fileSet', 'isBasedOn', '_source_url', '_markdown_text', '_full_text'];
                     for (const [key, value] of Object.entries(data)) {
                         if (skipKeys.includes(key)) continue;
                         
@@ -2145,7 +2158,7 @@
                 moveToChatBtn.title = 'Open this document in Chat mode to ask questions, save, edit, and update';
                 moveToChatBtn.style.cssText = "display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 0.82rem; font-weight: 600; border-radius: 5px; border: 1px solid #006bb3; background: #006bb3; color: #ffffff; cursor: pointer; transition: all 0.15s ease;";
                 const chatIconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`;
-                moveToChatBtn.innerHTML = `${chatIconSvg} <span>Ask</span>`;
+                moveToChatBtn.innerHTML = `${chatIconSvg} <span>Collaborate</span>`;
                 moveToChatBtn.onclick = () => {
                     const qVal = (askDocInput && askDocInput.value.trim()) ? askDocInput.value.trim() : '';
                     let targetUrl = `/?doc=${encodeURIComponent(docId)}`;
@@ -2535,7 +2548,7 @@
                 btnAskMenu.type = 'button';
                 btnAskMenu.title = 'Open document in Chat mode to ask questions, save, edit, and update';
                 btnAskMenu.style.cssText = btnStyle;
-                btnAskMenu.innerHTML = `${chatIconSvg} <span>Ask</span>`;
+                btnAskMenu.innerHTML = `${chatIconSvg} <span>Collaborate</span>`;
                 btnAskMenu.onclick = () => moveToChatBtn.click();
                 toolbarLeft.appendChild(btnAskMenu);
                 
